@@ -233,7 +233,10 @@ async function serve(): Promise<void> {
   const shutdown = async () => {
     if (shuttingDown) return;
     shuttingDown = true;
-    await shutdownHttpServer(httpServer, close);
+    const result = await shutdownHttpServer(httpServer, close);
+    if (result.forced) {
+      console.warn("devspace forced remaining HTTP connections closed after shutdown grace elapsed");
+    }
     process.exit(0);
   };
   const handleShutdown = () => {

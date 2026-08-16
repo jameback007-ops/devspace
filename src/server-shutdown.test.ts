@@ -95,3 +95,28 @@ await assert.rejects(
   ),
   httpCloseError,
 );
+
+let forceCloseCalls = 0;
+const forcedShutdown = await shutdownHttpServer(
+  {
+    close() {
+      // Intentionally never completes graceful HTTP draining.
+    },
+    closeAllConnections() {
+      forceCloseCalls += 1;
+    },
+  },
+  () => new Promise<void>(() => undefined),
+  { gracePeriodMs: 20 },
+);
+assert.deepEqual(forcedShutdown, { forced: true });
+assert.equal(forceCloseCalls, 1);
+
+await assert.rejects(
+  shutdownHttpServer(
+    immediatelyClosedHttpServer,
+    async () => {},
+    { gracePeriodMs: -1 },
+  ),
+  /Invalid HTTP shutdown grace period/,
+);

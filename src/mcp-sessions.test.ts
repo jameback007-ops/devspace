@@ -84,3 +84,21 @@ finishDelayedClose?.();
 await delayedClose;
 assert.equal(delayedCloseResolved, true);
 assert.equal(registry.size, 0);
+
+const timeoutRegistry = new McpSessionRegistry<FakeTransport>({ closeTimeoutMs: 20 });
+const hangingTransport: FakeTransport = {
+  closeCalls: 0,
+  close() {
+    this.closeCalls += 1;
+    return new Promise<void>(() => undefined);
+  },
+};
+timeoutRegistry.register("hanging", hangingTransport);
+const timeoutStartedAt = Date.now();
+const timeoutResults = await timeoutRegistry.closeAll();
+const timeoutElapsedMs = Date.now() - timeoutStartedAt;
+assert.equal(hangingTransport.closeCalls, 1);
+assert.equal(timeoutResults.length, 1);
+assert.match(String(timeoutResults[0]?.error), /timed out after 20ms/);
+assert.ok(timeoutElapsedMs < 500, `Expected bounded close, took ${timeoutElapsedMs}ms.`);
+assert.equal(timeoutRegistry.size, 0);
