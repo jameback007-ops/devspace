@@ -7,6 +7,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { loadConfig } from "./config.js";
 import { ExecutorWindowRegistry } from "./executor-window.js";
+import { ExecutionScopeManager } from "./execution-observability.js";
 import { ProcessSessionManager } from "./process-sessions.js";
 import { createReviewCheckpointManager } from "./review-checkpoints.js";
 import { createMcpServer } from "./server.js";
@@ -39,14 +40,23 @@ test("MCP tools auto-begin, enforce drain landing, yield, and later-turn resume"
     now: () => now,
   });
   const store = new SqliteWorkspaceStore(stateDir);
+  const processSessions = new ProcessSessionManager();
+  const executionScopes = new ExecutionScopeManager(
+    config.executionObservability,
+    stateDir,
+    processSessions,
+    executorWindows,
+    { now: () => now },
+  );
   const server = createMcpServer(
     config,
     new WorkspaceRegistry(config, store),
     createReviewCheckpointManager(),
-    new ProcessSessionManager(),
+    processSessions,
     [],
     [],
     executorWindows,
+    executionScopes,
   );
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: "executor-window-test-client", version: "1.0.0" });
@@ -57,6 +67,8 @@ test("MCP tools auto-begin, enforce drain landing, yield, and later-turn resume"
   t.after(async () => {
     await client.close();
     await server.close();
+    processSessions.shutdown();
+    executionScopes.close();
     store.close();
     await rm(root, { recursive: true, force: true });
   });

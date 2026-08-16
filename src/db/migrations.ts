@@ -27,6 +27,11 @@ const migrations: Migration[] = [
     name: "workspace-conversation-bindings",
     up: migrateWorkspaceConversationBindings,
   },
+  {
+    version: 5,
+    name: "execution-scope-observability",
+    up: migrateExecutionScopeObservability,
+  },
 ];
 
 export function migrateDatabase(sqlite: Database.Database): void {
@@ -195,6 +200,68 @@ function migrateWorkspaceConversationBindings(sqlite: Database.Database): void {
 
     create index if not exists workspace_conversation_bindings_workspace_idx
       on workspace_conversation_bindings(workspace_session_id);
+  `);
+}
+
+function migrateExecutionScopeObservability(sqlite: Database.Database): void {
+  sqlite.exec(`
+    create table if not exists execution_scopes (
+      scope_ref text primary key,
+      scope_digest_sha256 text not null unique,
+      adapter text not null,
+      created_at_ms integer not null,
+      last_activity_at_ms integer not null,
+      last_tool_name text,
+      last_tool_outcome text,
+      total_event_count integer not null default 0
+    );
+
+    create index if not exists execution_scopes_activity_idx
+      on execution_scopes(last_activity_at_ms desc);
+
+    create table if not exists execution_scope_events (
+      id integer primary key autoincrement,
+      scope_ref text not null,
+      sequence integer not null,
+      tool_name text not null,
+      outcome text not null,
+      started_at_ms integer not null,
+      completed_at_ms integer,
+      duration_ms integer,
+      workspace_id text,
+      process_session_id integer,
+      detail_json text,
+      error_kind text,
+      error_summary text,
+      error_digest_sha256 text,
+      unique (scope_ref, sequence),
+      foreign key (scope_ref)
+        references execution_scopes(scope_ref)
+        on delete cascade
+    );
+
+    create index if not exists execution_scope_events_scope_sequence_idx
+      on execution_scope_events(scope_ref, sequence desc);
+
+    create index if not exists execution_scope_events_started_idx
+      on execution_scope_events(started_at_ms);
+
+    create table if not exists execution_scope_workspaces (
+      scope_ref text not null,
+      workspace_session_id text not null,
+      first_seen_at_ms integer not null,
+      last_seen_at_ms integer not null,
+      primary key (scope_ref, workspace_session_id),
+      foreign key (scope_ref)
+        references execution_scopes(scope_ref)
+        on delete cascade,
+      foreign key (workspace_session_id)
+        references workspace_sessions(id)
+        on delete cascade
+    );
+
+    create index if not exists execution_scope_workspaces_workspace_idx
+      on execution_scope_workspaces(workspace_session_id);
   `);
 }
 

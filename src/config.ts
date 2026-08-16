@@ -4,6 +4,7 @@ import { expandHomePath } from "./roots.js";
 import type { LoggingConfig, LogFormat, LogLevel } from "./logger.js";
 import type { OAuthConfig } from "./oauth-provider.js";
 import type { ExecutorWindowConfig } from "./executor-window.js";
+import type { ExecutionObservabilityConfig } from "./execution-observability.js";
 import { devspaceAgentsDir, devspaceSkillsDir, loadDevspaceFiles } from "./user-config.js";
 
 export type ToolMode = "minimal" | "full" | "codex";
@@ -14,6 +15,9 @@ const DEFAULT_ARTIFACT_MAX_FILE_BYTES = 100 * 1024 * 1024;
 const DEFAULT_EXECUTOR_WINDOW_DRAIN_MINUTES = 90;
 const DEFAULT_EXECUTOR_WINDOW_YIELD_MINUTES = 100;
 const DEFAULT_EXECUTOR_WINDOW_RETENTION_HOURS = 24;
+const DEFAULT_EXECUTION_OBSERVABILITY_RETENTION_HOURS = 7 * 24;
+const DEFAULT_EXECUTION_OBSERVABILITY_MAX_EVENTS_PER_SCOPE = 1_000;
+const DEFAULT_EXECUTION_OBSERVABILITY_IDLE_MINUTES = 5;
 
 export interface ServerConfig {
   host: string;
@@ -35,6 +39,7 @@ export interface ServerConfig {
   subagents: boolean;
   agentDir: string;
   executorWindow: ExecutorWindowConfig;
+  executionObservability: ExecutionObservabilityConfig;
   logging: LoggingConfig;
 }
 
@@ -200,6 +205,38 @@ function parseExecutorWindowConfig(env: NodeJS.ProcessEnv): ExecutorWindowConfig
   };
 }
 
+function parseExecutionObservabilityConfig(
+  env: NodeJS.ProcessEnv,
+): ExecutionObservabilityConfig {
+  const retentionHours = parsePositiveInteger(
+    env.DEVSPACE_EXECUTION_OBSERVABILITY_RETENTION_HOURS,
+    DEFAULT_EXECUTION_OBSERVABILITY_RETENTION_HOURS,
+    "DEVSPACE_EXECUTION_OBSERVABILITY_RETENTION_HOURS",
+    24 * 90,
+  );
+  const maxEventsPerScope = parsePositiveInteger(
+    env.DEVSPACE_EXECUTION_OBSERVABILITY_MAX_EVENTS_PER_SCOPE,
+    DEFAULT_EXECUTION_OBSERVABILITY_MAX_EVENTS_PER_SCOPE,
+    "DEVSPACE_EXECUTION_OBSERVABILITY_MAX_EVENTS_PER_SCOPE",
+    100_000,
+  );
+  const idleMinutes = parsePositiveInteger(
+    env.DEVSPACE_EXECUTION_OBSERVABILITY_IDLE_MINUTES,
+    DEFAULT_EXECUTION_OBSERVABILITY_IDLE_MINUTES,
+    "DEVSPACE_EXECUTION_OBSERVABILITY_IDLE_MINUTES",
+    24 * 60,
+  );
+  return {
+    enabled:
+      env.DEVSPACE_EXECUTION_OBSERVABILITY === undefined
+        ? true
+        : parseBoolean(env.DEVSPACE_EXECUTION_OBSERVABILITY),
+    retentionMs: retentionHours * 60 * 60 * 1_000,
+    maxEventsPerScope,
+    idleAfterMs: idleMinutes * 60 * 1_000,
+  };
+}
+
 function parseWidgetMode(value: string | undefined): WidgetMode {
   if (!value || value === "full") return "full";
   if (value === "off" || value === "changes") return value;
@@ -298,6 +335,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
         : parseBoolean(env.DEVSPACE_SUBAGENTS),
     agentDir: resolve(expandHomePath(env.DEVSPACE_AGENT_DIR ?? files.config.agentDir ?? defaultAgentDir())),
     executorWindow: parseExecutorWindowConfig(env),
+    executionObservability: parseExecutionObservabilityConfig(env),
     logging: parseLoggingConfig(env),
   };
 }

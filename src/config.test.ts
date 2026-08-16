@@ -34,6 +34,27 @@ assert.deepEqual(loadConfig(baseEnv).executorWindow, {
   yieldAfterMs: 100 * 60 * 1000,
   retentionMs: 24 * 60 * 60 * 1000,
 });
+assert.deepEqual(loadConfig(baseEnv).executionObservability, {
+  enabled: true,
+  retentionMs: 7 * 24 * 60 * 60 * 1000,
+  maxEventsPerScope: 1_000,
+  idleAfterMs: 5 * 60 * 1000,
+});
+assert.deepEqual(
+  loadConfig({
+    ...baseEnv,
+    DEVSPACE_EXECUTION_OBSERVABILITY: "0",
+    DEVSPACE_EXECUTION_OBSERVABILITY_RETENTION_HOURS: "12",
+    DEVSPACE_EXECUTION_OBSERVABILITY_MAX_EVENTS_PER_SCOPE: "250",
+    DEVSPACE_EXECUTION_OBSERVABILITY_IDLE_MINUTES: "15",
+  }).executionObservability,
+  {
+    enabled: false,
+    retentionMs: 12 * 60 * 60 * 1000,
+    maxEventsPerScope: 250,
+    idleAfterMs: 15 * 60 * 1000,
+  },
+);
 assert.deepEqual(
   loadConfig({
     ...baseEnv,
@@ -177,6 +198,13 @@ assert.throws(
     DEVSPACE_EXECUTOR_WINDOW_YIELD_MINUTES: "100",
   }),
   /YIELD_MINUTES must be greater/,
+);
+assert.throws(
+  () => loadConfig({
+    ...baseEnv,
+    DEVSPACE_EXECUTION_OBSERVABILITY_MAX_EVENTS_PER_SCOPE: "0",
+  }),
+  /Invalid DEVSPACE_EXECUTION_OBSERVABILITY_MAX_EVENTS_PER_SCOPE: 0/,
 );
 assert.throws(
   () => loadConfig({

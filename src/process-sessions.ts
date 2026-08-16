@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { resolveShellCommand, terminateProcessTree } from "./process-platform.js";
 
 export const DEFAULT_EXEC_YIELD_MS = 10_000;
@@ -15,6 +16,7 @@ const DEFAULT_ROWS = 24;
 
 export interface StartCommandInput {
   workspaceId: string;
+  executionScopeRef?: string;
   command: string;
   cwd: string;
   workspaceRoot?: string;
@@ -45,6 +47,23 @@ export interface ProcessSnapshot {
   wallTimeMs: number;
 }
 
+export interface ProcessSessionInspection {
+  sessionId: number;
+  workspaceId: string;
+  running: boolean;
+  startedAt: string;
+  lastOutputAt?: string;
+  wallTimeMs: number;
+  exitCode?: number;
+  signal?: string;
+  tty: boolean;
+  workingDirectory: string;
+  commandLength: number;
+  commandDigestSha256: string;
+  outputEventCount: number;
+  bufferedOutputAvailable: boolean;
+}
+
 interface ManagedProcess {
   write(data: string): void;
   kill(signal?: NodeJS.Signals): void;
@@ -54,8 +73,15 @@ interface ManagedProcess {
 interface ProcessSession {
   id: number;
   workspaceId: string;
+  executionScopeRef?: string;
   process?: ManagedProcess;
   startedAt: number;
+  lastOutputAt?: number;
+  outputEventCount: number;
+  tty: boolean;
+  workingDirectory: string;
+  commandLength: number;
+  commandDigestSha256: string;
   columns: number;
   rows: number;
   buffer: HeadTailBuffer;
@@ -98,9 +124,18 @@ function terminalSize(value: number | undefined, fallback: number): number {
   return value;
 }
 
+function validatedExecutionScopeRef(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  if (!/^[a-f0-9]{16}$/.test(value)) {
+    throw new Error("Execution scope references must be 16 lowercase hexadecimal characters.");
+  }
+  return value;
+}
+
 function processEnvironment(input?: {
   workspaceId?: string;
   workspaceRoot?: string;
+  executionScopeRef?: string;
 }): Record<string, string> {
   return {
     ...Object.fromEntries(
@@ -116,6 +151,9 @@ function processEnvironment(input?: {
     LC_ALL: process.env.LC_ALL ?? "C.UTF-8",
     ...(input?.workspaceId ? { DEVSPACE_WORKSPACE_ID: input.workspaceId } : {}),
     ...(input?.workspaceRoot ? { DEVSPACE_WORKSPACE_ROOT: input.workspaceRoot } : {}),
+    ...(input?.executionScopeRef
+      ? { DEVSPACE_EXECUTION_SCOPE_REF: input.executionScopeRef }
+      : {}),
   };
 }
 
@@ -293,6 +331,42 @@ export class ProcessSessionManager {
     if (session.running) session.process?.kill("SIGTERM");
   }
 
+  inspect(
+    workspaceIds?: Iterable<string>,
+    executionScopeRefs?: Iterable<string>,
+  ): ProcessSessionInspection[] {
+    const allowedWorkspaceIds = workspaceIds ? new Set(workspaceIds) : undefined;
+    const allowedScopeRefs = executionScopeRefs ? new Set(executionScopeRefs) : undefined;
+    const now = Date.now();
+    return Array.from(this.sessions.values())
+      .filter((session) => !allowedWorkspaceIds || allowedWorkspaceIds.has(session.workspaceId))
+      .filter(
+        (session) =>
+          !allowedScopeRefs ||
+          (session.executionScopeRef !== undefined && allowedScopeRefs.has(session.executionScopeRef)),
+      )
+      .sort((left, right) => right.startedAt - left.startedAt)
+      .map((session) => ({
+        sessionId: session.id,
+        workspaceId: session.workspaceId,
+        running: session.running,
+        startedAt: new Date(session.startedAt).toISOString(),
+        lastOutputAt:
+          session.lastOutputAt === undefined
+            ? undefined
+            : new Date(session.lastOutputAt).toISOString(),
+        wallTimeMs: Math.max(0, now - session.startedAt),
+        exitCode: session.exitCode,
+        signal: session.signal,
+        tty: session.tty,
+        workingDirectory: session.workingDirectory,
+        commandLength: session.commandLength,
+        commandDigestSha256: session.commandDigestSha256,
+        outputEventCount: session.outputEventCount,
+        bufferedOutputAvailable: session.buffer.hasOutput(),
+      }));
+  }
+
   shutdown(): void {
     for (const session of this.sessions.values()) {
       if (session.cleanupTimer) clearTimeout(session.cleanupTimer);
@@ -344,7 +418,13 @@ export class ProcessSessionManager {
     return {
       id: this.nextSessionId++,
       workspaceId: input.workspaceId,
+      executionScopeRef: validatedExecutionScopeRef(input.executionScopeRef),
       startedAt: Date.now(),
+      outputEventCount: 0,
+      tty: input.tty === true,
+      workingDirectory: input.cwd,
+      commandLength: input.command.length,
+      commandDigestSha256: createHash("sha256").update(input.command).digest("hex"),
       columns: terminalSize(input.columns, DEFAULT_COLUMNS),
       rows: terminalSize(input.rows, DEFAULT_ROWS),
       buffer: new HeadTailBuffer(this.maxBufferCharacters),
@@ -364,6 +444,7 @@ export class ProcessSessionManager {
       env: processEnvironment({
         workspaceId: input.workspaceId,
         workspaceRoot: input.workspaceRoot,
+        executionScopeRef: session.executionScopeRef,
       }),
       stdio: "pipe",
       windowsHide: true,
@@ -398,6 +479,7 @@ export class ProcessSessionManager {
         env: processEnvironment({
           workspaceId: input.workspaceId,
           workspaceRoot: input.workspaceRoot,
+          executionScopeRef: session.executionScopeRef,
         }),
         name: "xterm-256color",
         cols: session.columns,
@@ -434,6 +516,8 @@ export class ProcessSessionManager {
   private append(session: ProcessSession, output: string): void {
     if (!output) return;
     session.buffer.append(output);
+    session.lastOutputAt = Date.now();
+    session.outputEventCount += 1;
     session.resolveOutput();
   }
 

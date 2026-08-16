@@ -122,3 +122,28 @@ workspace-relative output path, byte count, hash, duration, and status metadata.
 references, native file IDs, bearer credentials, presigned URLs, host paths,
 temporary paths, and base64 chunks are never included in tool logs or tool
 results.
+
+## Cross-Session Observability
+
+Execution-scope inspection is available only through the same authenticated
+single-Owner MCP boundary as coding tools. It exposes an opaque hash-derived
+scope reference rather than a raw host conversation ID. Raw host conversation
+IDs are not persisted by the execution-scope observability tables; those tables
+store only a full SHA-256 collision-check digest. Pre-existing workspace-reuse
+bindings remain a separate storage contract.
+
+The durable audit stores tool names, outcomes, timing, workspace/process
+locators, selected bounded metadata, digests, and normalized error categories.
+Arbitrary exception messages are not persisted. The audit excludes
+transcripts, prompts, private reasoning, tool outputs, raw commands, patch and
+edit bodies, native file values, credentials, and signed URLs. Inspection tools
+do not audit themselves.
+
+Process details are joined by exact execution-scope attribution rather than by
+workspace alone. When scopes share a checkout, foreign or unattributed running
+processes are represented only by a count.
+
+Workspace roots and working directories may appear because the authenticated
+Owner already has access to the allowed local roots. Sharing the same checkout
+does not grant another scope writer authority; use worktrees and the project's
+own writer/lease rules for concurrent work.

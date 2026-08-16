@@ -1,4 +1,5 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
+import { executionScopeRef } from "./request-meta.js";
 
 export type ExecutorWindowPhase =
   | "not_started"
@@ -103,6 +104,9 @@ const YIELD_SAFE_READ_TOOLS = new Set([
   "glob",
   "ls",
   "show_changes",
+  "execution_scope_list",
+  "execution_scope_status",
+  "execution_scope_audit",
   "codex_session_status",
   "codex_session_tail",
   "codex_session_audit",
@@ -112,10 +116,6 @@ const YIELD_SAFE_READ_TOOLS = new Set([
   "codex_workspace_search",
   "codex_workspace_diff",
 ]);
-
-function scopeRef(scopeId: string): string {
-  return createHash("sha256").update(scopeId).digest("hex").slice(0, 16);
-}
 
 function iso(ms: number | undefined): string | undefined {
   return ms === undefined ? undefined : new Date(ms).toISOString();
@@ -189,7 +189,7 @@ export class ExecutorWindowRegistry {
     }
 
     this.cleanup();
-    const key = scopeRef(scopeId);
+    const key = executionScopeRef(scopeId);
     const previous = this.entries.get(key);
     if (previous) {
       const current = this.status(scopeId);
@@ -233,7 +233,7 @@ export class ExecutorWindowRegistry {
   ): ExecutorWindowStatus {
     if (!this.config.enabled || !scopeId) return this.status(scopeId);
 
-    const key = scopeRef(scopeId);
+    const key = executionScopeRef(scopeId);
     const entry = this.entries.get(key);
     if (!entry) return this.status(scopeId);
 
@@ -268,8 +268,28 @@ export class ExecutorWindowRegistry {
       };
     }
 
+    return this.statusByScopeRef(executionScopeRef(scopeId));
+  }
+
+  statusByScopeRef(scopeRef: string): ExecutorWindowStatus {
+    if (!/^[a-f0-9]{16}$/.test(scopeRef)) {
+      throw new Error(`Invalid execution scope reference: ${scopeRef}`);
+    }
+    if (!this.config.enabled) {
+      return {
+        schemaVersion: 1,
+        enabled: false,
+        scoped: true,
+        scopeRef,
+        phase: "disabled",
+        drainAfterMs: this.config.drainAfterMs,
+        yieldAfterMs: this.config.yieldAfterMs,
+        instruction: statusInstruction("disabled"),
+      };
+    }
+
     this.cleanup();
-    const key = scopeRef(scopeId);
+    const key = scopeRef;
     const entry = this.entries.get(key);
     if (!entry) {
       return {
@@ -361,7 +381,7 @@ export class ExecutorWindowRegistry {
 
   touch(scopeId: string | undefined): void {
     if (!scopeId) return;
-    const entry = this.entries.get(scopeRef(scopeId));
+    const entry = this.entries.get(executionScopeRef(scopeId));
     if (entry) entry.lastActivityAtMs = this.now();
   }
 

@@ -55,6 +55,67 @@ export const workspaceConversationBindings = sqliteTable(
   ],
 );
 
+export const executionScopes = sqliteTable(
+  "execution_scopes",
+  {
+    scopeRef: text("scope_ref").primaryKey(),
+    scopeDigestSha256: text("scope_digest_sha256").notNull().unique(),
+    adapter: text("adapter").notNull(),
+    createdAtMs: integer("created_at_ms").notNull(),
+    lastActivityAtMs: integer("last_activity_at_ms").notNull(),
+    lastToolName: text("last_tool_name"),
+    lastToolOutcome: text("last_tool_outcome"),
+    totalEventCount: integer("total_event_count").notNull().default(0),
+  },
+  (table) => [
+    index("execution_scopes_activity_idx").on(table.lastActivityAtMs),
+  ],
+);
+
+export const executionScopeEvents = sqliteTable(
+  "execution_scope_events",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    scopeRef: text("scope_ref")
+      .notNull()
+      .references(() => executionScopes.scopeRef, { onDelete: "cascade" }),
+    sequence: integer("sequence").notNull(),
+    toolName: text("tool_name").notNull(),
+    outcome: text("outcome").notNull(),
+    startedAtMs: integer("started_at_ms").notNull(),
+    completedAtMs: integer("completed_at_ms"),
+    durationMs: integer("duration_ms"),
+    workspaceId: text("workspace_id"),
+    processSessionId: integer("process_session_id"),
+    detailJson: text("detail_json"),
+    errorKind: text("error_kind"),
+    errorSummary: text("error_summary"),
+    errorDigestSha256: text("error_digest_sha256"),
+  },
+  (table) => [
+    index("execution_scope_events_scope_sequence_idx").on(table.scopeRef, table.sequence),
+    index("execution_scope_events_started_idx").on(table.startedAtMs),
+  ],
+);
+
+export const executionScopeWorkspaces = sqliteTable(
+  "execution_scope_workspaces",
+  {
+    scopeRef: text("scope_ref")
+      .notNull()
+      .references(() => executionScopes.scopeRef, { onDelete: "cascade" }),
+    workspaceSessionId: text("workspace_session_id")
+      .notNull()
+      .references(() => workspaceSessions.id, { onDelete: "cascade" }),
+    firstSeenAtMs: integer("first_seen_at_ms").notNull(),
+    lastSeenAtMs: integer("last_seen_at_ms").notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.scopeRef, table.workspaceSessionId] }),
+    index("execution_scope_workspaces_workspace_idx").on(table.workspaceSessionId),
+  ],
+);
+
 export const oauthClients = sqliteTable(
   "oauth_clients",
   {
@@ -120,5 +181,11 @@ export type LoadedAgentFileRow = typeof loadedAgentFiles.$inferSelect;
 export type NewLoadedAgentFileRow = typeof loadedAgentFiles.$inferInsert;
 export type WorkspaceConversationBindingRow = typeof workspaceConversationBindings.$inferSelect;
 export type NewWorkspaceConversationBindingRow = typeof workspaceConversationBindings.$inferInsert;
+export type ExecutionScopeRow = typeof executionScopes.$inferSelect;
+export type NewExecutionScopeRow = typeof executionScopes.$inferInsert;
+export type ExecutionScopeEventRow = typeof executionScopeEvents.$inferSelect;
+export type NewExecutionScopeEventRow = typeof executionScopeEvents.$inferInsert;
+export type ExecutionScopeWorkspaceRow = typeof executionScopeWorkspaces.$inferSelect;
+export type NewExecutionScopeWorkspaceRow = typeof executionScopeWorkspaces.$inferInsert;
 export type LocalAgentSessionRow = typeof localAgentSessions.$inferSelect;
 export type NewLocalAgentSessionRow = typeof localAgentSessions.$inferInsert;

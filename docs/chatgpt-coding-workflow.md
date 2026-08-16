@@ -29,6 +29,15 @@ explicit `workspaceId` workflow.
 The model receives actionable workspace instructions; automatic-reuse
 bookkeeping is not a model-facing choice.
 
+Separate host conversations remain separate execution scopes even when they
+open the same checkout. A supervisor conversation can use
+`execution_scope_list`, `execution_scope_status`, and `execution_scope_audit`
+to inspect another scope's bounded operational state—linked workspaces, live
+processes, executor-window phase, tool outcomes, and redacted errors—without
+sharing model context or reading a transcript. This does not grant writer
+authority; use an isolated worktree for parallel writers and reconcile the
+project's canonical state before takeover.
+
 Worktree mode is deliberately different: every call creates a new managed
 worktree and a new workspace session with complete context, even for the same
 path and base ref.

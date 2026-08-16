@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  executionScopeDigestSha256,
+  executionScopeIdentity,
+  executionScopeRef,
   executorWindowScopeId,
   openAiConversationScopeId,
 } from "./request-meta.js";
@@ -54,5 +57,34 @@ test("executor window maps OpenAI conversation metadata at the adapter edge", ()
   assert.equal(
     executorWindowScopeId({ "openai/session": "chat-session-opaque-value" }),
     "chat-session-opaque-value",
+  );
+});
+
+test("execution scopes expose only a stable hashed reference", () => {
+  const identity = executionScopeIdentity({
+    "openai/session": "chat-session-opaque-value",
+  });
+  assert.deepEqual(identity, {
+    scopeId: "chat-session-opaque-value",
+    scopeDigestSha256: executionScopeDigestSha256("chat-session-opaque-value"),
+    scopeRef: executionScopeRef("chat-session-opaque-value"),
+    adapter: "openai",
+  });
+  assert.equal(identity?.scopeRef.length, 16);
+  assert.equal(identity?.scopeRef.includes("chat-session"), false);
+});
+
+test("generic execution scope metadata wins at the provider adapter edge", () => {
+  assert.deepEqual(
+    executionScopeIdentity({
+      "devspace/executor-window-scope": "generic-scope",
+      "openai/session": "openai-scope",
+    }),
+    {
+      scopeId: "generic-scope",
+      scopeDigestSha256: executionScopeDigestSha256("generic-scope"),
+      scopeRef: executionScopeRef("generic-scope"),
+      adapter: "devspace",
+    },
   );
 });

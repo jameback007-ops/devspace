@@ -50,16 +50,21 @@ assert.equal(foreground.sessionId, undefined);
 
 const environment = await manager.start({
   workspaceId: "workspace-a",
+  executionScopeRef: "0123456789abcdef",
   workspaceRoot: "/tmp/devspace-workspace-a",
   cwd: process.cwd(),
-  command: `${node} -e "console.log([process.env.NO_COLOR, process.env.TERM, process.env.PAGER, process.env.GIT_PAGER, process.env.GH_PAGER, process.env.CODEX_CI, process.env.DEVSPACE_WORKSPACE_ID, process.env.DEVSPACE_WORKSPACE_ROOT].join(','))"`,
+  command: `${node} -e "console.log([process.env.NO_COLOR, process.env.TERM, process.env.PAGER, process.env.GIT_PAGER, process.env.GH_PAGER, process.env.CODEX_CI, process.env.DEVSPACE_WORKSPACE_ID, process.env.DEVSPACE_WORKSPACE_ROOT, process.env.DEVSPACE_EXECUTION_SCOPE_REF].join(','))"`,
   yieldTimeMs: 2_000,
 });
 assert.equal(environment.running, false);
-assert.match(environment.output, /1,dumb,cat,cat,cat,1,workspace-a,\/tmp\/devspace-workspace-a/);
+assert.match(
+  environment.output,
+  /1,dumb,cat,cat,cat,1,workspace-a,\/tmp\/devspace-workspace-a,0123456789abcdef/,
+);
 
 const background = await manager.start({
   workspaceId: "workspace-a",
+  executionScopeRef: "aaaaaaaaaaaaaaaa",
   cwd: process.cwd(),
   command: `${node} -e "setTimeout(() => console.log('finished'), 100)"`,
   yieldTimeMs: 5,
@@ -67,6 +72,31 @@ const background = await manager.start({
 assert.equal(background.running, true);
 assert.ok(background.sessionId);
 assert.equal(typeof background.sessionId, "number");
+
+const backgroundInspection = manager.inspect(["workspace-a"]);
+assert.equal(backgroundInspection.length, 1);
+assert.equal(backgroundInspection[0]?.sessionId, background.sessionId);
+assert.equal(backgroundInspection[0]?.running, true);
+assert.equal(backgroundInspection[0]?.workspaceId, "workspace-a");
+assert.equal(backgroundInspection[0]?.commandLength > 0, true);
+assert.match(backgroundInspection[0]?.commandDigestSha256 ?? "", /^[a-f0-9]{64}$/);
+assert.equal("command" in (backgroundInspection[0] ?? {}), false);
+assert.deepEqual(manager.inspect(["workspace-b"]), []);
+assert.equal(
+  manager.inspect(["workspace-a"], ["aaaaaaaaaaaaaaaa"])[0]?.sessionId,
+  background.sessionId,
+);
+assert.deepEqual(manager.inspect(["workspace-a"], ["bbbbbbbbbbbbbbbb"]), []);
+
+await assert.rejects(
+  manager.start({
+    workspaceId: "workspace-a",
+    executionScopeRef: "not-a-valid-ref",
+    cwd: process.cwd(),
+    command: `${node} -e "process.exit(0)"`,
+  }),
+  /must be 16 lowercase hexadecimal characters/,
+);
 
 await assert.rejects(
   manager.write({

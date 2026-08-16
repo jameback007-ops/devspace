@@ -8,6 +8,8 @@ import { promisify } from "node:util";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { loadConfig, type ServerConfig } from "./config.js";
+import { ExecutorWindowRegistry } from "./executor-window.js";
+import { ExecutionScopeManager } from "./execution-observability.js";
 import { createReviewCheckpointManager } from "./review-checkpoints.js";
 import { ProcessSessionManager } from "./process-sessions.js";
 import { createMcpServer } from "./server.js";
@@ -72,6 +74,103 @@ test("codex write_stdin exposes the output-aware long-poll contract", async (t) 
   assert.equal(yieldTimeMs?.maximum, 110_000);
   assert.match(String(yieldTimeMs?.description), /defaults to 90000/i);
   assert.match(String(yieldTimeMs?.description), /bounded to 30000/i);
+});
+
+test("one host scope can inspect another through bounded execution-scope tools", async (t) => {
+  const context = await fixture(t, { toolMode: "codex" });
+  const workerSession = "worker-private-session-id";
+  const supervisorSession = "supervisor-private-session-id";
+  const opened = await callOpen(context.client, context.project, workerSession);
+  const workspaceId = String(structuredContent(opened).workspaceId);
+  await context.client.callTool({
+    name: "read",
+    arguments: { workspaceId, path: "AGENTS.md" },
+    _meta: { "openai/session": workerSession },
+  } as Parameters<Client["callTool"]>[0]);
+
+  const tools = await context.client.listTools();
+  for (const name of [
+    "execution_scope_list",
+    "execution_scope_status",
+    "execution_scope_audit",
+  ]) {
+    const tool = tools.tools.find((candidate) => candidate.name === name);
+    assert.ok(tool, `${name} should be registered`);
+    assert.equal(tool.annotations?.readOnlyHint, true);
+  }
+
+  const listed = await context.client.callTool({
+    name: "execution_scope_list",
+    arguments: { limit: 10 },
+    _meta: { "openai/session": supervisorSession },
+  } as Parameters<Client["callTool"]>[0]);
+  const listData = structuredData(listed);
+  const scopes = listData.scopes as Array<Record<string, unknown>>;
+  assert.equal(scopes.length, 1);
+  const scopeRef = String(scopes[0]?.scopeRef);
+  assert.match(scopeRef, /^[a-f0-9]{16}$/);
+  assert.equal(scopes[0]?.isCurrent, false);
+  assert.equal(JSON.stringify(listData).includes(workerSession), false);
+  assert.equal(JSON.stringify(listData).includes(supervisorSession), false);
+
+  const status = await context.client.callTool({
+    name: "execution_scope_status",
+    arguments: { scopeRef },
+    _meta: { "openai/session": supervisorSession },
+  } as Parameters<Client["callTool"]>[0]);
+  const statusData = structuredData(status);
+  const workspaces = statusData.workspaces as Array<Record<string, unknown>>;
+  assert.equal(workspaces[0]?.workspaceId, workspaceId);
+  assert.equal(workspaces[0]?.root, context.project);
+  assert.equal((statusData.policy as Record<string, unknown>).transcriptCaptured, false);
+
+  const audit = await context.client.callTool({
+    name: "execution_scope_audit",
+    arguments: { scopeRef, limit: 10 },
+    _meta: { "openai/session": supervisorSession },
+  } as Parameters<Client["callTool"]>[0]);
+  const auditData = structuredData(audit);
+  const events = auditData.events as Array<Record<string, unknown>>;
+  assert.deepEqual(
+    events.map((event) => event.tool),
+    ["read", "open_workspace"],
+  );
+  const serializedAudit = JSON.stringify(auditData);
+  assert.equal(serializedAudit.includes(workerSession), false);
+  assert.equal(serializedAudit.includes("project instructions"), false);
+});
+
+test("createMcpServer keeps its prior public call shape and owns the default observer", async (t) => {
+  const context = await fixture(t, {
+    toolMode: "codex",
+    useDefaultExecutionScopes: true,
+  });
+  const tools = await context.client.listTools();
+  assert.ok(tools.tools.some((tool) => tool.name === "execution_scope_list"));
+  await callOpen(context.client, context.project, "backward-compatible-session");
+  const listed = await context.client.callTool({
+    name: "execution_scope_list",
+    arguments: {},
+    _meta: { "openai/session": "backward-compatible-session" },
+  } as Parameters<Client["callTool"]>[0]);
+  const data = structuredData(listed);
+  assert.equal((data.scopes as unknown[]).length, 1);
+});
+
+test("generic execution-scope metadata reuses checkout context without OpenAI coupling", async (t) => {
+  const context = await fixture(t, { toolMode: "codex" });
+  const params = {
+    name: "open_workspace",
+    arguments: { path: context.project },
+    _meta: { "devspace/executor-window-scope": "provider-neutral-scope" },
+  } as Parameters<Client["callTool"]>[0];
+  const first = await context.client.callTool(params);
+  const second = await context.client.callTool(params);
+  assert.equal(
+    structuredContent(first).workspaceId,
+    structuredContent(second).workspaceId,
+  );
+  assert.match(responseText(second), /already open/i);
 });
 
 test("concurrent checkout opens return one full context and one reuse instruction", async (t) => {
@@ -149,13 +248,25 @@ test("checkout reuse and context suppression survive a registry restart", async 
   await context.close();
 
   const restoredStore = new SqliteWorkspaceStore(context.stateDir);
+  const restoredProcessSessions = new ProcessSessionManager();
+  const restoredExecutorWindows = new ExecutorWindowRegistry(
+    context.config.executorWindow,
+  );
+  const restoredExecutionScopes = new ExecutionScopeManager(
+    context.config.executionObservability,
+    context.stateDir,
+    restoredProcessSessions,
+    restoredExecutorWindows,
+  );
   const restoredServer = createMcpServer(
     context.config,
     new WorkspaceRegistry(context.config, restoredStore),
     createReviewCheckpointManager(),
-    new ProcessSessionManager(),
+    restoredProcessSessions,
     [],
     [],
+    restoredExecutorWindows,
+    restoredExecutionScopes,
   );
   const [restoredClientTransport, restoredServerTransport] = InMemoryTransport.createLinkedPair();
   const restoredClient = new Client({ name: "devspace-restored-test-client", version: "1.0.0" });
@@ -165,6 +276,8 @@ test("checkout reuse and context suppression survive a registry restart", async 
     restoredClosed = true;
     await restoredClient.close();
     await restoredServer.close();
+    restoredProcessSessions.shutdown();
+    restoredExecutionScopes.close();
     restoredStore.close();
   };
   t.after(closeRestored);
@@ -193,7 +306,11 @@ interface ServerFixture {
 
 async function fixture(
   t: TestContext,
-  options: { git?: boolean; toolMode?: ServerConfig["toolMode"] } = {},
+  options: {
+    git?: boolean;
+    toolMode?: ServerConfig["toolMode"];
+    useDefaultExecutionScopes?: boolean;
+  } = {},
 ): Promise<ServerFixture> {
   const root = await mkdtemp(join(tmpdir(), "devspace-server-test-"));
   const project = join(root, "project");
@@ -234,14 +351,36 @@ async function fixture(
   });
   const store = new SqliteWorkspaceStore(stateDir);
   const workspaces = new WorkspaceRegistry(config, store);
-  const server = createMcpServer(
-    config,
-    workspaces,
-    createReviewCheckpointManager(),
-    new ProcessSessionManager(),
-    [],
-    [],
-  );
+  const processSessions = new ProcessSessionManager();
+  const executorWindows = new ExecutorWindowRegistry(config.executorWindow);
+  const executionScopes = options.useDefaultExecutionScopes
+    ? undefined
+    : new ExecutionScopeManager(
+        config.executionObservability,
+        stateDir,
+        processSessions,
+        executorWindows,
+      );
+  const server = executionScopes
+    ? createMcpServer(
+        config,
+        workspaces,
+        createReviewCheckpointManager(),
+        processSessions,
+        [],
+        [],
+        executorWindows,
+        executionScopes,
+      )
+    : createMcpServer(
+        config,
+        workspaces,
+        createReviewCheckpointManager(),
+        processSessions,
+        [],
+        [],
+        executorWindows,
+      );
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: "devspace-test-client", version: "1.0.0" });
   await Promise.all([
@@ -255,6 +394,8 @@ async function fixture(
     closed = true;
     await client.close();
     await server.close();
+    processSessions.shutdown();
+    executionScopes?.close();
     store.close();
   };
 
@@ -292,6 +433,15 @@ async function callOpen(
 function structuredContent(result: Awaited<ReturnType<Client["callTool"]>>): Record<string, unknown> {
   assert.ok(result.structuredContent);
   return result.structuredContent as Record<string, unknown>;
+}
+
+function structuredData(
+  result: Awaited<ReturnType<Client["callTool"]>>,
+): Record<string, any> {
+  const structured = structuredContent(result);
+  const data = structured.data;
+  assert.ok(data && typeof data === "object");
+  return data as Record<string, any>;
 }
 
 function responseText(result: Awaited<ReturnType<Client["callTool"]>>): string {

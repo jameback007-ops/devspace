@@ -77,6 +77,28 @@ continuation contract.
 | `DEVSPACE_EXECUTOR_WINDOW_YIELD_MINUTES` | `100` | Require a safe yield and block new mutation/commands. Must exceed DRAIN. |
 | `DEVSPACE_EXECUTOR_WINDOW_RETENTION_HOURS` | `24` | Retain in-memory yielded handoff state for later turns while the server remains running. |
 
+## Execution-Scope Observability
+
+DevSpace keeps independent host conversations in separate provider-neutral
+execution scopes. The read-only `execution_scope_list`,
+`execution_scope_status`, and `execution_scope_audit` tools allow one scope to
+inspect another scope's operational state without sharing model context or
+capturing a transcript. See
+[Execution-Scope Observability](execution-scope-observability.md) for the data
+and authority boundaries.
+
+The metadata-only audit is enabled by default. It persists tool lifecycle,
+workspace links, process state, digests, timing, and redacted errors in the
+existing owner-only SQLite database. It never stores prompts, private reasoning,
+tool output, raw commands, patch bodies, credentials, or native file handles.
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `DEVSPACE_EXECUTION_OBSERVABILITY` | `1` | Enable durable execution-scope status and audit. |
+| `DEVSPACE_EXECUTION_OBSERVABILITY_RETENTION_HOURS` | `168` | Retain audit events for seven days. Maximum 90 days. |
+| `DEVSPACE_EXECUTION_OBSERVABILITY_MAX_EVENTS_PER_SCOPE` | `1000` | Maximum retained events per execution scope. |
+| `DEVSPACE_EXECUTION_OBSERVABILITY_IDLE_MINUTES` | `5` | Classify a non-running scope as idle after this interval. |
+
 ## Native Artifact Download
 
 Native-file download is disabled by default. Enable it when ChatGPT needs to hand

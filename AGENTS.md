@@ -51,6 +51,7 @@ architectural purity.
 - **Worktree mode** — operating in an isolated Git worktree.
 - **Tool surface** — the tools exposed by a configured mode, such as minimal, full, or Codex-compatible.
 - **Process session** — a long-running command tracked for later input, output, or termination.
+- **Execution scope** — a stable provider-neutral host conversation/task scope used to join executor-local workspace, process, window, and bounded audit observations. It is not a transcript or product authority.
 - **Instruction file** — an `AGENTS.md` or `CLAUDE.md` discovered while navigating a workspace.
 - **Subagent** — a bounded model invocation delegated and coordinated by the host.
 - **Agent profile** — the model, provider, tools, and instructions used for a subagent.
