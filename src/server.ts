@@ -11,7 +11,7 @@ import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { checkResourceAllowed, resourceUrlFromServerUrl } from "@modelcontextprotocol/sdk/shared/auth-utils.js";
 import {
   registerAppResource,
-  registerAppTool,
+  registerAppTool as registerMcpAppTool,
   RESOURCE_MIME_TYPE,
 } from "@modelcontextprotocol/ext-apps/server";
 import express from "express";
@@ -23,6 +23,13 @@ import {
   registerArtifactTools,
 } from "./artifact-tools.js";
 import { loadConfig, type ServerConfig, type WidgetMode } from "./config.js";
+import {
+  ExecutorWindowRegistry,
+  executorWindowBlockedText,
+  executorWindowFooter,
+  type ExecutorWindowHandoff,
+  type ExecutorWindowStatus,
+} from "./executor-window.js";
 import {
   createOpenAIIncomingArtifactAdapter,
   type IncomingArtifactAdapter,
@@ -50,9 +57,13 @@ import {
 } from "./mcp-sessions.js";
 import { ProcessSessionManager, type ProcessSnapshot } from "./process-sessions.js";
 import { createReviewCheckpointManager } from "./review-checkpoints.js";
-import { openAiConversationScopeId } from "./request-meta.js";
+import {
+  executorWindowScopeId,
+  openAiConversationScopeId,
+} from "./request-meta.js";
 import { shutdownHttpServer } from "./server-shutdown.js";
 import { formatPathForPrompt } from "./skills.js";
+import { registerZesCodexInspectionTools } from "./zes-codex-inspection.js";
 import { createWorkspaceStore } from "./workspace-store.js";
 import { formatAgentsPath, WorkspaceRegistry } from "./workspaces.js";
 import { summarizeLocalAgentProfile } from "./local-agent-profiles.js";
@@ -69,6 +80,12 @@ const MCP_SESSION_IDLE_TIMEOUT_MS = 24 * 60 * 60 * 1_000;
 const MCP_SESSION_CLEANUP_INTERVAL_MS = 5 * 60 * 1_000;
 const WORKSPACE_APP_URI = "ui://devspace/workspace-app.html";
 const WORKSPACE_APP_MANIFEST_ENTRY = "workspace-app.html";
+const CODEX_SESSION_TOOL_ANNOTATIONS = {
+  readOnlyHint: true,
+  destructiveHint: false,
+  idempotentHint: true,
+  openWorldHint: false,
+};
 const WRITE_TOOL_ANNOTATIONS = {
   readOnlyHint: false,
   destructiveHint: true,
@@ -190,7 +207,132 @@ interface ToolLogFields {
   error?: string;
 }
 
+const executorWindowContexts = new WeakMap<
+  object,
+  { registry: ExecutorWindowRegistry; config: ServerConfig }
+>();
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function appendExecutorWindowStatus(
+  response: unknown,
+  status: ExecutorWindowStatus,
+): unknown {
+  const footer = executorWindowFooter(status);
+  if (!footer || !isRecord(response)) return response;
+
+  const content = Array.isArray(response.content)
+    ? [...response.content, { type: "text", text: footer }]
+    : [{ type: "text", text: footer }];
+  const structuredContent = isRecord(response.structuredContent)
+    ? {
+        ...response.structuredContent,
+        ...(typeof response.structuredContent.result === "string"
+          ? { result: `${response.structuredContent.result}\n\n${footer}` }
+          : {}),
+      }
+    : response.structuredContent;
+  const metadata = isRecord(response._meta)
+    ? { ...response._meta, executorWindow: status }
+    : { executorWindow: status };
+
+  return {
+    ...response,
+    content,
+    _meta: metadata,
+    ...(structuredContent === undefined ? {} : { structuredContent }),
+  };
+}
+
+const registerAppTool = ((
+  server: Pick<McpServer, "registerTool">,
+  name: string,
+  toolConfig: Record<string, unknown>,
+  callback: (input: unknown, extra: { _meta?: unknown }) => unknown,
+) => {
+  const windowContext = executorWindowContexts.get(server as object);
+  if (!windowContext) {
+    return registerMcpAppTool(
+      server,
+      name,
+      toolConfig as never,
+      callback as never,
+    );
+  }
+
+  return registerMcpAppTool(
+    server,
+    name,
+    toolConfig as never,
+    (async (input: unknown, extra: { _meta?: unknown }) => {
+      const { registry: executorWindows, config } = windowContext;
+      const scopeId = executorWindowScopeId(extra?._meta);
+      const readOnlyHint = isRecord(toolConfig.annotations)
+        && toolConfig.annotations.readOnlyHint === true;
+      const decision = executorWindows.beforeTool(
+        scopeId,
+        name,
+        input,
+        readOnlyHint,
+      );
+      if (decision.transition) {
+        logEvent(config.logging, "info", "executor_window_auto_transition", {
+          tool: name,
+          transition: decision.transition,
+          scopeRef: decision.status.scopeRef,
+          windowId: decision.status.windowId,
+          generation: decision.status.generation,
+          phase: decision.status.phase,
+          drainAfterMs: decision.status.drainAfterMs,
+          yieldAfterMs: decision.status.yieldAfterMs,
+        });
+      }
+      if (!decision.allowed) {
+        logEvent(config.logging, "warn", "executor_window_tool_blocked", {
+          tool: name,
+          reason: decision.reason,
+          scopeRef: decision.status.scopeRef,
+          windowId: decision.status.windowId,
+          generation: decision.status.generation,
+          phase: decision.status.phase,
+          elapsedMs: decision.status.elapsedMs,
+          yieldInMs: decision.status.yieldInMs,
+        });
+        return {
+          isError: true,
+          content: [{ type: "text", text: executorWindowBlockedText(decision) }],
+          _meta: { executorWindow: decision.status },
+        };
+      }
+
+      const response = await callback(input, extra);
+      executorWindows.touch(scopeId);
+      if (name.startsWith("executor_window_")) return response;
+      const status = executorWindows.status(scopeId);
+      if (status.phase === "drain" || status.phase === "yield_required") {
+        logEvent(config.logging, "info", "executor_window_observation", {
+          tool: name,
+          scopeRef: status.scopeRef,
+          windowId: status.windowId,
+          generation: status.generation,
+          phase: status.phase,
+          elapsedMs: status.elapsedMs,
+          yieldInMs: status.yieldInMs,
+        });
+      }
+      return appendExecutorWindowStatus(response, status);
+    }) as never,
+  );
+}) as unknown as typeof registerMcpAppTool;
+
 function serverInstructions(config: ServerConfig): string {
+  const codexSessionInstruction =
+    " To inspect the allowlisted live AOQ Codex task through the existing shell tool, run `zes-session status`, `zes-session tail --limit 20`, or `zes-session audit --limit 20`. To inspect its exact live worktree, run `zes-workspace status`, `zes-workspace tree`, `zes-workspace read <relative-path>`, `zes-workspace search <query>`, or `zes-workspace diff`. These brokered commands are read-only; they can inspect the complete worktree but cannot access paths outside it or mutate the active task.";
+  const executorWindowInstruction = config.executorWindow.enabled
+    ? " The executor window starts automatically on the first scoped tool call in a new MCP session. A task is not bounded by one turn and may continue for days or across sessions. executor_window_begin is an optional explicit start or post-cutoff recovery control when the host exposes it; repeated begin calls cannot reset an active window. When tool results report DRAIN, finish the current local causal chain, persist a recoverable ZES checkpoint or handoff, and do not open a new major frontier. When they report YIELD_REQUIRED, use only read/reconciliation actions or poll/interrupt an existing process, persist the exact frontier, and end the assistant turn; call executor_window_yield when that tool is visible."
+    : "";
   const artifactInstruction = config.artifactsEnabled && isArtifactDownloadSupportedPlatform()
     ? " When the user supplies or generates a file that is not present on the DevSpace host, use download_artifact with its native file value, the existing workspace ID, and a suitable relative destination path chosen from the user's request and project structure. The tool refuses to overwrite an existing destination and returns the normalized workspace-relative path. Use normal workspace tools when explicit inspection, replacement, movement, renaming, or deletion is needed. Do not recreate binary files with write/edit calls or place signed URLs, native file objects, base64 content, or invented host paths in shell commands or logs."
     : "";
@@ -200,7 +342,7 @@ function serverInstructions(config: ServerConfig): string {
       : "";
 
   if (config.toolMode === "codex") {
-    return `Use DevSpace for coding work. Call ${toolNames.openWorkspace} once for each project folder or isolated worktree, then keep using its workspaceId. During continued work in the same project or worktree, do not call ${toolNames.openWorkspace} again. Open another workspace only when changing projects, switching checkout/worktree mode, creating another isolated worktree, or when the current workspaceId is rejected. Use ${toolNames.read} for direct file reads, apply_patch for all file modifications, exec_command for inspection, tests, builds, and other commands, and write_stdin to poll or interact with running processes. Follow instructions returned by ${toolNames.openWorkspace}; read applicable instruction and skill files before working in their scope.${artifactInstruction}${showChangesInstruction}`;
+    return `Use DevSpace for coding work. Call ${toolNames.openWorkspace} once for each project folder or isolated worktree, then keep using its workspaceId. During continued work in the same project or worktree, do not call ${toolNames.openWorkspace} again. Open another workspace only when changing projects, switching checkout/worktree mode, creating another isolated worktree, or when the current workspaceId is rejected. Use ${toolNames.read} for direct file reads, apply_patch for all file modifications, exec_command for inspection, tests, builds, and other commands, and write_stdin to poll or interact with running processes. Follow instructions returned by ${toolNames.openWorkspace}; read applicable instruction and skill files before working in their scope.${artifactInstruction}${showChangesInstruction}${codexSessionInstruction}${executorWindowInstruction}`;
   }
 
   const inspection = config.toolMode !== "full"
@@ -213,7 +355,7 @@ function serverInstructions(config: ServerConfig): string {
 
   const agentsMd = `Follow instructions returned by ${toolNames.openWorkspace}. Before working under a path listed in availableAgentsFiles, use ${toolNames.read} to inspect that instruction file and follow it. `;
 
-  return `Use DevSpace for coding work. Call ${toolNames.openWorkspace} once for each project folder or isolated worktree, then keep using its workspaceId. During continued work in the same project or worktree, do not call ${toolNames.openWorkspace} again. Open another workspace only when changing projects, switching checkout/worktree mode, creating another isolated worktree, or when the current workspaceId is rejected. ${agentsMd}${skills}${inspection}Prefer ${toolNames.edit} for targeted modifications, ${toolNames.write} only for new files or complete rewrites, and ${toolNames.shell} for tests, builds, git inspection, package scripts, and commands that are better executed by the shell. Do not create or modify files with ${toolNames.shell}; avoid shell redirection, heredocs, tee, sed -i, perl -i, node/python/ruby scripts, or any command whose purpose is to write project files.${artifactInstruction}${showChangesInstruction}`;
+  return `Use DevSpace for coding work. Call ${toolNames.openWorkspace} once for each project folder or isolated worktree, then keep using its workspaceId. During continued work in the same project or worktree, do not call ${toolNames.openWorkspace} again. Open another workspace only when changing projects, switching checkout/worktree mode, creating another isolated worktree, or when the current workspaceId is rejected. ${agentsMd}${skills}${inspection}Prefer ${toolNames.edit} for targeted modifications, ${toolNames.write} only for new files or complete rewrites, and ${toolNames.shell} for tests, builds, git inspection, package scripts, and commands that are better executed by the shell. Do not create or modify files with ${toolNames.shell}; avoid shell redirection, heredocs, tee, sed -i, perl -i, node/python/ruby scripts, or any command whose purpose is to write project files.${artifactInstruction}${showChangesInstruction}${codexSessionInstruction}${executorWindowInstruction}`;
 }
 
 function formatVisibleAgent(agent: {
@@ -553,6 +695,159 @@ function processToolResponse(
   };
 }
 
+function jsonToolResponse(data: unknown) {
+  const result = JSON.stringify(data, null, 2);
+  return {
+    content: [textBlock(result)],
+    structuredContent: { result, data },
+  };
+}
+
+function registerExecutorWindowTools(
+  server: McpServer,
+  config: ServerConfig,
+  executorWindows: ExecutorWindowRegistry,
+): void {
+  const annotations = {
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: false,
+    openWorldHint: false,
+  };
+
+  registerAppTool(
+    server,
+    "executor_window_begin",
+    {
+      title: "Begin executor turn window",
+      description:
+        "Explicitly begin or recover a bounded harness window. Normal scoped work auto-begins on its first tool call, so this control is optional. It does not create, split, or complete a task, and repeated begin calls cannot reset an active window.",
+      inputSchema: {
+        reason: z
+          .enum(["new_turn", "recovery_after_cutoff", "manual_test"])
+          .describe(
+            "Why a new assistant-turn window is being opened. Use recovery_after_cutoff when the preceding turn ended abruptly.",
+          ),
+      },
+      outputSchema: resultOutputSchema({ data: z.unknown() }),
+      ...toolWidgetDescriptorMeta(config, "read"),
+      annotations,
+    },
+    async ({ reason }, { _meta }) => {
+      const result = executorWindows.begin(
+        executorWindowScopeId(_meta),
+        reason,
+      );
+      logEvent(config.logging, "info", "executor_window_begun", {
+        reason,
+        started: result.started,
+        previousWindowId: result.previousWindowId,
+        scopeRef: result.status.scopeRef,
+        windowId: result.status.windowId,
+        generation: result.status.generation,
+        phase: result.status.phase,
+        drainAfterMs: result.status.drainAfterMs,
+        yieldAfterMs: result.status.yieldAfterMs,
+      });
+      return jsonToolResponse(result);
+    },
+  );
+
+  registerAppTool(
+    server,
+    "executor_window_status",
+    {
+      title: "Read executor turn window",
+      description:
+        "Read the current ACTIVE, DRAIN, YIELD_REQUIRED, or YIELDED harness state for this assistant turn. This is runtime scheduling metadata, not task, checkpoint, memory, release, or effect authority.",
+      inputSchema: {},
+      outputSchema: resultOutputSchema({ data: z.unknown() }),
+      ...toolWidgetDescriptorMeta(config, "read"),
+      annotations: CODEX_SESSION_TOOL_ANNOTATIONS,
+    },
+    async (_input, { _meta }) => jsonToolResponse(
+      executorWindows.status(executorWindowScopeId(_meta)),
+    ),
+  );
+
+  registerAppTool(
+    server,
+    "executor_window_yield",
+    {
+      title: "Yield executor turn safely",
+      description:
+        "Mark this assistant turn yielded after recording a bounded advisory handoff. This handoff does not replace Git, PostgreSQL, runtime/effect readback, or product-native continuation. After this succeeds, end the assistant turn; a later turn must call executor_window_begin before resuming.",
+      inputSchema: {
+        summary: z
+          .string()
+          .min(1)
+          .max(4_000)
+          .describe("Current frontier and what this turn actually established."),
+        nextAction: z
+          .string()
+          .min(1)
+          .max(2_000)
+          .describe("The next exact causal action for a fresh qualified executor."),
+        worktreeState: z.enum([
+          "clean",
+          "intentional_dirty",
+          "not_applicable",
+          "unknown",
+        ]),
+        effectState: z.enum(["none", "terminal", "unknown"]),
+        checkpointRefs: z
+          .array(z.string().min(1).max(1_000))
+          .max(20)
+          .optional()
+          .describe("Existing Git, PG, runtime, or continuation references. Do not invent refs."),
+        unresolved: z
+          .array(z.string().min(1).max(1_000))
+          .max(30)
+          .optional(),
+      },
+      outputSchema: resultOutputSchema({ data: z.unknown() }),
+      ...toolWidgetDescriptorMeta(config, "read"),
+      annotations,
+    },
+    async (
+      {
+        summary,
+        nextAction,
+        worktreeState,
+        effectState,
+        checkpointRefs,
+        unresolved,
+      },
+      { _meta },
+    ) => {
+      const handoff: ExecutorWindowHandoff = {
+        summary,
+        nextAction,
+        worktreeState,
+        effectState,
+        checkpointRefs: checkpointRefs ?? [],
+        unresolved: unresolved ?? [],
+      };
+      const status = executorWindows.yield(
+        executorWindowScopeId(_meta),
+        handoff,
+      );
+      logEvent(config.logging, "info", "executor_window_yielded", {
+        scopeRef: status.scopeRef,
+        windowId: status.windowId,
+        generation: status.generation,
+        phase: status.phase,
+        elapsedMs: status.elapsedMs,
+        worktreeState,
+        effectState,
+        checkpointRefCount: handoff.checkpointRefs.length,
+        unresolvedCount: handoff.unresolved.length,
+      });
+      return jsonToolResponse(status);
+    },
+  );
+}
+
 function registerCodexProcessTools(
   server: McpServer,
   config: ServerConfig,
@@ -704,19 +999,22 @@ export function createMcpServer(
   processSessions: ProcessSessionManager,
   localAgentProviders: LocalAgentProviderAvailability[],
   incomingArtifactAdapters: readonly IncomingArtifactAdapter[],
+  executorWindows = new ExecutorWindowRegistry(config.executorWindow),
 ): McpServer {
   const server = new McpServer(
     {
       name: "devspace",
       title: "DevSpace",
-      version: "0.1.0",
+      version: "0.4.0-zes.1",
       description:
-        "Coding tools for project workspaces. Open each project or worktree once, then reuse its workspaceId.",
+        "Coding tools for project workspaces plus bounded executor-turn safety and broad read-only inspection of the exact live AOQ Codex task and worktree.",
     },
     {
       instructions: serverInstructions(config),
     },
   );
+
+  executorWindowContexts.set(server, { registry: executorWindows, config });
 
   registerAppResource(
     server,
@@ -748,6 +1046,9 @@ export function createMcpServer(
       };
     },
   );
+
+  registerExecutorWindowTools(server, config, executorWindows);
+  registerZesCodexInspectionTools(server, config, registerAppTool);
 
   registerAppTool(
     server,
@@ -1655,6 +1956,7 @@ export function createMcpServer(
       config,
       workspaces,
       incomingArtifactAdapters,
+      registerTool: registerAppTool,
     });
   }
 
@@ -1691,6 +1993,7 @@ export function createServer(
   const workspaces = new WorkspaceRegistry(config, workspaceStore);
   const reviewCheckpoints = createReviewCheckpointManager();
   const processSessions = new ProcessSessionManager();
+  const executorWindows = new ExecutorWindowRegistry(config.executorWindow);
   const localAgentProviders = config.subagents
     ? getLocalAgentProviderAvailabilitySnapshot()
     : [];
@@ -1787,6 +2090,8 @@ export function createServer(
     const requestId = res.locals.requestId as string | undefined;
     const sessionId = req.header("mcp-session-id");
     const initializeRequest = req.method === "POST" && isInitializeRequest(req.body);
+    const openAiStatelessRequest = req.method === "POST"
+      && /^openai-mcp\//i.test(req.header("user-agent") ?? "");
 
     await new Promise<void>((resolve, reject) => {
       bearerAuth(req, res, (error?: unknown) => {
@@ -1814,12 +2119,36 @@ export function createServer(
       sessionIdPresent: Boolean(sessionId),
       sessionIdPrefix: sessionIdPrefix(sessionId),
       isInitialize: initializeRequest,
+      transportMode: openAiStatelessRequest ? "stateless_openai" : "stateful",
     });
 
     try {
       let transport: Transport | undefined;
 
-      if (sessionId) {
+      if (openAiStatelessRequest) {
+        // ChatGPT separates tool discovery from execution and its execution
+        // workers may not preserve an MCP session. Keep each OpenAI POST
+        // self-contained while sharing process-level workspace, process, and
+        // executor-window registries.
+        transport = new StreamableHTTPServerTransport({
+          sessionIdGenerator: undefined,
+          enableJsonResponse: true,
+        });
+        const server = createMcpServer(
+          config,
+          workspaces,
+          reviewCheckpoints,
+          processSessions,
+          localAgentProviders,
+          incomingArtifactAdapters,
+          executorWindows,
+        );
+        await server.connect(transport);
+        res.on("close", () => {
+          void transport?.close().catch(() => undefined);
+          void server.close().catch(() => undefined);
+        });
+      } else if (sessionId) {
         transport = transports.get(sessionId);
         if (!transport) {
           sendJsonRpcError(res, 404, -32000, "Unknown MCP session");
@@ -1855,10 +2184,32 @@ export function createServer(
           processSessions,
           localAgentProviders,
           incomingArtifactAdapters,
+          executorWindows,
         );
         await server.connect(transport);
+      } else if (req.method === "POST") {
+        // Preserve the SDK-supported one-transport-per-request fallback for
+        // other stateless MCP clients.
+        transport = new StreamableHTTPServerTransport({
+          sessionIdGenerator: undefined,
+          enableJsonResponse: true,
+        });
+        const server = createMcpServer(
+          config,
+          workspaces,
+          reviewCheckpoints,
+          processSessions,
+          localAgentProviders,
+          incomingArtifactAdapters,
+          executorWindows,
+        );
+        await server.connect(transport);
+        res.on("close", () => {
+          void transport?.close().catch(() => undefined);
+          void server.close().catch(() => undefined);
+        });
       } else {
-        sendJsonRpcError(res, 400, -32000, "No valid MCP session");
+        sendJsonRpcError(res, 405, -32000, "Method not allowed");
         return;
       }
 
@@ -1913,6 +2264,11 @@ if (await isMainModule()) {
     console.log(`request logging: ${config.logging.requests ? "enabled" : "disabled"}`);
     console.log(`asset logging: ${config.logging.assets ? "enabled" : "disabled"}`);
     console.log(`trust proxy: ${config.logging.trustProxy ? "enabled" : "disabled"}`);
+    console.log(
+      config.executorWindow.enabled
+        ? `executor window: enabled (drain ${Math.round(config.executorWindow.drainAfterMs / 60_000)}m, yield ${Math.round(config.executorWindow.yieldAfterMs / 60_000)}m)`
+        : "executor window: disabled",
+    );
     const artifactDownloadStatus = !config.artifactsEnabled
       ? "disabled"
       : isArtifactDownloadSupportedPlatform()

@@ -3,6 +3,7 @@ import { join, resolve } from "node:path";
 import { expandHomePath } from "./roots.js";
 import type { LoggingConfig, LogFormat, LogLevel } from "./logger.js";
 import type { OAuthConfig } from "./oauth-provider.js";
+import type { ExecutorWindowConfig } from "./executor-window.js";
 import { devspaceAgentsDir, devspaceSkillsDir, loadDevspaceFiles } from "./user-config.js";
 
 export type ToolMode = "minimal" | "full" | "codex";
@@ -10,6 +11,9 @@ export type WidgetMode = "off" | "changes" | "full";
 const DEFAULT_OAUTH_ACCESS_TOKEN_TTL_SECONDS = 60 * 60;
 const DEFAULT_OAUTH_REFRESH_TOKEN_TTL_SECONDS = 30 * 24 * 60 * 60;
 const DEFAULT_ARTIFACT_MAX_FILE_BYTES = 100 * 1024 * 1024;
+const DEFAULT_EXECUTOR_WINDOW_DRAIN_MINUTES = 90;
+const DEFAULT_EXECUTOR_WINDOW_YIELD_MINUTES = 100;
+const DEFAULT_EXECUTOR_WINDOW_RETENTION_HOURS = 24;
 
 export interface ServerConfig {
   host: string;
@@ -30,6 +34,7 @@ export interface ServerConfig {
   devspaceAgentsDir: string;
   subagents: boolean;
   agentDir: string;
+  executorWindow: ExecutorWindowConfig;
   logging: LoggingConfig;
 }
 
@@ -155,6 +160,46 @@ function parseLoggingConfig(env: NodeJS.ProcessEnv): LoggingConfig {
   };
 }
 
+function parseExecutorWindowConfig(env: NodeJS.ProcessEnv): ExecutorWindowConfig {
+  const drainMinutes = parsePositiveInteger(
+    env.DEVSPACE_EXECUTOR_WINDOW_DRAIN_MINUTES,
+    DEFAULT_EXECUTOR_WINDOW_DRAIN_MINUTES,
+    "DEVSPACE_EXECUTOR_WINDOW_DRAIN_MINUTES",
+    24 * 60,
+  );
+  const yieldMinutes = parsePositiveInteger(
+    env.DEVSPACE_EXECUTOR_WINDOW_YIELD_MINUTES,
+    DEFAULT_EXECUTOR_WINDOW_YIELD_MINUTES,
+    "DEVSPACE_EXECUTOR_WINDOW_YIELD_MINUTES",
+    24 * 60,
+  );
+  if (yieldMinutes <= drainMinutes) {
+    throw new Error(
+      "DEVSPACE_EXECUTOR_WINDOW_YIELD_MINUTES must be greater than DEVSPACE_EXECUTOR_WINDOW_DRAIN_MINUTES",
+    );
+  }
+  const retentionHours = parsePositiveInteger(
+    env.DEVSPACE_EXECUTOR_WINDOW_RETENTION_HOURS,
+    DEFAULT_EXECUTOR_WINDOW_RETENTION_HOURS,
+    "DEVSPACE_EXECUTOR_WINDOW_RETENTION_HOURS",
+    24 * 30,
+  );
+  const drainAfterMs = drainMinutes * 60 * 1000;
+  const yieldAfterMs = yieldMinutes * 60 * 1000;
+  const retentionMs = retentionHours * 60 * 60 * 1000;
+  if (retentionMs < yieldAfterMs) {
+    throw new Error(
+      "DEVSPACE_EXECUTOR_WINDOW_RETENTION_HOURS must retain a window beyond its yield threshold",
+    );
+  }
+  return {
+    enabled: parseBoolean(env.DEVSPACE_EXECUTOR_WINDOW),
+    drainAfterMs,
+    yieldAfterMs,
+    retentionMs,
+  };
+}
+
 function parseWidgetMode(value: string | undefined): WidgetMode {
   if (!value || value === "full") return "full";
   if (value === "off" || value === "changes") return value;
@@ -252,6 +297,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
         ? files.config.subagents === true
         : parseBoolean(env.DEVSPACE_SUBAGENTS),
     agentDir: resolve(expandHomePath(env.DEVSPACE_AGENT_DIR ?? files.config.agentDir ?? defaultAgentDir())),
+    executorWindow: parseExecutorWindowConfig(env),
     logging: parseLoggingConfig(env),
   };
 }

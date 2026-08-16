@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { openAiConversationScopeId } from "./request-meta.js";
+import {
+  executorWindowScopeId,
+  openAiConversationScopeId,
+} from "./request-meta.js";
 
 test("undefined request metadata has no conversation scope", () => {
   assert.equal(openAiConversationScopeId(undefined), undefined);
@@ -33,6 +36,23 @@ test("unrelated metadata fields do not alter the selected conversation scope", (
       "openai/subject": "user-1",
       "openai/organization": "org-1",
     }),
+    "chat-session-opaque-value",
+  );
+});
+
+test("executor window accepts the generic provider-neutral scope key", () => {
+  assert.equal(
+    executorWindowScopeId({
+      "devspace/executor-window-scope": "generic-turn-scope",
+      "openai/session": "chat-session-opaque-value",
+    }),
+    "generic-turn-scope",
+  );
+});
+
+test("executor window maps OpenAI conversation metadata at the adapter edge", () => {
+  assert.equal(
+    executorWindowScopeId({ "openai/session": "chat-session-opaque-value" }),
     "chat-session-opaque-value",
   );
 });

@@ -12,3 +12,15 @@ export function openAiConversationScopeId(
 ): string | undefined {
   return metadataString(meta, "openai/session");
 }
+
+/**
+ * Resolve a provider-neutral executor-window scope at the MCP adapter edge.
+ * Hosts may supply the generic key directly; ChatGPT currently maps its
+ * conversation scope into the same runtime contract.
+ */
+export function executorWindowScopeId(
+  meta: unknown,
+): string | undefined {
+  return metadataString(meta, "devspace/executor-window-scope")
+    ?? openAiConversationScopeId(meta);
+}

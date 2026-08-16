@@ -39,6 +39,44 @@ npx @waishnav/devspace config set publicBaseUrl https://devspace.example.com
 | `DEVSPACE_WORKTREE_ROOT` | Directory for managed Git worktrees. Defaults to `~/.devspace/worktrees`. |
 | `DEVSPACE_STATE_DIR` | Directory for SQLite state. Defaults to `~/.local/share/devspace`. |
 
+## Executor Turn Window
+
+The executor window is an optional interruption-safety guard for MCP hosts whose
+model turns may end at an unknown platform cutoff. It does **not** divide or time
+limit the underlying task. A task may continue across any number of turns.
+
+```bash
+DEVSPACE_EXECUTOR_WINDOW=1 \
+DEVSPACE_EXECUTOR_WINDOW_DRAIN_MINUTES=90 \
+DEVSPACE_EXECUTOR_WINDOW_YIELD_MINUTES=100 \
+npx @waishnav/devspace serve
+```
+
+The window starts automatically on the first scoped tool call in a new MCP
+session. Hosts that expose dynamic tool updates may also use
+`executor_window_begin` as an explicit start or post-cutoff recovery control;
+repeated begin calls cannot reset an active window. Normal tool results include
+a compact window status. After the drain threshold, the model should finish the
+current local causal chain, persist a recoverable checkpoint or handoff, and
+avoid opening a new major frontier. At the yield threshold, DevSpace blocks new
+mutation and new command execution while still allowing read/reconciliation
+tools and polling or interrupting an existing process. The model records a
+bounded advisory handoff with `executor_window_yield` when that tool is visible,
+or otherwise persists the same state through the product-native checkpoint or
+continuation path and ends the turn.
+
+The window is runtime scheduling metadata only. It is not task, checkpoint,
+memory, release, writer, or effect authority. The advisory handoff does not
+replace Git, a canonical database, runtime/effect readback, or a product-native
+continuation contract.
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `DEVSPACE_EXECUTOR_WINDOW` | `0` | Enable the executor-turn guard. |
+| `DEVSPACE_EXECUTOR_WINDOW_DRAIN_MINUTES` | `90` | Enter DRAIN and stop opening major new work. |
+| `DEVSPACE_EXECUTOR_WINDOW_YIELD_MINUTES` | `100` | Require a safe yield and block new mutation/commands. Must exceed DRAIN. |
+| `DEVSPACE_EXECUTOR_WINDOW_RETENTION_HOURS` | `24` | Retain in-memory yielded handoff state for later turns while the server remains running. |
+
 ## Native Artifact Download
 
 Native-file download is disabled by default. Enable it when ChatGPT needs to hand

@@ -10,7 +10,7 @@ import {
   type FileHandle,
 } from "node:fs/promises";
 import { isAbsolute, join, normalize, sep } from "node:path";
-import { registerAppTool } from "@modelcontextprotocol/ext-apps/server";
+import { registerAppTool as registerMcpAppTool } from "@modelcontextprotocol/ext-apps/server";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import * as z from "zod/v4";
 import { ArtifactError } from "./artifact-error.js";
@@ -50,6 +50,7 @@ export interface ArtifactToolRegistrationOptions {
   config: ServerConfig;
   workspaces: WorkspaceRegistry;
   incomingArtifactAdapters?: readonly IncomingArtifactAdapter[];
+  registerTool?: typeof registerMcpAppTool;
 }
 
 export interface DownloadIncomingArtifactInput {
@@ -88,11 +89,12 @@ export function registerArtifactTools(
     config,
     workspaces,
     incomingArtifactAdapters = [],
+    registerTool = registerMcpAppTool,
   }: ArtifactToolRegistrationOptions,
 ): void {
   const incomingRegistry = new IncomingArtifactAdapterRegistry(incomingArtifactAdapters);
 
-  registerAppTool(
+  registerTool(
     server,
     "download_artifact",
     {
