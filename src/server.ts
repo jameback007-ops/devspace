@@ -55,7 +55,15 @@ import {
   McpSessionRegistry,
   type McpSessionCloseResult,
 } from "./mcp-sessions.js";
-import { ProcessSessionManager, type ProcessSnapshot } from "./process-sessions.js";
+import {
+  DEFAULT_EXEC_YIELD_MS,
+  DEFAULT_INTERACTIVE_YIELD_MS,
+  DEFAULT_POLL_YIELD_MS,
+  MAX_COMMAND_YIELD_MS,
+  MAX_POLL_YIELD_MS,
+  ProcessSessionManager,
+  type ProcessSnapshot,
+} from "./process-sessions.js";
 import { createReviewCheckpointManager } from "./review-checkpoints.js";
 import {
   executorWindowScopeId,
@@ -878,9 +886,11 @@ function registerCodexProcessTools(
           .number()
           .int()
           .min(0)
-          .max(30_000)
+          .max(MAX_COMMAND_YIELD_MS)
           .optional()
-          .describe("Milliseconds to wait before returning a running session. Defaults to 10000."),
+          .describe(
+            `Milliseconds to wait before returning a running session. Defaults to ${DEFAULT_EXEC_YIELD_MS}.`,
+          ),
         maxOutputTokens: z
           .number()
           .int()
@@ -935,7 +945,7 @@ function registerCodexProcessTools(
     {
       title: "Write to process",
       description:
-        "Poll or write characters to a process returned by exec_command. Omit chars or pass an empty string to poll. Pass \\u0003 to send Ctrl-C.",
+        "Poll or write characters to a process returned by exec_command. A pure poll returns as soon as new output arrives or the process exits; its timeout is only a bounded ceiling. Omit chars or pass an empty string to poll. Pass \\u0003 to send Ctrl-C.",
       inputSchema: {
         workspaceId: z.string().describe("Workspace identifier used to start the process."),
         sessionId: z.number().describe("Process session identifier returned by exec_command."),
@@ -946,9 +956,11 @@ function registerCodexProcessTools(
           .number()
           .int()
           .min(0)
-          .max(30_000)
+          .max(MAX_POLL_YIELD_MS)
           .optional()
-          .describe("Milliseconds to wait for process output or completion. Defaults to 10000."),
+          .describe(
+            `For a pure poll, the maximum wait for new output or completion; defaults to ${DEFAULT_POLL_YIELD_MS} and supports up to ${MAX_POLL_YIELD_MS}. Calls that send input or resize default to ${DEFAULT_INTERACTIVE_YIELD_MS} and are bounded to ${MAX_COMMAND_YIELD_MS}.`,
+          ),
         maxOutputTokens: z
           .number()
           .int()

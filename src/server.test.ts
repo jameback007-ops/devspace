@@ -58,6 +58,22 @@ test("open_workspace keeps lifecycle flags out of model output and preserves com
   assert.ok(Array.isArray(card.agents));
 });
 
+test("codex write_stdin exposes the output-aware long-poll contract", async (t) => {
+  const context = await fixture(t, { toolMode: "codex" });
+  const tools = await context.client.listTools();
+  const writeTool = tools.tools.find((tool) => tool.name === "write_stdin");
+  assert.ok(writeTool);
+  assert.match(writeTool.description ?? "", /new output arrives or the process exits/i);
+
+  const properties = (writeTool.inputSchema as {
+    properties?: Record<string, Record<string, unknown>>;
+  }).properties;
+  const yieldTimeMs = properties?.yieldTimeMs;
+  assert.equal(yieldTimeMs?.maximum, 110_000);
+  assert.match(String(yieldTimeMs?.description), /defaults to 90000/i);
+  assert.match(String(yieldTimeMs?.description), /bounded to 30000/i);
+});
+
 test("concurrent checkout opens return one full context and one reuse instruction", async (t) => {
   const context = await fixture(t);
   const [first, second] = await Promise.all([
@@ -175,7 +191,10 @@ interface ServerFixture {
   close: () => Promise<void>;
 }
 
-async function fixture(t: TestContext, options: { git?: boolean } = {}): Promise<ServerFixture> {
+async function fixture(
+  t: TestContext,
+  options: { git?: boolean; toolMode?: ServerConfig["toolMode"] } = {},
+): Promise<ServerFixture> {
   const root = await mkdtemp(join(tmpdir(), "devspace-server-test-"));
   const project = join(root, "project");
   const agentDir = join(root, "agent");
@@ -209,7 +228,7 @@ async function fixture(t: TestContext, options: { git?: boolean } = {}): Promise
     DEVSPACE_WORKTREE_ROOT: join(root, ".worktrees"),
     DEVSPACE_AGENT_DIR: agentDir,
     DEVSPACE_WIDGETS: "full",
-    DEVSPACE_TOOL_MODE: "full",
+    DEVSPACE_TOOL_MODE: options.toolMode ?? "full",
     DEVSPACE_OAUTH_OWNER_TOKEN: "test-owner-token-that-is-long-enough",
     PORT: "1",
   });

@@ -86,6 +86,35 @@ assert.equal(completed.running, false);
 assert.equal(completed.exitCode, 0);
 assert.match(completed.output, /finished/);
 
+const progressive = await manager.start({
+  workspaceId: "workspace-a",
+  cwd: process.cwd(),
+  command: `${node} -e "setTimeout(() => console.log('progress-ready'), 50); setTimeout(() => {}, 5000)"`,
+  yieldTimeMs: 5,
+});
+assert.equal(progressive.running, true);
+assert.ok(progressive.sessionId);
+
+const progressPollStartedAt = Date.now();
+const progressResult = await manager.write({
+  workspaceId: "workspace-a",
+  sessionId: progressive.sessionId,
+  yieldTimeMs: 1_500,
+});
+const progressPollElapsedMs = Date.now() - progressPollStartedAt;
+assert.equal(progressResult.running, true);
+assert.match(progressResult.output, /progress-ready/);
+assert.ok(
+  progressPollElapsedMs < 1_000,
+  `Expected output-aware poll to return before its timeout, took ${progressPollElapsedMs}ms.`,
+);
+manager.terminate("workspace-a", progressive.sessionId);
+await manager.write({
+  workspaceId: "workspace-a",
+  sessionId: progressive.sessionId,
+  yieldTimeMs: 2_000,
+});
+
 const interactive = await manager.start({
   workspaceId: "workspace-a",
   cwd: process.cwd(),

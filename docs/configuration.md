@@ -145,7 +145,10 @@ its fixed short tool names regardless of `DEVSPACE_TOOL_NAMING`.
 Codex-mode commands run without a PTY by default. Set `tty: true` on
 `exec_command` for interactive terminal programs. PTY support uses the optional
 `node-pty` dependency; `write_stdin` can send input, poll output, and resize PTY
-sessions.
+sessions. A pure `write_stdin` poll waits for new output or process completion
+and returns immediately when either occurs. Its default ceiling is 90 seconds
+and its maximum is 110 seconds. Calls that send input or resize a PTY retain the
+short interactive wait and 30-second maximum.
 
 ## Widgets
 

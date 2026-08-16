@@ -1,14 +1,15 @@
 import { spawn } from "node:child_process";
 import { resolveShellCommand, terminateProcessTree } from "./process-platform.js";
 
-const DEFAULT_EXEC_YIELD_MS = 10_000;
-const DEFAULT_INTERACTIVE_YIELD_MS = 250;
-const DEFAULT_POLL_YIELD_MS = 5_000;
-const MAX_COMMAND_YIELD_MS = 30_000;
-const MAX_POLL_YIELD_MS = 110_000;
+export const DEFAULT_EXEC_YIELD_MS = 10_000;
+export const DEFAULT_INTERACTIVE_YIELD_MS = 250;
+export const DEFAULT_POLL_YIELD_MS = 90_000;
+export const MAX_COMMAND_YIELD_MS = 30_000;
+export const MAX_POLL_YIELD_MS = 110_000;
 const DEFAULT_MAX_OUTPUT_TOKENS = 10_000;
 const DEFAULT_BUFFER_CHARACTERS = 1_000_000;
 const COMPLETED_SESSION_TTL_MS = 5 * 60 * 1_000;
+const OUTPUT_EXIT_GRACE_MS = 25;
 const DEFAULT_COLUMNS = 80;
 const DEFAULT_ROWS = 24;
 
@@ -63,12 +64,22 @@ interface ProcessSession {
   signal?: string;
   exitPromise: Promise<void>;
   resolveExit: () => void;
+  outputPromise: Promise<void>;
+  resolveOutput: () => void;
   cleanupTimer?: NodeJS.Timeout;
 }
 
 interface ProcessSessionManagerOptions {
   maxBufferCharacters?: number;
   completedSessionTtlMs?: number;
+}
+
+function deferredSignal(): { promise: Promise<void>; resolve: () => void } {
+  let resolve = (): void => undefined;
+  const promise = new Promise<void>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
 }
 
 function boundedInteger(value: number | undefined, fallback: number, maximum: number): number {
@@ -268,7 +279,8 @@ export class ProcessSessionManager {
       const fallback = interactionRequested ? DEFAULT_INTERACTIVE_YIELD_MS : DEFAULT_POLL_YIELD_MS;
       const maximum = interactionRequested ? MAX_COMMAND_YIELD_MS : MAX_POLL_YIELD_MS;
       const yieldTimeMs = boundedInteger(input.yieldTimeMs, fallback, maximum);
-      await this.waitForExit(session, yieldTimeMs);
+      if (interactionRequested) await this.waitForExit(session, yieldTimeMs);
+      else await this.waitForOutputOrExit(session, yieldTimeMs);
     }
 
     const snapshot = this.consume(session, input.maxOutputTokens);
@@ -290,10 +302,32 @@ export class ProcessSessionManager {
   }
 
   private async waitForExit(session: ProcessSession, yieldTimeMs: number): Promise<void> {
+    await this.waitForSignals([session.exitPromise], yieldTimeMs);
+  }
+
+  private async waitForOutputOrExit(session: ProcessSession, yieldTimeMs: number): Promise<void> {
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      const outcome = await Promise.race([
+        session.outputPromise.then(() => "output" as const),
+        session.exitPromise.then(() => "exit" as const),
+        new Promise<"timeout">((resolve) => {
+          timer = setTimeout(() => resolve("timeout"), yieldTimeMs);
+        }),
+      ]);
+      if (outcome === "output" && session.running) {
+        await this.waitForSignals([session.exitPromise], OUTPUT_EXIT_GRACE_MS);
+      }
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
+  private async waitForSignals(signals: Promise<void>[], yieldTimeMs: number): Promise<void> {
     let timer: NodeJS.Timeout | undefined;
     try {
       await Promise.race([
-        session.exitPromise,
+        ...signals,
         new Promise<void>((resolve) => {
           timer = setTimeout(resolve, yieldTimeMs);
         }),
@@ -304,10 +338,8 @@ export class ProcessSessionManager {
   }
 
   private createSession(input: StartCommandInput): ProcessSession {
-    let resolveExit = (): void => undefined;
-    const exitPromise = new Promise<void>((resolve) => {
-      resolveExit = resolve;
-    });
+    const exit = deferredSignal();
+    const output = deferredSignal();
 
     return {
       id: this.nextSessionId++,
@@ -317,8 +349,10 @@ export class ProcessSessionManager {
       rows: terminalSize(input.rows, DEFAULT_ROWS),
       buffer: new HeadTailBuffer(this.maxBufferCharacters),
       running: true,
-      exitPromise,
-      resolveExit,
+      exitPromise: exit.promise,
+      resolveExit: exit.resolve,
+      outputPromise: output.promise,
+      resolveOutput: output.resolve,
     };
   }
 
@@ -398,13 +432,20 @@ export class ProcessSessionManager {
   }
 
   private append(session: ProcessSession, output: string): void {
+    if (!output) return;
     session.buffer.append(output);
+    session.resolveOutput();
   }
 
   private consume(session: ProcessSession, maxOutputTokens?: number): ProcessSnapshot {
     const limit = boundedInteger(maxOutputTokens, DEFAULT_MAX_OUTPUT_TOKENS, 100_000);
     const maxCharacters = Math.max(256, limit * 4);
     const buffered = session.buffer.drain(maxCharacters);
+    if (session.running) {
+      const output = deferredSignal();
+      session.outputPromise = output.promise;
+      session.resolveOutput = output.resolve;
+    }
 
     return {
       sessionId: session.running ? session.id : undefined,
