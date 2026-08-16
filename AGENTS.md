@@ -17,6 +17,29 @@ These ideas should stay true as the project evolves:
 5. **Adapters stay at the edges.** Pi, MCP hosts, and model providers each have their own terminology and capabilities. Provider-specific behavior should not become the core domain model.
 6. **Prefer composable primitives.** Build a small set of reliable operations that can be combined into larger workflows instead of baking every workflow into the server.
 
+## Executor machinery and product authority
+
+Capability overlap is allowed. Authority duplication is not.
+
+DevSpace may own substantial executor-internal machinery—including persistent
+session or workspace state, local task or workflow state, queues, subagents,
+replay, checkpoints, process and effect-attempt tracking, retries, receipts,
+resumption, and recovery—when it materially improves execution performance,
+reliability, continuity, safety, or judgment. Do not reject a mechanism merely
+because another system has a conceptually similar capability.
+
+The boundary is semantic authority. Executor-local state must remain explicitly
+scoped to operating, observing, recovering, or safeguarding the executor. It
+must not silently become an independently relied-on canonical source for
+product work, accepted decisions, identity or standing cognition, durable
+business effects, release state, canonical memory or knowledge, or writer
+ownership. Local copies used for caching, scheduling, replay, recovery, or
+idempotency are acceptable when their scope and rightful upstream authority are
+clear.
+
+Prefer clean integration and explicit ownership over weakening the executor for
+architectural purity.
+
 ## Glossary
 
 - **Host** — the MCP client presenting the agent experience and coordinating work.

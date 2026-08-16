@@ -8,6 +8,15 @@ import {
 assert.equal(checkLocalAgentProviderAvailability("codex").available, true);
 
 {
+  const availability = checkLocalAgentProviderAvailability("opencode", {
+    ...process.env,
+    PATH: "",
+  });
+  assert.equal(availability.available, false);
+  assert.match(availability.reason ?? "", /opencode executable not found/);
+}
+
+{
   const availability = checkLocalAgentProviderAvailability("pi", {
     ...process.env,
     PI_COMMAND: "/definitely/missing/devspace-pi",

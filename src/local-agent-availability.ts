@@ -28,7 +28,12 @@ export function checkLocalAgentProviderAvailability(
     case "claude":
       return packageAvailability(provider, "@anthropic-ai/claude-agent-sdk");
     case "opencode":
-      return packageAvailability(provider, "@opencode-ai/sdk/v2");
+      return packageAndCommandAvailability(
+        provider,
+        "@opencode-ai/sdk/v2",
+        "opencode",
+        env,
+      );
     case "pi":
       return commandAvailability(provider, env.PI_COMMAND ?? "pi", {
         env: piAvailabilityEnvironment(env),
@@ -80,6 +85,17 @@ function packageAvailability(
       reason: `${packageName} package not found`,
     };
   }
+}
+
+function packageAndCommandAvailability(
+  provider: LocalAgentProvider,
+  packageName: string,
+  command: string,
+  env: NodeJS.ProcessEnv,
+): LocalAgentProviderAvailability {
+  const packageResult = packageAvailability(provider, packageName);
+  if (!packageResult.available) return packageResult;
+  return commandAvailability(provider, command, { env });
 }
 
 function commandAvailability(
