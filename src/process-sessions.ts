@@ -35,6 +35,7 @@ export interface WriteStdinInput {
   rows?: number;
   yieldTimeMs?: number;
   maxOutputTokens?: number;
+  externalWake?: Promise<void>;
 }
 
 export interface ProcessSnapshot {
@@ -44,6 +45,7 @@ export interface ProcessSnapshot {
   running: boolean;
   exitCode?: number;
   signal?: string;
+  wakeReason?: "mailbox";
   wallTimeMs: number;
 }
 
@@ -313,15 +315,21 @@ export class ProcessSessionManager {
     const writableChars = chars.replaceAll("\u0003", "");
     if (writableChars && session.running) session.process?.write(writableChars);
 
+    let wakeReason: ProcessSnapshot["wakeReason"];
     if ((interactionRequested || !session.buffer.hasOutput()) && session.running) {
       const fallback = interactionRequested ? DEFAULT_INTERACTIVE_YIELD_MS : DEFAULT_POLL_YIELD_MS;
       const maximum = interactionRequested ? MAX_COMMAND_YIELD_MS : MAX_POLL_YIELD_MS;
       const yieldTimeMs = boundedInteger(input.yieldTimeMs, fallback, maximum);
       if (interactionRequested) await this.waitForExit(session, yieldTimeMs);
-      else await this.waitForOutputOrExit(session, yieldTimeMs);
+      else if (
+        await this.waitForOutputOrExit(session, yieldTimeMs, input.externalWake)
+        === "external"
+      ) {
+        wakeReason = "mailbox";
+      }
     }
 
-    const snapshot = this.consume(session, input.maxOutputTokens);
+    const snapshot = this.consume(session, input.maxOutputTokens, wakeReason);
     if (!session.running) this.removeSession(session.id);
     return snapshot;
   }
@@ -379,19 +387,28 @@ export class ProcessSessionManager {
     await this.waitForSignals([session.exitPromise], yieldTimeMs);
   }
 
-  private async waitForOutputOrExit(session: ProcessSession, yieldTimeMs: number): Promise<void> {
+  private async waitForOutputOrExit(
+    session: ProcessSession,
+    yieldTimeMs: number,
+    externalWake?: Promise<void>,
+  ): Promise<"output" | "exit" | "external" | "timeout"> {
     let timer: NodeJS.Timeout | undefined;
     try {
-      const outcome = await Promise.race([
+      const signals: Array<Promise<"output" | "exit" | "external" | "timeout">> = [
         session.outputPromise.then(() => "output" as const),
         session.exitPromise.then(() => "exit" as const),
         new Promise<"timeout">((resolve) => {
           timer = setTimeout(() => resolve("timeout"), yieldTimeMs);
         }),
-      ]);
+      ];
+      if (externalWake) {
+        signals.push(externalWake.then(() => "external" as const));
+      }
+      const outcome = await Promise.race(signals);
       if (outcome === "output" && session.running) {
         await this.waitForSignals([session.exitPromise], OUTPUT_EXIT_GRACE_MS);
       }
+      return outcome;
     } finally {
       if (timer) clearTimeout(timer);
     }
@@ -521,7 +538,11 @@ export class ProcessSessionManager {
     session.resolveOutput();
   }
 
-  private consume(session: ProcessSession, maxOutputTokens?: number): ProcessSnapshot {
+  private consume(
+    session: ProcessSession,
+    maxOutputTokens?: number,
+    wakeReason?: ProcessSnapshot["wakeReason"],
+  ): ProcessSnapshot {
     const limit = boundedInteger(maxOutputTokens, DEFAULT_MAX_OUTPUT_TOKENS, 100_000);
     const maxCharacters = Math.max(256, limit * 4);
     const buffered = session.buffer.drain(maxCharacters);
@@ -538,6 +559,7 @@ export class ProcessSessionManager {
       running: session.running,
       exitCode: session.exitCode,
       signal: session.signal,
+      wakeReason,
       wallTimeMs: Date.now() - session.startedAt,
     };
   }

@@ -1,4 +1,11 @@
-import { index, integer, primaryKey, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import {
+  index,
+  integer,
+  primaryKey,
+  sqliteTable,
+  text,
+  uniqueIndex,
+} from "drizzle-orm/sqlite-core";
 
 export const workspaceSessions = sqliteTable(
   "workspace_sessions",
@@ -116,6 +123,69 @@ export const executionScopeWorkspaces = sqliteTable(
   ],
 );
 
+export const executionScopeMessages = sqliteTable(
+  "execution_scope_messages",
+  {
+    id: text("id").primaryKey(),
+    senderScopeRef: text("sender_scope_ref").notNull(),
+    targetScopeRef: text("target_scope_ref").notNull(),
+    idempotencyKey: text("idempotency_key").notNull(),
+    payloadDigestSha256: text("payload_digest_sha256").notNull(),
+    kind: text("kind").notNull(),
+    priority: text("priority").notNull(),
+    body: text("body").notNull(),
+    correlationRef: text("correlation_ref"),
+    createdAtMs: integer("created_at_ms").notNull(),
+    expiresAtMs: integer("expires_at_ms").notNull(),
+    observedAtMs: integer("observed_at_ms"),
+    acknowledgedAtMs: integer("acknowledged_at_ms"),
+    actedAtMs: integer("acted_at_ms"),
+    acknowledgementNote: text("acknowledgement_note"),
+    actedNote: text("acted_note"),
+  },
+  (table) => [
+    index("execution_scope_messages_target_pending_idx").on(
+      table.targetScopeRef,
+      table.actedAtMs,
+      table.expiresAtMs,
+      table.priority,
+      table.createdAtMs,
+    ),
+    index("execution_scope_messages_sender_idx").on(
+      table.senderScopeRef,
+      table.createdAtMs,
+    ),
+    uniqueIndex("execution_scope_messages_idempotency_idx").on(
+      table.senderScopeRef,
+      table.idempotencyKey,
+    ),
+  ],
+);
+
+export const executionScopeMessageReceipts = sqliteTable(
+  "execution_scope_message_receipts",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    messageId: text("message_id")
+      .notNull()
+      .references(() => executionScopeMessages.id, { onDelete: "cascade" }),
+    targetScopeRef: text("target_scope_ref").notNull(),
+    state: text("state").notNull(),
+    recordedAtMs: integer("recorded_at_ms").notNull(),
+    note: text("note"),
+  },
+  (table) => [
+    index("execution_scope_message_receipts_message_idx").on(
+      table.messageId,
+      table.recordedAtMs,
+    ),
+    uniqueIndex("execution_scope_message_receipts_state_idx").on(
+      table.messageId,
+      table.state,
+    ),
+  ],
+);
+
 export const oauthClients = sqliteTable(
   "oauth_clients",
   {
@@ -187,5 +257,9 @@ export type ExecutionScopeEventRow = typeof executionScopeEvents.$inferSelect;
 export type NewExecutionScopeEventRow = typeof executionScopeEvents.$inferInsert;
 export type ExecutionScopeWorkspaceRow = typeof executionScopeWorkspaces.$inferSelect;
 export type NewExecutionScopeWorkspaceRow = typeof executionScopeWorkspaces.$inferInsert;
+export type ExecutionScopeMessageRow = typeof executionScopeMessages.$inferSelect;
+export type NewExecutionScopeMessageRow = typeof executionScopeMessages.$inferInsert;
+export type ExecutionScopeMessageReceiptRow = typeof executionScopeMessageReceipts.$inferSelect;
+export type NewExecutionScopeMessageReceiptRow = typeof executionScopeMessageReceipts.$inferInsert;
 export type LocalAgentSessionRow = typeof localAgentSessions.$inferSelect;
 export type NewLocalAgentSessionRow = typeof localAgentSessions.$inferInsert;

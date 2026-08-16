@@ -140,6 +140,185 @@ test("one host scope can inspect another through bounded execution-scope tools",
   assert.equal(serializedAudit.includes("project instructions"), false);
 });
 
+test("execution-scope mailbox delivers at the target's next MCP boundary with receipts", async (t) => {
+  const context = await fixture(t, { toolMode: "codex" });
+  const workerSession = "mailbox-worker-session";
+  const supervisorSession = "mailbox-supervisor-session";
+  const workerOpen = await callOpen(context.client, context.project, workerSession);
+  const workspaceId = String(structuredContent(workerOpen).workspaceId);
+
+  const listed = await context.client.callTool({
+    name: "execution_scope_list",
+    arguments: { limit: 10 },
+    _meta: { "openai/session": supervisorSession },
+  } as Parameters<Client["callTool"]>[0]);
+  const workerScope = (structuredData(listed).scopes as Array<Record<string, unknown>>)
+    .find((scope) => scope.isCurrent === false);
+  assert.ok(workerScope);
+  const targetScopeRef = String(workerScope.scopeRef);
+
+  const tools = await context.client.listTools();
+  for (const name of [
+    "execution_scope_message_send",
+    "execution_scope_message_inbox",
+    "execution_scope_message_status",
+    "execution_scope_message_receipt",
+  ]) {
+    assert.ok(tools.tools.some((tool) => tool.name === name), `${name} should be registered`);
+  }
+
+  const sent = await context.client.callTool({
+    name: "execution_scope_message_send",
+    arguments: {
+      targetScopeRef,
+      idempotencyKey: "server-mailbox-1",
+      kind: "correction",
+      priority: "urgent",
+      body: "Reconcile the current effect state before starting another frontier.",
+      correlationRef: "work:server-test",
+    },
+    _meta: { "openai/session": supervisorSession },
+  } as Parameters<Client["callTool"]>[0]);
+  assert.equal(sent.isError, undefined, responseText(sent));
+  const sentData = structuredData(sent);
+  const message = sentData.message as Record<string, unknown>;
+  const messageId = String(message.messageId);
+  assert.equal(message.state, "accepted");
+  assert.equal(sentData.idempotentReplay, false);
+
+  const replay = await context.client.callTool({
+    name: "execution_scope_message_send",
+    arguments: {
+      targetScopeRef,
+      idempotencyKey: "server-mailbox-1",
+      kind: "correction",
+      priority: "urgent",
+      body: "Reconcile the current effect state before starting another frontier.",
+      correlationRef: "work:server-test",
+    },
+    _meta: { "openai/session": supervisorSession },
+  } as Parameters<Client["callTool"]>[0]);
+  assert.equal(structuredData(replay).idempotentReplay, true);
+
+  const supervisorAudit = await context.client.callTool({
+    name: "execution_scope_audit",
+    arguments: { limit: 20 },
+    _meta: { "openai/session": supervisorSession },
+  } as Parameters<Client["callTool"]>[0]);
+  const auditData = structuredData(supervisorAudit);
+  const auditSerialized = JSON.stringify(auditData);
+  assert.equal(
+    auditSerialized.includes(
+      "Reconcile the current effect state before starting another frontier.",
+    ),
+    false,
+  );
+  const sendEvent = (auditData.events as Array<Record<string, unknown>>)
+    .find((event) => event.tool === "execution_scope_message_send");
+  assert.ok(sendEvent);
+  const sendDetail = sendEvent.detail as Record<string, unknown>;
+  assert.equal(
+    sendDetail.bodyLength,
+    "Reconcile the current effect state before starting another frontier.".length,
+  );
+  assert.match(String(sendDetail.bodyDigestSha256), /^[a-f0-9]{64}$/);
+  assert.equal(sendDetail.targetScopeRef, targetScopeRef);
+
+  const processStart = await context.client.callTool({
+    name: "exec_command",
+    arguments: {
+      workspaceId,
+      cmd: `${JSON.stringify(process.execPath)} -e "setTimeout(() => {}, 5000)"`,
+      yieldTimeMs: 1,
+    },
+    _meta: { "openai/session": workerSession },
+  } as Parameters<Client["callTool"]>[0]);
+  const processSessionId = Number(
+    (processStart.structuredContent as Record<string, unknown>).sessionId,
+  );
+  assert.ok(Number.isInteger(processSessionId));
+  const mailboxPoll = await context.client.callTool({
+    name: "write_stdin",
+    arguments: {
+      workspaceId,
+      sessionId: processSessionId,
+      yieldTimeMs: 5_000,
+    },
+    _meta: { "openai/session": workerSession },
+  } as Parameters<Client["callTool"]>[0]);
+  assert.equal(
+    (mailboxPoll.structuredContent as Record<string, unknown>).wakeReason,
+    "mailbox",
+  );
+  assert.match(responseAllText(mailboxPoll), /poll woke for pending execution-scope mail/i);
+  await context.client.callTool({
+    name: "write_stdin",
+    arguments: {
+      workspaceId,
+      sessionId: processSessionId,
+      chars: "\u0003",
+      yieldTimeMs: 2_000,
+    },
+    _meta: { "openai/session": workerSession },
+  } as Parameters<Client["callTool"]>[0]);
+
+  const workerRead = await context.client.callTool({
+    name: "read",
+    arguments: { workspaceId, path: "AGENTS.md" },
+    _meta: { "openai/session": workerSession },
+  } as Parameters<Client["callTool"]>[0]);
+  assert.match(responseAllText(workerRead), /\[execution-mailbox\] 1 pending message/i);
+  assert.match(responseAllText(workerRead), /highest priority urgent/i);
+
+  const inbox = await context.client.callTool({
+    name: "execution_scope_message_inbox",
+    arguments: {},
+    _meta: { "openai/session": workerSession },
+  } as Parameters<Client["callTool"]>[0]);
+  const inboxMessages = structuredData(inbox).messages as Array<Record<string, unknown>>;
+  assert.equal(inboxMessages.length, 1);
+  assert.equal(inboxMessages[0]?.messageId, messageId);
+  assert.equal(inboxMessages[0]?.state, "observed");
+  assert.doesNotMatch(responseAllText(inbox), /\[execution-mailbox\]/);
+
+  const acknowledged = await context.client.callTool({
+    name: "execution_scope_message_receipt",
+    arguments: {
+      messageId,
+      state: "acknowledged",
+      note: "Correction received.",
+    },
+    _meta: { "openai/session": workerSession },
+  } as Parameters<Client["callTool"]>[0]);
+  assert.equal(structuredData(acknowledged).state, "acknowledged");
+
+  const acted = await context.client.callTool({
+    name: "execution_scope_message_receipt",
+    arguments: {
+      messageId,
+      state: "acted",
+      note: "Effect state reconciled.",
+    },
+    _meta: { "openai/session": workerSession },
+  } as Parameters<Client["callTool"]>[0]);
+  assert.equal(structuredData(acted).state, "acted");
+
+  const status = await context.client.callTool({
+    name: "execution_scope_message_status",
+    arguments: { messageId },
+    _meta: { "openai/session": supervisorSession },
+  } as Parameters<Client["callTool"]>[0]);
+  assert.equal(structuredData(status).state, "acted");
+  assert.equal(structuredData(status).actedNote, "Effect state reconciled.");
+
+  const cleanRead = await context.client.callTool({
+    name: "read",
+    arguments: { workspaceId, path: "AGENTS.md" },
+    _meta: { "openai/session": workerSession },
+  } as Parameters<Client["callTool"]>[0]);
+  assert.doesNotMatch(responseAllText(cleanRead), /\[execution-mailbox\]/);
+});
+
 test("createMcpServer keeps its prior public call shape and owns the default observer", async (t) => {
   const context = await fixture(t, {
     toolMode: "codex",
@@ -343,6 +522,7 @@ async function fixture(
     DEVSPACE_CONFIG_DIR: join(root, ".config"),
     DEVSPACE_ALLOWED_ROOTS: root,
     DEVSPACE_WORKTREE_ROOT: join(root, ".worktrees"),
+    DEVSPACE_STATE_DIR: stateDir,
     DEVSPACE_AGENT_DIR: agentDir,
     DEVSPACE_WIDGETS: "full",
     DEVSPACE_TOOL_MODE: options.toolMode ?? "full",
@@ -451,6 +631,20 @@ function responseText(result: Awaited<ReturnType<Client["callTool"]>>): string {
   assert.equal(first?.type, "text");
   assert.equal(typeof first?.text, "string");
   return first?.text as string;
+}
+
+function responseAllText(result: Awaited<ReturnType<Client["callTool"]>>): string {
+  const content = (result as { content?: unknown }).content;
+  assert.ok(Array.isArray(content));
+  return content
+    .filter((item): item is { type: "text"; text: string } => (
+      typeof item === "object"
+      && item !== null
+      && item.type === "text"
+      && typeof item.text === "string"
+    ))
+    .map((item) => item.text)
+    .join("\n");
 }
 
 function responseCard(result: Awaited<ReturnType<Client["callTool"]>>): Record<string, unknown> {

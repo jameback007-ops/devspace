@@ -5,6 +5,7 @@ import type { LoggingConfig, LogFormat, LogLevel } from "./logger.js";
 import type { OAuthConfig } from "./oauth-provider.js";
 import type { ExecutorWindowConfig } from "./executor-window.js";
 import type { ExecutionObservabilityConfig } from "./execution-observability.js";
+import type { ExecutionMailboxConfig } from "./execution-mailbox.js";
 import { devspaceAgentsDir, devspaceSkillsDir, loadDevspaceFiles } from "./user-config.js";
 
 export type ToolMode = "minimal" | "full" | "codex";
@@ -18,6 +19,11 @@ const DEFAULT_EXECUTOR_WINDOW_RETENTION_HOURS = 24;
 const DEFAULT_EXECUTION_OBSERVABILITY_RETENTION_HOURS = 7 * 24;
 const DEFAULT_EXECUTION_OBSERVABILITY_MAX_EVENTS_PER_SCOPE = 1_000;
 const DEFAULT_EXECUTION_OBSERVABILITY_IDLE_MINUTES = 5;
+const DEFAULT_EXECUTION_MAILBOX_TTL_HOURS = 7 * 24;
+const DEFAULT_EXECUTION_MAILBOX_MAX_TTL_HOURS = 30 * 24;
+const DEFAULT_EXECUTION_MAILBOX_TERMINAL_RETENTION_HOURS = 7 * 24;
+const DEFAULT_EXECUTION_MAILBOX_MAX_PENDING_PER_SCOPE = 500;
+const DEFAULT_EXECUTION_MAILBOX_MAX_BODY_CHARACTERS = 12_000;
 
 export interface ServerConfig {
   host: string;
@@ -40,6 +46,7 @@ export interface ServerConfig {
   agentDir: string;
   executorWindow: ExecutorWindowConfig;
   executionObservability: ExecutionObservabilityConfig;
+  executionMailbox: ExecutionMailboxConfig;
   logging: LoggingConfig;
 }
 
@@ -237,6 +244,54 @@ function parseExecutionObservabilityConfig(
   };
 }
 
+function parseExecutionMailboxConfig(
+  env: NodeJS.ProcessEnv,
+): ExecutionMailboxConfig {
+  const defaultTtlHours = parsePositiveInteger(
+    env.DEVSPACE_EXECUTION_MAILBOX_DEFAULT_TTL_HOURS,
+    DEFAULT_EXECUTION_MAILBOX_TTL_HOURS,
+    "DEVSPACE_EXECUTION_MAILBOX_DEFAULT_TTL_HOURS",
+    24 * 30,
+  );
+  const maxTtlHours = parsePositiveInteger(
+    env.DEVSPACE_EXECUTION_MAILBOX_MAX_TTL_HOURS,
+    DEFAULT_EXECUTION_MAILBOX_MAX_TTL_HOURS,
+    "DEVSPACE_EXECUTION_MAILBOX_MAX_TTL_HOURS",
+    24 * 365,
+  );
+  if (defaultTtlHours > maxTtlHours) {
+    throw new Error(
+      "DEVSPACE_EXECUTION_MAILBOX_DEFAULT_TTL_HOURS must not exceed DEVSPACE_EXECUTION_MAILBOX_MAX_TTL_HOURS",
+    );
+  }
+  return {
+    enabled:
+      env.DEVSPACE_EXECUTION_MAILBOX === undefined
+        ? true
+        : parseBoolean(env.DEVSPACE_EXECUTION_MAILBOX),
+    defaultTtlMs: defaultTtlHours * 60 * 60 * 1_000,
+    maxTtlMs: maxTtlHours * 60 * 60 * 1_000,
+    terminalRetentionMs: parsePositiveInteger(
+      env.DEVSPACE_EXECUTION_MAILBOX_TERMINAL_RETENTION_HOURS,
+      DEFAULT_EXECUTION_MAILBOX_TERMINAL_RETENTION_HOURS,
+      "DEVSPACE_EXECUTION_MAILBOX_TERMINAL_RETENTION_HOURS",
+      24 * 365,
+    ) * 60 * 60 * 1_000,
+    maxPendingPerScope: parsePositiveInteger(
+      env.DEVSPACE_EXECUTION_MAILBOX_MAX_PENDING_PER_SCOPE,
+      DEFAULT_EXECUTION_MAILBOX_MAX_PENDING_PER_SCOPE,
+      "DEVSPACE_EXECUTION_MAILBOX_MAX_PENDING_PER_SCOPE",
+      100_000,
+    ),
+    maxBodyCharacters: parsePositiveInteger(
+      env.DEVSPACE_EXECUTION_MAILBOX_MAX_BODY_CHARACTERS,
+      DEFAULT_EXECUTION_MAILBOX_MAX_BODY_CHARACTERS,
+      "DEVSPACE_EXECUTION_MAILBOX_MAX_BODY_CHARACTERS",
+      100_000,
+    ),
+  };
+}
+
 function parseWidgetMode(value: string | undefined): WidgetMode {
   if (!value || value === "full") return "full";
   if (value === "off" || value === "changes") return value;
@@ -336,6 +391,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     agentDir: resolve(expandHomePath(env.DEVSPACE_AGENT_DIR ?? files.config.agentDir ?? defaultAgentDir())),
     executorWindow: parseExecutorWindowConfig(env),
     executionObservability: parseExecutionObservabilityConfig(env),
+    executionMailbox: parseExecutionMailboxConfig(env),
     logging: parseLoggingConfig(env),
   };
 }

@@ -40,6 +40,33 @@ assert.deepEqual(loadConfig(baseEnv).executionObservability, {
   maxEventsPerScope: 1_000,
   idleAfterMs: 5 * 60 * 1000,
 });
+assert.deepEqual(loadConfig(baseEnv).executionMailbox, {
+  enabled: true,
+  defaultTtlMs: 7 * 24 * 60 * 60 * 1000,
+  maxTtlMs: 30 * 24 * 60 * 60 * 1000,
+  terminalRetentionMs: 7 * 24 * 60 * 60 * 1000,
+  maxPendingPerScope: 500,
+  maxBodyCharacters: 12_000,
+});
+assert.deepEqual(
+  loadConfig({
+    ...baseEnv,
+    DEVSPACE_EXECUTION_MAILBOX: "0",
+    DEVSPACE_EXECUTION_MAILBOX_DEFAULT_TTL_HOURS: "12",
+    DEVSPACE_EXECUTION_MAILBOX_MAX_TTL_HOURS: "24",
+    DEVSPACE_EXECUTION_MAILBOX_TERMINAL_RETENTION_HOURS: "48",
+    DEVSPACE_EXECUTION_MAILBOX_MAX_PENDING_PER_SCOPE: "25",
+    DEVSPACE_EXECUTION_MAILBOX_MAX_BODY_CHARACTERS: "2048",
+  }).executionMailbox,
+  {
+    enabled: false,
+    defaultTtlMs: 12 * 60 * 60 * 1000,
+    maxTtlMs: 24 * 60 * 60 * 1000,
+    terminalRetentionMs: 48 * 60 * 60 * 1000,
+    maxPendingPerScope: 25,
+    maxBodyCharacters: 2_048,
+  },
+);
 assert.deepEqual(
   loadConfig({
     ...baseEnv,
@@ -205,6 +232,14 @@ assert.throws(
     DEVSPACE_EXECUTION_OBSERVABILITY_MAX_EVENTS_PER_SCOPE: "0",
   }),
   /Invalid DEVSPACE_EXECUTION_OBSERVABILITY_MAX_EVENTS_PER_SCOPE: 0/,
+);
+assert.throws(
+  () => loadConfig({
+    ...baseEnv,
+    DEVSPACE_EXECUTION_MAILBOX_DEFAULT_TTL_HOURS: "48",
+    DEVSPACE_EXECUTION_MAILBOX_MAX_TTL_HOURS: "24",
+  }),
+  /DEFAULT_TTL_HOURS must not exceed/,
 );
 assert.throws(
   () => loadConfig({

@@ -81,7 +81,11 @@ interface FinishObservationInput {
   windowStatus?: ExecutorWindowStatus;
 }
 
-const INSPECTION_TOOL_PREFIX = "execution_scope_";
+const NON_AUDITED_TOOL_NAMES = new Set([
+  "execution_scope_list",
+  "execution_scope_status",
+  "execution_scope_audit",
+]);
 const MAX_DETAIL_JSON_BYTES = 16_000;
 const MAX_SAFE_TEXT = 4_096;
 
@@ -196,6 +200,11 @@ export function summarizeExecutionToolInput(
     "mode",
     "baseRef",
     "scopeRef",
+    "targetScopeRef",
+    "messageId",
+    "kind",
+    "priority",
+    "state",
   ]) {
     addString(detail, input, key);
   }
@@ -228,6 +237,9 @@ export function summarizeExecutionToolInput(
     "newText",
     "summary",
     "nextAction",
+    "body",
+    "note",
+    "idempotencyKey",
   ]) {
     addSensitiveStringDigest(detail, input, key);
   }
@@ -340,7 +352,7 @@ export class ExecutionScopeManager {
     toolName: string,
     input: unknown,
   ): ExecutionObservationHandle | undefined {
-    if (!this.config.enabled || !identity || toolName.startsWith(INSPECTION_TOOL_PREFIX)) {
+    if (!this.config.enabled || !identity || NON_AUDITED_TOOL_NAMES.has(toolName)) {
       return undefined;
     }
 
@@ -658,6 +670,11 @@ export class ExecutionScopeManager {
            where last_activity_at_ms < ?
              and not exists (
                select 1 from execution_scope_events e where e.scope_ref = execution_scopes.scope_ref
+             )
+             and not exists (
+               select 1 from execution_scope_messages m
+                where m.sender_scope_ref = execution_scopes.scope_ref
+                   or m.target_scope_ref = execution_scopes.scope_ref
              )
         `)
         .run(cutoff);

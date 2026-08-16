@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  executorTurnIdentity,
+  executorTurnRef,
   executionScopeDigestSha256,
   executionScopeIdentity,
   executionScopeRef,
@@ -85,6 +87,23 @@ test("generic execution scope metadata wins at the provider adapter edge", () =>
       scopeDigestSha256: executionScopeDigestSha256("generic-scope"),
       scopeRef: executionScopeRef("generic-scope"),
       adapter: "devspace",
+    },
+  );
+});
+
+test("executor turn identity is separate from the conversation scope", () => {
+  assert.equal(
+    executorTurnIdentity({ "openai/session": "conversation-1" }),
+    undefined,
+  );
+  assert.deepEqual(
+    executorTurnIdentity({
+      "openai/session": "conversation-1",
+      "devspace/executor-turn": "assistant-turn-7",
+    }),
+    {
+      turnId: "assistant-turn-7",
+      turnRef: executorTurnRef("assistant-turn-7"),
     },
   );
 });

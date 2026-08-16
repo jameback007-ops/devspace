@@ -33,10 +33,51 @@ Separate host conversations remain separate execution scopes even when they
 open the same checkout. A supervisor conversation can use
 `execution_scope_list`, `execution_scope_status`, and `execution_scope_audit`
 to inspect another scope's bounded operational state—linked workspaces, live
-processes, executor-window phase, tool outcomes, and redacted errors—without
+processes, executor-window phase, tool outcomes, and normalized error
+categories—without
 sharing model context or reading a transcript. This does not grant writer
 authority; use an isolated worktree for parallel writers and reconcile the
 project's canonical state before takeover.
+
+## Start One Executor Window Per Assistant Turn
+
+The executor window protects one assistant turn, not the whole conversation.
+When the host supplies `devspace/executor-turn`, DevSpace resets automatically
+when that value changes and can enforce the exact turn boundary. A host must use
+one stable value across all tool calls in the same assistant turn.
+
+ChatGPT connectors that do not expose an exact turn ID should call:
+
+```json
+{
+  "reason": "new_turn"
+}
+```
+
+through `executor_window_begin` exactly once as the first DevSpace tool call of
+each assistant turn. This explicitly resets the advisory clock. DevSpace never
+uses the age of `openai/session` or another conversation identifier as the age
+of the current assistant turn. Fallback windows warn and roll over instead of
+blocking a later WebChat turn.
+
+## Cross-Session Messages
+
+A supervisor scope can send a durable message to another known `scopeRef` with
+`execution_scope_message_send`. Reuse the same idempotency key on retries. A
+successful send means only that DevSpace stored the message; it does not mean an
+inactive WebChat was awakened or that the target observed it.
+
+The target sees a compact pending-mail notice on its next normal MCP tool
+result, then calls `execution_scope_message_inbox` to read target-bound content.
+Inbox delivery marks the message observed. The target records acknowledged or
+acted state with `execution_scope_message_receipt`; the sender can inspect that
+state through `execution_scope_message_status`.
+
+A pure `write_stdin` poll wakes immediately for new target-scope mail and
+reports `wakeReason=mailbox`. The process continues running and the message
+remains unread until the inbox tool is called. See
+[Execution-Scope Messaging](execution-scope-messaging.md) for the complete
+lifecycle, retention, security, and authority boundaries.
 
 Worktree mode is deliberately different: every call creates a new managed
 worktree and a new workspace session with complete context, even for the same
@@ -185,6 +226,8 @@ In this mode, `write`, `edit`, `bash`, `grep`, `glob`, and `ls` are not
 registered. `exec_command` returns a process session ID when a command is still
 running after its yield window. Use `write_stdin` to poll it, send input, resize
 a PTY, or send Ctrl-C. Set `tty: true` only for commands that need a terminal.
+A pure poll may also return early for pending execution-scope mail without
+interrupting the process.
 
 ## Show Changes
 

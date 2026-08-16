@@ -16,7 +16,7 @@ import { WorkspaceRegistry } from "./workspaces.js";
 
 const minute = 60 * 1000;
 
-test("MCP tools auto-begin, enforce drain landing, yield, and later-turn resume", async (t) => {
+test("MCP tools explicitly begin each turn, enforce drain landing, yield, and reset on the next turn", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "devspace-executor-window-server-"));
   const project = join(root, "project");
   const stateDir = join(root, ".state");
@@ -79,7 +79,14 @@ test("MCP tools auto-begin, enforce drain landing, yield, and later-turn resume"
   assert.ok(tools.tools.some((tool) => tool.name === "executor_window_yield"));
   assert.ok(tools.tools.some((tool) => tool.name === "codex_workspace_git_status"));
 
-  const opened = await callTool(client, "open_workspace", { path: project });
+  const begun = await callTool(client, "executor_window_begin", {
+    reason: "new_turn",
+  }, "turn-1");
+  assert.equal(structuredData(begun).started, true);
+  assert.equal(structuredData(begun).status.generation, 1);
+  assert.equal(structuredData(begun).status.enforcement, "hard");
+
+  const opened = await callTool(client, "open_workspace", { path: project }, "turn-1");
   assert.match(responseText(opened), /\[executor-window\] ACTIVE/);
   const workspaceId = String(
     (opened.structuredContent as Record<string, unknown>).workspaceId,
@@ -89,14 +96,14 @@ test("MCP tools auto-begin, enforce drain landing, yield, and later-turn resume"
   const blockedPatch = await callTool(client, "apply_patch", {
     workspaceId,
     patch: "*** Begin Patch\n*** End Patch",
-  });
+  }, "turn-1");
   assert.equal(blockedPatch.isError, true);
   assert.match(responseText(blockedPatch), /YIELD_REQUIRED/);
 
   const read = await callTool(client, "read", {
     workspaceId,
     path: "README.md",
-  });
+  }, "turn-1");
   assert.equal(read.isError, undefined);
   assert.match(responseText(read), /YIELD_REQUIRED/);
   assert.match(
@@ -110,38 +117,42 @@ test("MCP tools auto-begin, enforce drain landing, yield, and later-turn resume"
     worktreeState: "clean",
     effectState: "none",
     checkpointRefs: ["git:fixture"],
-  });
+  }, "turn-1");
   assert.equal(structuredData(yielded).phase, "yielded");
-
-  const resumedRead = await callTool(client, "read", {
-    workspaceId,
-    path: "README.md",
-  });
-  assert.equal(resumedRead.isError, undefined);
-  assert.match(responseText(resumedRead), /\[executor-window\] ACTIVE/);
 
   const resumed = await callTool(client, "executor_window_begin", {
     reason: "new_turn",
-  });
+  }, "turn-2");
   const resumedData = structuredData(resumed);
-  assert.equal(resumedData.started, false);
+  assert.equal(resumedData.started, true);
   assert.equal(resumedData.status.phase, "active");
   assert.equal(resumedData.status.generation, 2);
   assert.equal(
     resumedData.previousHandoff.nextAction,
     "Begin a new turn and continue from the existing workspace state.",
   );
+
+  const resumedRead = await callTool(client, "read", {
+    workspaceId,
+    path: "README.md",
+  }, "turn-2");
+  assert.equal(resumedRead.isError, undefined);
+  assert.match(responseText(resumedRead), /\[executor-window\] ACTIVE/);
 });
 
 async function callTool(
   client: Client,
   name: string,
   args: Record<string, unknown>,
+  turnId?: string,
 ) {
   return client.callTool({
     name,
     arguments: args,
-    _meta: { "openai/session": "conversation-1" },
+    _meta: {
+      "openai/session": "conversation-1",
+      ...(turnId ? { "devspace/executor-turn": turnId } : {}),
+    },
   } as Parameters<Client["callTool"]>[0]);
 }
 

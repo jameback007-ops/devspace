@@ -147,3 +147,33 @@ Workspace roots and working directories may appear because the authenticated
 Owner already has access to the allowed local roots. Sharing the same checkout
 does not grant another scope writer authority; use worktrees and the project's
 own writer/lease rules for concurrent work.
+
+## Cross-Session Messaging
+
+The execution mailbox is protected by the same authenticated single-Owner MCP
+boundary. A sender cannot choose or spoof its sender identity; DevSpace derives
+it from request metadata. The target must be an existing retained `scopeRef`.
+Inbox reads and receipt mutation are target-bound, while message status is
+visible only to the sender or target.
+
+Unlike observability, mailbox delivery intentionally persists message body text.
+Do not include credentials, bearer tokens, signed URLs, private model reasoning,
+or unrestricted tool output. Use bounded durable references and let the target
+read authoritative state through its normal tools. Observability records only
+lengths and digests for mailbox body, note, and idempotency fields rather than
+duplicating their text.
+
+Idempotency keys are unique per sender. Reusing a key with a different payload
+fails closed. Pending-message limits, TTL, terminal retention, strict target
+binding, and monotonic receipts bound replay and queue growth. A mailbox wakeup
+may end a pure process poll, but it does not interrupt the process, consume the
+message, create a WebChat turn, or inject text into a host transcript.
+
+## Executor-Turn Boundary
+
+Conversation identity is not a safe clock for one assistant turn. Hard
+executor-window enforcement is enabled only when the host supplies an exact
+`devspace/executor-turn` value that changes between turns. Without that host
+boundary, explicit and automatic windows are advisory and roll over instead of
+blocking a later conversation turn. This avoids converting an interruption
+warning into a persistent denial of mutation.

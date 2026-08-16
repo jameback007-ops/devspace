@@ -32,6 +32,11 @@ const migrations: Migration[] = [
     name: "execution-scope-observability",
     up: migrateExecutionScopeObservability,
   },
+  {
+    version: 6,
+    name: "execution-scope-mailbox",
+    up: migrateExecutionScopeMailbox,
+  },
 ];
 
 export function migrateDatabase(sqlite: Database.Database): void {
@@ -262,6 +267,58 @@ function migrateExecutionScopeObservability(sqlite: Database.Database): void {
 
     create index if not exists execution_scope_workspaces_workspace_idx
       on execution_scope_workspaces(workspace_session_id);
+  `);
+}
+
+function migrateExecutionScopeMailbox(sqlite: Database.Database): void {
+  sqlite.exec(`
+    create table if not exists execution_scope_messages (
+      id text primary key,
+      sender_scope_ref text not null,
+      target_scope_ref text not null,
+      idempotency_key text not null,
+      payload_digest_sha256 text not null,
+      kind text not null,
+      priority text not null,
+      body text not null,
+      correlation_ref text,
+      created_at_ms integer not null,
+      expires_at_ms integer not null,
+      observed_at_ms integer,
+      acknowledged_at_ms integer,
+      acted_at_ms integer,
+      acknowledgement_note text,
+      acted_note text,
+      unique (sender_scope_ref, idempotency_key)
+    );
+
+    create index if not exists execution_scope_messages_target_pending_idx
+      on execution_scope_messages(
+        target_scope_ref,
+        acted_at_ms,
+        expires_at_ms,
+        priority,
+        created_at_ms
+      );
+
+    create index if not exists execution_scope_messages_sender_idx
+      on execution_scope_messages(sender_scope_ref, created_at_ms desc);
+
+    create table if not exists execution_scope_message_receipts (
+      id integer primary key autoincrement,
+      message_id text not null,
+      target_scope_ref text not null,
+      state text not null,
+      recorded_at_ms integer not null,
+      note text,
+      unique (message_id, state),
+      foreign key (message_id)
+        references execution_scope_messages(id)
+        on delete cascade
+    );
+
+    create index if not exists execution_scope_message_receipts_message_idx
+      on execution_scope_message_receipts(message_id, recorded_at_ms);
   `);
 }
 

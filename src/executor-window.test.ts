@@ -40,14 +40,21 @@ test("a scoped turn begins automatically on its first substantive tool", () => {
   assert.equal(decision.allowed, true);
   assert.equal(decision.status.phase, "active");
   assert.equal(decision.status.generation, 1);
+  assert.equal(decision.status.boundarySource, "inferred");
+  assert.equal(decision.status.enforcement, "advisory");
 });
 
 test("window transitions from active to drain to yield required", () => {
   const { registry, advance } = fixture();
-  const begun = registry.begin("conversation-1", "new_turn");
+  const begun = registry.begin("conversation-1", "new_turn", {
+    turnId: "turn-1",
+    boundarySource: "host_turn",
+  });
   assert.equal(begun.started, true);
   assert.equal(begun.status.phase, "active");
   assert.equal(begun.status.generation, 1);
+  assert.equal(begun.status.boundarySource, "host_turn");
+  assert.equal(begun.status.enforcement, "hard");
 
   advance(89 * minute);
   assert.equal(registry.status("conversation-1").phase, "active");
@@ -66,7 +73,10 @@ test("window transitions from active to drain to yield required", () => {
 
 test("yield-required mode blocks new mutation and commands but permits landing reads", () => {
   const { registry, advance } = fixture();
-  registry.begin("conversation-1", "new_turn");
+  registry.begin("conversation-1", "new_turn", {
+    turnId: "turn-1",
+    boundarySource: "host_turn",
+  });
   advance(100 * minute);
 
   assert.equal(
@@ -141,6 +151,20 @@ test("yield-required mode blocks new mutation and commands but permits landing r
     ).allowed,
     false,
   );
+  assert.equal(
+    registry.beforeTool(
+      "conversation-1",
+      "execution_scope_message_send",
+      {
+        targetScopeRef: "0123456789abcdef",
+        idempotencyKey: "landing-handoff",
+        kind: "handoff",
+        body: "Continue from the persisted checkpoint.",
+      },
+      false,
+    ).allowed,
+    true,
+  );
 });
 
 test("yield records an advisory handoff and a later begin carries it forward", () => {
@@ -168,8 +192,8 @@ test("yield records an advisory handoff and a later begin carries it forward", (
   assert.equal(resumed.status.generation, 2);
 
   const second = registry.begin("conversation-1", "new_turn");
-  assert.equal(second.started, false);
-  assert.equal(second.status.generation, 2);
+  assert.equal(second.started, true);
+  assert.equal(second.status.generation, 3);
   assert.equal(second.previousWindowId, resumed.status.windowId);
   assert.equal(
     second.previousHandoff?.nextAction,
@@ -178,15 +202,117 @@ test("yield records an advisory handoff and a later begin carries it forward", (
   assert.equal(second.status.phase, "active");
 });
 
-test("repeated begin cannot reset an active or draining window", () => {
+test("explicit new-turn begin resets an active or draining conversation window", () => {
   const { registry, advance } = fixture();
   const first = registry.begin("conversation-1", "new_turn");
   advance(95 * minute);
   const repeated = registry.begin("conversation-1", "new_turn");
-  assert.equal(repeated.started, false);
-  assert.equal(repeated.status.phase, "drain");
-  assert.equal(repeated.status.windowId, first.status.windowId);
-  assert.equal(repeated.status.generation, 1);
+  assert.equal(repeated.started, true);
+  assert.equal(repeated.status.phase, "active");
+  assert.notEqual(repeated.status.windowId, first.status.windowId);
+  assert.equal(repeated.status.generation, 2);
+  assert.equal(repeated.status.elapsedMs, 0);
+});
+
+test("one host turn identity is idempotent and a new host turn resets automatically", () => {
+  const { registry, advance } = fixture();
+  const first = registry.beforeTool(
+    "conversation-1",
+    "exec_command",
+    { cmd: "git status" },
+    false,
+    "turn-1",
+  );
+  assert.equal(first.transition, "auto_begin_host_turn");
+  assert.equal(first.status.boundarySource, "host_turn");
+  assert.equal(first.status.enforcement, "hard");
+
+  advance(95 * minute);
+  const sameTurn = registry.begin("conversation-1", "new_turn", {
+    turnId: "turn-1",
+    boundarySource: "host_turn",
+  });
+  assert.equal(sameTurn.started, false);
+  assert.equal(sameTurn.status.phase, "drain");
+  assert.equal(sameTurn.status.generation, 1);
+
+  const nextTurn = registry.beforeTool(
+    "conversation-1",
+    "read",
+    { path: "README.md" },
+    true,
+    "turn-2",
+  );
+  assert.equal(nextTurn.transition, "auto_begin_host_turn");
+  assert.equal(nextTurn.status.phase, "active");
+  assert.equal(nextTurn.status.generation, 2);
+  assert.notEqual(nextTurn.status.windowId, first.status.windowId);
+});
+
+test("an exact yielded turn cannot resume substantive work under the same host turn id", () => {
+  const { registry } = fixture();
+  registry.begin("conversation-1", "new_turn", {
+    turnId: "turn-1",
+    boundarySource: "host_turn",
+  });
+  registry.yield(
+    "conversation-1",
+    {
+      summary: "Turn landed safely.",
+      nextAction: "Continue in the next host turn.",
+      worktreeState: "clean",
+      effectState: "none",
+      checkpointRefs: [],
+      unresolved: [],
+    },
+    "turn-1",
+  );
+
+  const sameTurn = registry.beforeTool(
+    "conversation-1",
+    "read",
+    { path: "README.md" },
+    true,
+    "turn-1",
+  );
+  assert.equal(sameTurn.allowed, false);
+  assert.equal(sameTurn.reason, "window_yielded");
+  assert.equal(sameTurn.status.phase, "yielded");
+
+  const nextTurn = registry.beforeTool(
+    "conversation-1",
+    "read",
+    { path: "README.md" },
+    true,
+    "turn-2",
+  );
+  assert.equal(nextTurn.allowed, true);
+  assert.equal(nextTurn.status.phase, "active");
+  assert.equal(nextTurn.status.generation, 2);
+});
+
+test("an inferred fallback window rolls over instead of blocking across turns", () => {
+  const { registry, advance } = fixture();
+  const first = registry.beforeTool(
+    "conversation-1",
+    "exec_command",
+    { cmd: "git status" },
+    false,
+  );
+  assert.equal(first.status.enforcement, "advisory");
+  advance(100 * minute);
+
+  const rollover = registry.beforeTool(
+    "conversation-1",
+    "apply_patch",
+    { patch: "*** Begin Patch" },
+    false,
+  );
+  assert.equal(rollover.allowed, true);
+  assert.equal(rollover.transition, "auto_rollover_advisory");
+  assert.equal(rollover.status.phase, "active");
+  assert.equal(rollover.status.generation, 2);
+  assert.equal(rollover.status.enforcement, "advisory");
 });
 
 test("unscoped and disabled clients are not hard blocked", () => {

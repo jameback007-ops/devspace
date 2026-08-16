@@ -116,6 +116,40 @@ assert.equal(completed.running, false);
 assert.equal(completed.exitCode, 0);
 assert.match(completed.output, /finished/);
 
+const mailboxWakeProcess = await manager.start({
+  workspaceId: "workspace-a",
+  executionScopeRef: "aaaaaaaaaaaaaaaa",
+  cwd: process.cwd(),
+  command: `${node} -e "setTimeout(() => {}, 5000)"`,
+  yieldTimeMs: 5,
+});
+assert.equal(mailboxWakeProcess.running, true);
+assert.ok(mailboxWakeProcess.sessionId);
+let wakeMailbox = (): void => undefined;
+const mailboxWake = new Promise<void>((resolve) => {
+  wakeMailbox = resolve;
+});
+setTimeout(wakeMailbox, 30).unref();
+const mailboxPollStartedAt = Date.now();
+const mailboxPoll = await manager.write({
+  workspaceId: "workspace-a",
+  sessionId: mailboxWakeProcess.sessionId,
+  yieldTimeMs: 2_000,
+  externalWake: mailboxWake,
+});
+assert.equal(mailboxPoll.running, true);
+assert.equal(mailboxPoll.wakeReason, "mailbox");
+assert.ok(
+  Date.now() - mailboxPollStartedAt < 1_000,
+  "Expected mailbox wake to end a pure poll before its timeout.",
+);
+manager.terminate("workspace-a", mailboxWakeProcess.sessionId);
+await manager.write({
+  workspaceId: "workspace-a",
+  sessionId: mailboxWakeProcess.sessionId,
+  yieldTimeMs: 2_000,
+});
+
 const progressive = await manager.start({
   workspaceId: "workspace-a",
   cwd: process.cwd(),

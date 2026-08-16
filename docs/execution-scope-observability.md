@@ -52,7 +52,7 @@ Omit `scopeRef` to inspect the current scope. Supply a `scopeRef` from
 
 Returns a bounded newest-first event stream with opaque pagination. Events show
 tool lifecycle, outcome, timing, safe workspace/process locators, selected input
-metadata, digests, and redacted error information.
+metadata, digests, and normalized error categories.
 
 The inspection tools do not audit themselves. This preserves genuinely
 read-only inspection and prevents supervisor queries from contaminating the
@@ -109,6 +109,12 @@ DevSpace SQLite database. They survive a registry or server restart. Live
 process handles and executor-window timers remain process-local and are joined
 at query time; they are observations, not reconstructed authority.
 
+Conversation scope and assistant-turn window are deliberately separate. The
+stable `scopeRef` identifies a conversation/executor lane; an optional
+`devspace/executor-turn` value identifies one exact host turn. Observability may
+show the current window projection, but it must not infer turn age from the age
+of the conversation scope.
+
 Defaults:
 
 - observability enabled;
@@ -117,9 +123,18 @@ Defaults:
 - five minutes before a non-running scope is classified idle.
 
 All limits are configurable. Pruning removes old audit events and scopes that
-have no retained events. `totalEventCount` remains cumulative while the scope
-row exists, so a bounded audit does not imply that only the retained events ever
-occurred.
+have no retained events or mailbox references. `totalEventCount` remains
+cumulative while the scope row exists, so a bounded audit does not imply that
+only the retained events ever occurred.
+
+## Relationship to the Mailbox
+
+Execution-scope messaging is a separate content-bearing contract. The mailbox
+intentionally stores body and receipt notes for delivery, while observability
+records only bounded lengths and digests for those sensitive fields. Reading an
+inbox or recording a receipt is auditable lifecycle metadata, but the message
+body is not duplicated into the audit stream. See
+[Execution-Scope Messaging](execution-scope-messaging.md).
 
 ## Concurrency and Authority
 

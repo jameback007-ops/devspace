@@ -32,6 +32,12 @@ import {
 } from "./executor-window.js";
 import { ExecutionScopeManager } from "./execution-observability.js";
 import {
+  ExecutionMailboxManager,
+  type ExecutionMessageKind,
+  type ExecutionMessagePriority,
+  type ExecutionMessageReceiptState,
+} from "./execution-mailbox.js";
+import {
   createOpenAIIncomingArtifactAdapter,
   type IncomingArtifactAdapter,
 } from "./incoming-artifacts.js";
@@ -68,6 +74,7 @@ import {
 import { createReviewCheckpointManager } from "./review-checkpoints.js";
 import {
   executionScopeIdentity,
+  executorTurnIdentity,
   executorWindowScopeId,
 } from "./request-meta.js";
 import { shutdownHttpServer } from "./server-shutdown.js";
@@ -221,6 +228,7 @@ const executorWindowContexts = new WeakMap<
   {
     registry: ExecutorWindowRegistry;
     executionScopes: ExecutionScopeManager;
+    executionMailbox: ExecutionMailboxManager;
     config: ServerConfig;
   }
 >();
@@ -259,6 +267,33 @@ function appendExecutorWindowStatus(
   };
 }
 
+function appendExecutionMailboxNotice(
+  response: unknown,
+  notice: string | undefined,
+): unknown {
+  if (!notice || !isRecord(response)) return response;
+  const content = Array.isArray(response.content)
+    ? [...response.content, { type: "text", text: notice }]
+    : [{ type: "text", text: notice }];
+  const structuredContent = isRecord(response.structuredContent)
+    ? {
+        ...response.structuredContent,
+        ...(typeof response.structuredContent.result === "string"
+          ? { result: `${response.structuredContent.result}\n\n${notice}` }
+          : {}),
+      }
+    : response.structuredContent;
+  const metadata = isRecord(response._meta)
+    ? { ...response._meta, executionMailboxNotice: notice }
+    : { executionMailboxNotice: notice };
+  return {
+    ...response,
+    content,
+    _meta: metadata,
+    ...(structuredContent === undefined ? {} : { structuredContent }),
+  };
+}
+
 const registerAppTool = ((
   server: Pick<McpServer, "registerTool">,
   name: string,
@@ -283,9 +318,11 @@ const registerAppTool = ((
       const {
         registry: executorWindows,
         executionScopes,
+        executionMailbox,
         config,
       } = windowContext;
       const scopeId = executorWindowScopeId(extra?._meta);
+      const turnId = executorTurnIdentity(extra?._meta)?.turnId;
       const executionIdentity = executionScopeIdentity(extra?._meta);
       let observation: ReturnType<ExecutionScopeManager["beginTool"]>;
       try {
@@ -306,6 +343,7 @@ const registerAppTool = ((
         name,
         input,
         readOnlyHint,
+        turnId,
       );
       if (decision.transition) {
         logEvent(config.logging, "info", "executor_window_auto_transition", {
@@ -348,13 +386,25 @@ const registerAppTool = ((
             error: error instanceof Error ? error.message : String(error),
           });
         }
-        return response;
+        let notice: string | undefined;
+        if (!name.startsWith("execution_scope_message_")) {
+          try {
+            notice = executionMailbox.pendingNotice(executionIdentity);
+          } catch (error) {
+            logEvent(config.logging, "warn", "execution_mailbox_notice_failed", {
+              tool: name,
+              scopeRef: executionIdentity?.scopeRef,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
+        }
+        return appendExecutionMailboxNotice(response, notice);
       }
 
       try {
         const response = await callback(input, extra);
-        executorWindows.touch(scopeId);
-        const status = executorWindows.status(scopeId);
+        executorWindows.touch(scopeId, turnId);
+        const status = executorWindows.status(scopeId, turnId);
         try {
           executionScopes.finishTool(
             observation,
@@ -369,7 +419,23 @@ const registerAppTool = ((
             error: error instanceof Error ? error.message : String(error),
           });
         }
-        if (name.startsWith("executor_window_")) return response;
+        let mailboxNotice: string | undefined;
+        if (!name.startsWith("execution_scope_message_")) {
+          try {
+            mailboxNotice = executionMailbox.pendingNotice(executionIdentity);
+          } catch (error) {
+            logEvent(config.logging, "warn", "execution_mailbox_notice_failed", {
+              tool: name,
+              scopeRef: executionIdentity?.scopeRef,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
+        }
+        const responseWithMailbox = appendExecutionMailboxNotice(
+          response,
+          mailboxNotice,
+        );
+        if (name.startsWith("executor_window_")) return responseWithMailbox;
         if (status.phase === "drain" || status.phase === "yield_required") {
           logEvent(config.logging, "info", "executor_window_observation", {
             tool: name,
@@ -381,12 +447,12 @@ const registerAppTool = ((
             yieldInMs: status.yieldInMs,
           });
         }
-        return appendExecutorWindowStatus(response, status);
+        return appendExecutorWindowStatus(responseWithMailbox, status);
       } catch (error) {
         try {
           executionScopes.finishTool(observation, "error", {
             error,
-            windowStatus: executorWindows.status(scopeId),
+            windowStatus: executorWindows.status(scopeId, turnId),
           });
         } catch (observationError) {
           logEvent(config.logging, "warn", "execution_scope_observation_failed", {
@@ -409,10 +475,13 @@ function serverInstructions(config: ServerConfig): string {
   const codexSessionInstruction =
     " To inspect the allowlisted live AOQ Codex task through the existing shell tool, run `zes-session status`, `zes-session tail --limit 20`, or `zes-session audit --limit 20`. To inspect its exact live worktree, run `zes-workspace status`, `zes-workspace tree`, `zes-workspace read <relative-path>`, `zes-workspace search <query>`, or `zes-workspace diff`. These brokered commands are read-only; they can inspect the complete worktree but cannot access paths outside it or mutate the active task.";
   const executorWindowInstruction = config.executorWindow.enabled
-    ? " The executor window starts automatically on the first scoped tool call in a new MCP session. A task is not bounded by one turn and may continue for days or across sessions. executor_window_begin is an optional explicit start or post-cutoff recovery control when the host exposes it; repeated begin calls cannot reset an active window. When tool results report DRAIN, finish the current local causal chain, persist a recoverable ZES checkpoint or handoff, and do not open a new major frontier. When they report YIELD_REQUIRED, use only read/reconciliation actions or poll/interrupt an existing process, persist the exact frontier, and end the assistant turn; call executor_window_yield when that tool is visible."
+    ? " The executor window bounds one assistant turn, not the conversation or task. Hosts should supply one stable devspace/executor-turn value across all tool calls in that assistant turn; only that exact host boundary enables hard landing enforcement. When the host does not supply it, call executor_window_begin(reason=new_turn) exactly once as the first tool call of every assistant turn to reset the advisory clock. Explicit and automatic fallback windows remain advisory and roll over instead of blocking because conversation identity is not a valid turn boundary. A task may continue across arbitrarily many turns. When an exact host-bound window reports DRAIN, finish the current local causal chain, persist a recoverable ZES checkpoint or handoff, and do not open a new major frontier. When it reports YIELD_REQUIRED, use only read/reconciliation actions or poll/interrupt an existing process, persist the exact frontier, and end the assistant turn; call executor_window_yield when that tool is visible."
     : "";
   const executionScopeInstruction = config.executionObservability.enabled
     ? " Use execution_scope_list to discover recent DevSpace execution scopes, execution_scope_status to inspect another WebChat/host scope's linked workspaces, live processes, and executor-window state, and execution_scope_audit for bounded metadata-only tool lifecycle. These views never replace Git, canonical product state, runtime/effect readback, or writer/lease reconciliation, and they do not contain transcripts, prompts, private reasoning, tool outputs, patches, credentials, or raw commands."
+    : "";
+  const executionMailboxInstruction = config.executionMailbox.enabled
+    ? " Use execution_scope_message_send to leave a durable message for another known scope, reusing one idempotencyKey for retries. Acceptance means stored, not observed. When a tool result reports pending mail, call execution_scope_message_inbox before opening a new major frontier, then record acknowledged or acted state with execution_scope_message_receipt. Use execution_scope_message_status to inspect a message you sent or received. The mailbox is executor-local coordination, not task, decision, effect, writer, or canonical-memory authority, and it cannot wake or inject text directly into an inactive WebChat transcript."
     : "";
   const artifactInstruction = config.artifactsEnabled && isArtifactDownloadSupportedPlatform()
     ? " When the user supplies or generates a file that is not present on the DevSpace host, use download_artifact with its native file value, the existing workspace ID, and a suitable relative destination path chosen from the user's request and project structure. The tool refuses to overwrite an existing destination and returns the normalized workspace-relative path. Use normal workspace tools when explicit inspection, replacement, movement, renaming, or deletion is needed. Do not recreate binary files with write/edit calls or place signed URLs, native file objects, base64 content, or invented host paths in shell commands or logs."
@@ -423,7 +492,7 @@ function serverInstructions(config: ServerConfig): string {
       : "";
 
   if (config.toolMode === "codex") {
-    return `Use DevSpace for coding work. Call ${toolNames.openWorkspace} once for each project folder or isolated worktree, then keep using its workspaceId. During continued work in the same project or worktree, do not call ${toolNames.openWorkspace} again. Open another workspace only when changing projects, switching checkout/worktree mode, creating another isolated worktree, or when the current workspaceId is rejected. Use ${toolNames.read} for direct file reads, apply_patch for all file modifications, exec_command for inspection, tests, builds, and other commands, and write_stdin to poll or interact with running processes. Follow instructions returned by ${toolNames.openWorkspace}; read applicable instruction and skill files before working in their scope.${artifactInstruction}${showChangesInstruction}${codexSessionInstruction}${executorWindowInstruction}${executionScopeInstruction}`;
+    return `Use DevSpace for coding work. Call ${toolNames.openWorkspace} once for each project folder or isolated worktree, then keep using its workspaceId. During continued work in the same project or worktree, do not call ${toolNames.openWorkspace} again. Open another workspace only when changing projects, switching checkout/worktree mode, creating another isolated worktree, or when the current workspaceId is rejected. Use ${toolNames.read} for direct file reads, apply_patch for all file modifications, exec_command for inspection, tests, builds, and other commands, and write_stdin to poll or interact with running processes. Follow instructions returned by ${toolNames.openWorkspace}; read applicable instruction and skill files before working in their scope.${artifactInstruction}${showChangesInstruction}${codexSessionInstruction}${executorWindowInstruction}${executionScopeInstruction}${executionMailboxInstruction}`;
   }
 
   const inspection = config.toolMode !== "full"
@@ -436,7 +505,7 @@ function serverInstructions(config: ServerConfig): string {
 
   const agentsMd = `Follow instructions returned by ${toolNames.openWorkspace}. Before working under a path listed in availableAgentsFiles, use ${toolNames.read} to inspect that instruction file and follow it. `;
 
-  return `Use DevSpace for coding work. Call ${toolNames.openWorkspace} once for each project folder or isolated worktree, then keep using its workspaceId. During continued work in the same project or worktree, do not call ${toolNames.openWorkspace} again. Open another workspace only when changing projects, switching checkout/worktree mode, creating another isolated worktree, or when the current workspaceId is rejected. ${agentsMd}${skills}${inspection}Prefer ${toolNames.edit} for targeted modifications, ${toolNames.write} only for new files or complete rewrites, and ${toolNames.shell} for tests, builds, git inspection, package scripts, and commands that are better executed by the shell. Do not create or modify files with ${toolNames.shell}; avoid shell redirection, heredocs, tee, sed -i, perl -i, node/python/ruby scripts, or any command whose purpose is to write project files.${artifactInstruction}${showChangesInstruction}${codexSessionInstruction}${executorWindowInstruction}${executionScopeInstruction}`;
+  return `Use DevSpace for coding work. Call ${toolNames.openWorkspace} once for each project folder or isolated worktree, then keep using its workspaceId. During continued work in the same project or worktree, do not call ${toolNames.openWorkspace} again. Open another workspace only when changing projects, switching checkout/worktree mode, creating another isolated worktree, or when the current workspaceId is rejected. ${agentsMd}${skills}${inspection}Prefer ${toolNames.edit} for targeted modifications, ${toolNames.write} only for new files or complete rewrites, and ${toolNames.shell} for tests, builds, git inspection, package scripts, and commands that are better executed by the shell. Do not create or modify files with ${toolNames.shell}; avoid shell redirection, heredocs, tee, sed -i, perl -i, node/python/ruby scripts, or any command whose purpose is to write project files.${artifactInstruction}${showChangesInstruction}${codexSessionInstruction}${executorWindowInstruction}${executionScopeInstruction}${executionMailboxInstruction}`;
 }
 
 function formatVisibleAgent(agent: {
@@ -727,7 +796,9 @@ async function assertWorkspaceAppAssets(): Promise<void> {
 
 function processResult(snapshot: ProcessSnapshot): string {
   const status = snapshot.running
-    ? `Process running with session ID ${snapshot.sessionId}.`
+    ? snapshot.wakeReason === "mailbox"
+      ? `Process still running with session ID ${snapshot.sessionId}; poll woke for pending execution-scope mail.`
+      : `Process running with session ID ${snapshot.sessionId}.`
     : snapshot.signal
       ? `Process exited after signal ${snapshot.signal}.`
       : `Process exited with code ${snapshot.exitCode ?? "unknown"}.`;
@@ -740,6 +811,7 @@ function processOutputSchema(): z.ZodRawShape {
     running: z.boolean(),
     exitCode: z.number().int().optional(),
     signal: z.string().optional(),
+    wakeReason: z.enum(["mailbox"]).optional(),
     wallTimeMs: z.number().nonnegative(),
     outputTruncated: z.boolean(),
   });
@@ -770,6 +842,7 @@ function processToolResponse(
       running: snapshot.running,
       exitCode: snapshot.exitCode,
       signal: snapshot.signal,
+      wakeReason: snapshot.wakeReason,
       wallTimeMs: snapshot.wallTimeMs,
       outputTruncated: snapshot.outputTruncated,
     },
@@ -802,7 +875,7 @@ function registerExecutorWindowTools(
     {
       title: "Begin executor turn window",
       description:
-        "Explicitly begin or recover a bounded harness window. Normal scoped work auto-begins on its first tool call, so this control is optional. It does not create, split, or complete a task, and repeated begin calls cannot reset an active window.",
+        "Begin a fresh bounded window for the current assistant turn or recover after a cutoff. When the host does not supply devspace/executor-turn, call this exactly once as the first tool call of every assistant turn. It resets the per-turn clock but does not create, split, or complete the underlying task.",
       inputSchema: {
         reason: z
           .enum(["new_turn", "recovery_after_cutoff", "manual_test"])
@@ -815,9 +888,14 @@ function registerExecutorWindowTools(
       annotations,
     },
     async ({ reason }, { _meta }) => {
+      const turnId = executorTurnIdentity(_meta)?.turnId;
       const result = executorWindows.begin(
         executorWindowScopeId(_meta),
         reason,
+        {
+          turnId,
+          boundarySource: turnId ? "host_turn" : "explicit",
+        },
       );
       logEvent(config.logging, "info", "executor_window_begun", {
         reason,
@@ -847,7 +925,10 @@ function registerExecutorWindowTools(
       annotations: CODEX_SESSION_TOOL_ANNOTATIONS,
     },
     async (_input, { _meta }) => jsonToolResponse(
-      executorWindows.status(executorWindowScopeId(_meta)),
+      executorWindows.status(
+        executorWindowScopeId(_meta),
+        executorTurnIdentity(_meta)?.turnId,
+      ),
     ),
   );
 
@@ -857,7 +938,7 @@ function registerExecutorWindowTools(
     {
       title: "Yield executor turn safely",
       description:
-        "Mark this assistant turn yielded after recording a bounded advisory handoff. This handoff does not replace Git, PostgreSQL, runtime/effect readback, or product-native continuation. After this succeeds, end the assistant turn; a later turn must call executor_window_begin before resuming.",
+        "Mark this assistant turn yielded after recording a bounded advisory handoff. This handoff does not replace Git, PostgreSQL, runtime/effect readback, or product-native continuation. After this succeeds, end the assistant turn. A later host-bound turn resumes with a new devspace/executor-turn value; a host without turn identity must call executor_window_begin before resuming.",
       inputSchema: {
         summary: z
           .string()
@@ -912,6 +993,7 @@ function registerExecutorWindowTools(
       const status = executorWindows.yield(
         executorWindowScopeId(_meta),
         handoff,
+        executorTurnIdentity(_meta)?.turnId,
       );
       logEvent(config.logging, "info", "executor_window_yielded", {
         scopeRef: status.scopeRef,
@@ -1021,11 +1103,167 @@ function registerExecutionScopeTools(
   );
 }
 
+function registerExecutionMailboxTools(
+  server: McpServer,
+  config: ServerConfig,
+  executionMailbox: ExecutionMailboxManager,
+): void {
+  if (!config.executionMailbox.enabled) return;
+  const scopeRefSchema = z
+    .string()
+    .regex(/^[a-f0-9]{16}$/)
+    .describe("Opaque target scopeRef returned by execution_scope_list.");
+  const messageIdSchema = z
+    .string()
+    .regex(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    )
+    .describe("Execution message identifier returned by send or inbox.");
+  const mailboxAnnotations = {
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: false,
+  };
+
+  registerAppTool(
+    server,
+    "execution_scope_message_send",
+    {
+      title: "Send execution-scope message",
+      description:
+        "Persist one provider-neutral message for another DevSpace execution scope. Acceptance means the owner-only mailbox stored it; it does not mean the target WebChat was awakened or has observed it. Reuse the exact idempotencyKey on retries.",
+      inputSchema: {
+        targetScopeRef: scopeRefSchema,
+        idempotencyKey: z
+          .string()
+          .min(1)
+          .max(200)
+          .describe("Stable sender-chosen retry key. Reuse it only for the exact same payload."),
+        kind: z.enum([
+          "instruction",
+          "correction",
+          "question",
+          "notice",
+          "handoff",
+        ]),
+        priority: z.enum(["low", "normal", "high", "urgent"]).optional(),
+        body: z
+          .string()
+          .min(1)
+          .max(config.executionMailbox.maxBodyCharacters)
+          .describe("Message content. Do not include credentials or private model reasoning."),
+        correlationRef: z.string().min(1).max(1_000).optional(),
+        expiresInHours: z
+          .number()
+          .positive()
+          .max(config.executionMailbox.maxTtlMs / 3_600_000)
+          .optional(),
+      },
+      outputSchema: resultOutputSchema({ data: z.unknown() }),
+      ...toolWidgetDescriptorMeta(config, "read"),
+      annotations: mailboxAnnotations,
+    },
+    async (
+      {
+        targetScopeRef,
+        idempotencyKey,
+        kind,
+        priority,
+        body,
+        correlationRef,
+        expiresInHours,
+      },
+      { _meta },
+    ) => jsonToolResponse(
+      executionMailbox.send(executionScopeIdentity(_meta), {
+        targetScopeRef,
+        idempotencyKey,
+        kind: kind as ExecutionMessageKind,
+        priority: priority as ExecutionMessagePriority | undefined,
+        body,
+        correlationRef,
+        expiresInHours,
+      }),
+    ),
+  );
+
+  registerAppTool(
+    server,
+    "execution_scope_message_inbox",
+    {
+      title: "Read execution-scope inbox",
+      description:
+        "Read messages addressed to the current execution scope. Returned messages are atomically marked observed. This cannot read another scope's inbox and does not imply acknowledgement or action.",
+      inputSchema: {
+        limit: z.number().int().min(1).max(50).optional(),
+        cursor: z.string().max(512).optional(),
+        includeTerminal: z
+          .boolean()
+          .optional()
+          .describe("Include acted and expired messages for local review. Defaults to false."),
+      },
+      outputSchema: resultOutputSchema({ data: z.unknown() }),
+      ...toolWidgetDescriptorMeta(config, "read"),
+      annotations: mailboxAnnotations,
+    },
+    async ({ limit, cursor, includeTerminal }, { _meta }) => jsonToolResponse(
+      executionMailbox.inbox(
+        executionScopeIdentity(_meta),
+        { limit, cursor, includeTerminal },
+      ),
+    ),
+  );
+
+  registerAppTool(
+    server,
+    "execution_scope_message_status",
+    {
+      title: "Read execution message status",
+      description:
+        "Read accepted, observed, acknowledged, acted, or expired state for one message. Only its sender or target scope may inspect it.",
+      inputSchema: { messageId: messageIdSchema },
+      outputSchema: resultOutputSchema({ data: z.unknown() }),
+      ...toolWidgetDescriptorMeta(config, "read"),
+      annotations: CODEX_SESSION_TOOL_ANNOTATIONS,
+    },
+    async ({ messageId }, { _meta }) => jsonToolResponse(
+      executionMailbox.status(executionScopeIdentity(_meta), messageId),
+    ),
+  );
+
+  registerAppTool(
+    server,
+    "execution_scope_message_receipt",
+    {
+      title: "Record execution message receipt",
+      description:
+        "Record a monotonic target-bound acknowledgement or acted receipt. Only the addressed execution scope may update the message; retries are idempotent and cannot move state backward.",
+      inputSchema: {
+        messageId: messageIdSchema,
+        state: z.enum(["acknowledged", "acted"]),
+        note: z.string().min(1).max(4_000).optional(),
+      },
+      outputSchema: resultOutputSchema({ data: z.unknown() }),
+      ...toolWidgetDescriptorMeta(config, "read"),
+      annotations: mailboxAnnotations,
+    },
+    async ({ messageId, state, note }, { _meta }) => jsonToolResponse(
+      executionMailbox.receipt(executionScopeIdentity(_meta), {
+        messageId,
+        state: state as ExecutionMessageReceiptState,
+        note,
+      }),
+    ),
+  );
+}
+
 function registerCodexProcessTools(
   server: McpServer,
   config: ServerConfig,
   workspaces: WorkspaceRegistry,
   processSessions: ProcessSessionManager,
+  executionMailbox: ExecutionMailboxManager,
 ): void {
   registerAppTool(
     server,
@@ -1142,18 +1380,35 @@ function registerCodexProcessTools(
       ...toolWidgetDescriptorMeta(config, "shell"),
       annotations: SHELL_TOOL_ANNOTATIONS,
     },
-    async ({ workspaceId, sessionId, chars, columns, rows, yieldTimeMs, maxOutputTokens }) => {
+    async (
+      { workspaceId, sessionId, chars, columns, rows, yieldTimeMs, maxOutputTokens },
+      { _meta },
+    ) => {
       const startedAt = performance.now();
       workspaces.getWorkspace(workspaceId);
-      const snapshot = await processSessions.write({
-        workspaceId,
-        sessionId,
-        chars,
-        columns,
-        rows,
-        yieldTimeMs,
-        maxOutputTokens,
-      });
+      const identity = executionScopeIdentity(_meta);
+      const purePoll = (chars ?? "") === ""
+        && columns === undefined
+        && rows === undefined;
+      const waiter =
+        purePoll && identity && config.executionMailbox.enabled
+          ? executionMailbox.createWaiter(identity.scopeRef)
+          : undefined;
+      let snapshot: ProcessSnapshot;
+      try {
+        snapshot = await processSessions.write({
+          workspaceId,
+          sessionId,
+          chars,
+          columns,
+          rows,
+          yieldTimeMs,
+          maxOutputTokens,
+          externalWake: waiter?.promise,
+        });
+      } finally {
+        waiter?.cancel();
+      }
 
       logToolCall(config, {
         tool: "write_stdin",
@@ -1167,6 +1422,7 @@ function registerCodexProcessTools(
         charactersWritten: chars?.length ?? 0,
         running: snapshot.running,
         exitCode: snapshot.exitCode,
+        wakeReason: snapshot.wakeReason,
         wallTimeMs: snapshot.wallTimeMs,
       });
     },
@@ -1182,21 +1438,27 @@ export function createMcpServer(
   incomingArtifactAdapters: readonly IncomingArtifactAdapter[],
   executorWindows = new ExecutorWindowRegistry(config.executorWindow),
   executionScopes?: ExecutionScopeManager,
+  executionMailbox?: ExecutionMailboxManager,
 ): McpServer {
   const ownsExecutionScopes = executionScopes === undefined;
+  const ownsExecutionMailbox = executionMailbox === undefined;
   const activeExecutionScopes = executionScopes ?? new ExecutionScopeManager(
     config.executionObservability,
     config.stateDir,
     processSessions,
     executorWindows,
   );
+  const activeExecutionMailbox = executionMailbox ?? new ExecutionMailboxManager(
+    config.executionMailbox,
+    config.stateDir,
+  );
   const server = new McpServer(
     {
       name: "devspace",
       title: "DevSpace",
-      version: "0.5.0-zes.1",
+      version: "0.6.0-zes.1",
       description:
-        "Coding tools for project workspaces, bounded executor-turn safety, provider-neutral execution-scope observability, and broad read-only inspection of the exact live AOQ Codex task and worktree.",
+        "Coding tools for project workspaces, per-turn executor safety, provider-neutral execution-scope observability and messaging, and broad read-only inspection of the exact live AOQ Codex task and worktree.",
     },
     {
       instructions: serverInstructions(config),
@@ -1206,6 +1468,7 @@ export function createMcpServer(
   executorWindowContexts.set(server, {
     registry: executorWindows,
     executionScopes: activeExecutionScopes,
+    executionMailbox: activeExecutionMailbox,
     config,
   });
 
@@ -1242,6 +1505,7 @@ export function createMcpServer(
 
   registerExecutorWindowTools(server, config, executorWindows);
   registerExecutionScopeTools(server, config, activeExecutionScopes);
+  registerExecutionMailboxTools(server, config, activeExecutionMailbox);
   registerZesCodexInspectionTools(server, config, registerAppTool);
 
   registerAppTool(
@@ -2142,7 +2406,13 @@ export function createMcpServer(
   }
 
   if (config.toolMode === "codex") {
-    registerCodexProcessTools(server, config, workspaces, processSessions);
+    registerCodexProcessTools(
+      server,
+      config,
+      workspaces,
+      processSessions,
+      activeExecutionMailbox,
+    );
   }
 
   if (config.artifactsEnabled && isArtifactDownloadSupportedPlatform()) {
@@ -2154,7 +2424,7 @@ export function createMcpServer(
     });
   }
 
-  if (ownsExecutionScopes) {
+  if (ownsExecutionScopes || ownsExecutionMailbox) {
     const close = server.close.bind(server);
     let closing: Promise<void> | undefined;
     server.close = () => {
@@ -2162,7 +2432,8 @@ export function createMcpServer(
         try {
           await close();
         } finally {
-          activeExecutionScopes.close();
+          if (ownsExecutionScopes) activeExecutionScopes.close();
+          if (ownsExecutionMailbox) activeExecutionMailbox.close();
         }
       })();
       return closing;
@@ -2208,6 +2479,10 @@ export function createServer(
     config.stateDir,
     processSessions,
     executorWindows,
+  );
+  const executionMailbox = new ExecutionMailboxManager(
+    config.executionMailbox,
+    config.stateDir,
   );
   const localAgentProviders = config.subagents
     ? getLocalAgentProviderAvailabilitySnapshot()
@@ -2344,7 +2619,7 @@ export function createServer(
         // ChatGPT separates tool discovery from execution and its execution
         // workers may not preserve an MCP session. Keep each OpenAI POST
         // self-contained while sharing process-level workspace, process, and
-        // executor-window registries.
+        // executor-window, execution-scope, and mailbox registries.
         transport = new StreamableHTTPServerTransport({
           sessionIdGenerator: undefined,
           enableJsonResponse: true,
@@ -2358,6 +2633,7 @@ export function createServer(
           incomingArtifactAdapters,
           executorWindows,
           executionScopes,
+          executionMailbox,
         );
         await server.connect(transport);
         res.on("close", () => {
@@ -2402,6 +2678,7 @@ export function createServer(
           incomingArtifactAdapters,
           executorWindows,
           executionScopes,
+          executionMailbox,
         );
         await server.connect(transport);
       } else if (req.method === "POST") {
@@ -2420,6 +2697,7 @@ export function createServer(
           incomingArtifactAdapters,
           executorWindows,
           executionScopes,
+          executionMailbox,
         );
         await server.connect(transport);
         res.on("close", () => {
@@ -2454,6 +2732,7 @@ export function createServer(
         const results = await transports.closeAll();
         logSessionCloseResults("server_shutdown", results);
         processSessions.shutdown();
+        executionMailbox.close();
         executionScopes.close();
         oauthProvider.close();
         workspaceStore.close?.();

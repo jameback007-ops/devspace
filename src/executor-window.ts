@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { executionScopeRef } from "./request-meta.js";
+import { executionScopeRef, executorTurnRef } from "./request-meta.js";
 
 export type ExecutorWindowPhase =
   | "not_started"
@@ -14,6 +14,13 @@ export type ExecutorWindowBeginReason =
   | "new_turn"
   | "recovery_after_cutoff"
   | "manual_test";
+
+export type ExecutorWindowBoundarySource =
+  | "host_turn"
+  | "explicit"
+  | "inferred";
+
+export type ExecutorWindowEnforcement = "hard" | "advisory";
 
 export type ExecutorWindowWorktreeState =
   | "clean"
@@ -43,10 +50,13 @@ export interface ExecutorWindowHandoff {
 }
 
 export interface ExecutorWindowStatus {
-  schemaVersion: 1;
+  schemaVersion: 2;
   enabled: boolean;
   scoped: boolean;
   scopeRef?: string;
+  turnRef?: string;
+  boundarySource?: ExecutorWindowBoundarySource;
+  enforcement?: ExecutorWindowEnforcement;
   windowId?: string;
   generation?: number;
   phase: ExecutorWindowPhase;
@@ -75,7 +85,16 @@ export interface ExecutorWindowGateDecision {
   allowed: boolean;
   status: ExecutorWindowStatus;
   reason?: "window_not_started" | "yield_required" | "window_yielded";
-  transition?: "auto_begin" | "auto_resume_after_yield";
+  transition?:
+    | "auto_begin"
+    | "auto_begin_host_turn"
+    | "auto_resume_after_yield"
+    | "auto_rollover_advisory";
+}
+
+export interface ExecutorWindowBeginOptions {
+  turnId?: string;
+  boundarySource?: ExecutorWindowBoundarySource;
 }
 
 interface ExecutorWindowEntry {
@@ -83,6 +102,8 @@ interface ExecutorWindowEntry {
   generation: number;
   startedAtMs: number;
   lastActivityAtMs: number;
+  turnRef?: string;
+  boundarySource: ExecutorWindowBoundarySource;
   yieldedAtMs?: number;
   handoff?: ExecutorWindowHandoff;
   previousHandoff?: ExecutorWindowHandoff;
@@ -98,7 +119,7 @@ const WINDOW_TOOL_NAMES = new Set([
   "executor_window_yield",
 ]);
 
-const YIELD_SAFE_READ_TOOLS = new Set([
+const YIELD_SAFE_TOOLS = new Set([
   "read",
   "grep",
   "glob",
@@ -107,6 +128,10 @@ const YIELD_SAFE_READ_TOOLS = new Set([
   "execution_scope_list",
   "execution_scope_status",
   "execution_scope_audit",
+  "execution_scope_message_inbox",
+  "execution_scope_message_send",
+  "execution_scope_message_status",
+  "execution_scope_message_receipt",
   "codex_session_status",
   "codex_session_tail",
   "codex_session_audit",
@@ -135,22 +160,38 @@ function safeWriteStdin(input: unknown): boolean {
   return chars === undefined || chars === "" || chars === "\u0003";
 }
 
-function statusInstruction(phase: ExecutorWindowPhase): string {
+function enforcementFor(
+  boundarySource: ExecutorWindowBoundarySource | undefined,
+): ExecutorWindowEnforcement | undefined {
+  if (!boundarySource) return undefined;
+  return boundarySource === "host_turn" ? "hard" : "advisory";
+}
+
+function statusInstruction(
+  phase: ExecutorWindowPhase,
+  enforcement: ExecutorWindowEnforcement | undefined,
+): string {
   switch (phase) {
     case "disabled":
       return "Executor-window enforcement is disabled.";
     case "unscoped":
       return "No stable executor scope was supplied by this MCP host; the window is advisory-only for this call.";
     case "not_started":
-      return "The first scoped tool call will automatically begin the executor window. executor_window_begin is an optional explicit control when visible.";
+      return "The first scoped tool call will begin a fresh executor window for the current assistant turn. Hosts should supply devspace/executor-turn for exact enforcement; otherwise call executor_window_begin once at the start of the turn to reset the advisory clock.";
     case "active":
-      return "Continue the current task normally. The task may span arbitrarily many turns.";
+      return enforcement === "advisory"
+        ? "Continue normally. This is advisory because the host supplied no exact assistant-turn identity. Call executor_window_begin once at the start of each turn to reset its clock; hard landing requires devspace/executor-turn from the host."
+        : "Continue the current task normally. The task may span arbitrarily many turns.";
     case "drain":
-      return "Finish the current local causal chain, persist a recoverable checkpoint or handoff, and do not open a new major frontier.";
+      return enforcement === "advisory"
+        ? "The advisory activity window crossed its drain threshold. DevSpace will roll it over on the next substantive tool instead of treating conversation age as turn age."
+        : "Finish the current local causal chain, persist a recoverable checkpoint or handoff, and do not open a new major frontier.";
     case "yield_required":
-      return "New mutation and new command execution are closed. Read or reconcile state, poll or interrupt an existing process, persist a recoverable handoff, then end this assistant turn. Call executor_window_yield when that tool is visible.";
+      return enforcement === "advisory"
+        ? "The advisory activity window reached its ceiling. Because no exact turn identity was supplied, DevSpace will roll into a fresh advisory window instead of blocking work. Call executor_window_begin at the start of each assistant turn to reset the advisory clock."
+        : "New mutation and new command execution are closed. Read or reconcile state, poll or interrupt an existing process, persist a recoverable handoff, then end this assistant turn. Call executor_window_yield when that tool is visible.";
     case "yielded":
-      return "This assistant turn has yielded. The next scoped tool call will begin a new executor window; executor_window_begin may do so explicitly when visible.";
+      return "This assistant turn has yielded. End the turn. A later host turn with a new devspace/executor-turn value will begin automatically; without host turn identity, call executor_window_begin at the start of the later turn.";
   }
 }
 
@@ -179,26 +220,30 @@ export class ExecutorWindowRegistry {
   begin(
     scopeId: string | undefined,
     reason: ExecutorWindowBeginReason,
+    options: ExecutorWindowBeginOptions = {},
   ): ExecutorWindowBeginResult {
     if (!this.config.enabled || !scopeId) {
       return {
         started: false,
         reason,
-        status: this.status(scopeId),
+        status: this.status(scopeId, options.turnId),
       };
     }
 
     this.cleanup();
     const key = executionScopeRef(scopeId);
+    const turnRef = options.turnId ? executorTurnRef(options.turnId) : undefined;
+    const boundarySource = options.boundarySource
+      ?? (turnRef ? "host_turn" : "explicit");
     const previous = this.entries.get(key);
     if (previous) {
-      const current = this.status(scopeId);
-      const recoveryAllowed = current.phase === "yielded"
-        || (
-          reason === "recovery_after_cutoff"
-          && current.phase === "yield_required"
-        );
-      if (!recoveryAllowed) {
+      const current = this.statusByScopeRef(key);
+      const sameHostTurn = reason === "new_turn"
+        && turnRef !== undefined
+        && previous.turnRef === turnRef;
+      const inferredCannotResetLiveWindow = boundarySource === "inferred"
+        && current.phase !== "yielded";
+      if (sameHostTurn || inferredCannotResetLiveWindow) {
         return {
           started: false,
           reason,
@@ -214,6 +259,8 @@ export class ExecutorWindowRegistry {
       generation: (previous?.generation ?? 0) + 1,
       startedAtMs: now,
       lastActivityAtMs: now,
+      turnRef,
+      boundarySource,
       previousHandoff: previous?.handoff ?? previous?.previousHandoff,
     };
     this.entries.set(key, entry);
@@ -223,84 +270,102 @@ export class ExecutorWindowRegistry {
       reason,
       previousWindowId: previous?.windowId,
       previousHandoff: entry.previousHandoff,
-      status: this.status(scopeId),
+      status: this.status(scopeId, options.turnId),
     };
   }
 
   yield(
     scopeId: string | undefined,
     handoff: ExecutorWindowHandoff,
+    turnId?: string,
   ): ExecutorWindowStatus {
-    if (!this.config.enabled || !scopeId) return this.status(scopeId);
+    if (!this.config.enabled || !scopeId) return this.status(scopeId, turnId);
 
     const key = executionScopeRef(scopeId);
     const entry = this.entries.get(key);
-    if (!entry) return this.status(scopeId);
+    const expectedTurnRef = turnId ? executorTurnRef(turnId) : undefined;
+    if (!entry || (expectedTurnRef && entry.turnRef !== expectedTurnRef)) {
+      return this.status(scopeId, turnId);
+    }
 
     const now = this.now();
     entry.lastActivityAtMs = now;
     entry.yieldedAtMs = now;
     entry.handoff = handoff;
-    return this.status(scopeId);
+    return this.status(scopeId, turnId);
   }
 
-  status(scopeId: string | undefined): ExecutorWindowStatus {
+  status(scopeId: string | undefined, turnId?: string): ExecutorWindowStatus {
     if (!this.config.enabled) {
       return {
-        schemaVersion: 1,
+        schemaVersion: 2,
         enabled: false,
         scoped: Boolean(scopeId),
         phase: "disabled",
         drainAfterMs: this.config.drainAfterMs,
         yieldAfterMs: this.config.yieldAfterMs,
-        instruction: statusInstruction("disabled"),
+        instruction: statusInstruction("disabled", undefined),
       };
     }
     if (!scopeId) {
       return {
-        schemaVersion: 1,
+        schemaVersion: 2,
         enabled: true,
         scoped: false,
         phase: "unscoped",
         drainAfterMs: this.config.drainAfterMs,
         yieldAfterMs: this.config.yieldAfterMs,
-        instruction: statusInstruction("unscoped"),
+        instruction: statusInstruction("unscoped", undefined),
       };
     }
 
-    return this.statusByScopeRef(executionScopeRef(scopeId));
+    return this.statusByScopeRef(
+      executionScopeRef(scopeId),
+      turnId ? executorTurnRef(turnId) : undefined,
+    );
   }
 
-  statusByScopeRef(scopeRef: string): ExecutorWindowStatus {
+  statusByScopeRef(
+    scopeRef: string,
+    expectedTurnRef?: string,
+  ): ExecutorWindowStatus {
     if (!/^[a-f0-9]{16}$/.test(scopeRef)) {
       throw new Error(`Invalid execution scope reference: ${scopeRef}`);
     }
     if (!this.config.enabled) {
       return {
-        schemaVersion: 1,
+        schemaVersion: 2,
         enabled: false,
         scoped: true,
         scopeRef,
         phase: "disabled",
         drainAfterMs: this.config.drainAfterMs,
         yieldAfterMs: this.config.yieldAfterMs,
-        instruction: statusInstruction("disabled"),
+        instruction: statusInstruction("disabled", undefined),
       };
     }
 
     this.cleanup();
     const key = scopeRef;
     const entry = this.entries.get(key);
-    if (!entry) {
+    if (!entry || (expectedTurnRef && entry.turnRef !== expectedTurnRef)) {
+      const boundarySource: ExecutorWindowBoundarySource = expectedTurnRef
+        ? "host_turn"
+        : "inferred";
+      const enforcement = enforcementFor(boundarySource);
       return {
-        schemaVersion: 1,
+        schemaVersion: 2,
         enabled: true,
         scoped: true,
         scopeRef: key,
+        turnRef: expectedTurnRef,
+        boundarySource,
+        enforcement,
         phase: "not_started",
         drainAfterMs: this.config.drainAfterMs,
         yieldAfterMs: this.config.yieldAfterMs,
-        instruction: statusInstruction("not_started"),
+        previousHandoff: entry?.handoff ?? entry?.previousHandoff,
+        instruction: statusInstruction("not_started", enforcement),
       };
     }
 
@@ -315,10 +380,13 @@ export class ExecutorWindowRegistry {
           : "active";
 
     return {
-      schemaVersion: 1,
+      schemaVersion: 2,
       enabled: true,
       scoped: true,
       scopeRef: key,
+      turnRef: entry.turnRef,
+      boundarySource: entry.boundarySource,
+      enforcement: enforcementFor(entry.boundarySource),
       windowId: entry.windowId,
       generation: entry.generation,
       phase,
@@ -332,7 +400,7 @@ export class ExecutorWindowRegistry {
       yieldedAt: iso(entry.yieldedAtMs),
       handoff: entry.handoff,
       previousHandoff: entry.previousHandoff,
-      instruction: statusInstruction(phase),
+      instruction: statusInstruction(phase, enforcementFor(entry.boundarySource)),
     };
   }
 
@@ -341,47 +409,85 @@ export class ExecutorWindowRegistry {
     toolName: string,
     input: unknown,
     readOnlyHint: boolean,
+    turnId?: string,
   ): ExecutorWindowGateDecision {
-    const status = this.status(scopeId);
+    const status = this.status(scopeId, turnId);
     if (!this.config.enabled || !scopeId || WINDOW_TOOL_NAMES.has(toolName)) {
       return { allowed: true, status };
     }
 
     if (status.phase === "not_started") {
-      this.begin(scopeId, "new_turn");
+      this.begin(scopeId, "new_turn", {
+        turnId,
+        boundarySource: turnId ? "host_turn" : "inferred",
+      });
       return {
         allowed: true,
-        status: this.status(scopeId),
-        transition: "auto_begin",
+        status: this.status(scopeId, turnId),
+        transition: turnId ? "auto_begin_host_turn" : "auto_begin",
       };
     }
     if (status.phase === "yielded") {
-      this.begin(scopeId, "new_turn");
+      if (status.enforcement === "hard") {
+        return {
+          allowed: false,
+          status,
+          reason: "window_yielded",
+        };
+      }
+      this.begin(scopeId, "new_turn", {
+        turnId,
+        boundarySource: turnId ? "host_turn" : "inferred",
+      });
       return {
         allowed: true,
-        status: this.status(scopeId),
+        status: this.status(scopeId, turnId),
         transition: "auto_resume_after_yield",
       };
     }
-    if (status.phase !== "yield_required") {
-      this.touch(scopeId);
-      return { allowed: true, status: this.status(scopeId) };
+    if (
+      status.enforcement === "advisory"
+      && (status.phase === "drain" || status.phase === "yield_required")
+    ) {
+      const key = executionScopeRef(scopeId);
+      const previous = this.entries.get(key);
+      const now = this.now();
+      this.entries.set(key, {
+        windowId: randomUUID(),
+        generation: (previous?.generation ?? 0) + 1,
+        startedAtMs: now,
+        lastActivityAtMs: now,
+        boundarySource: "inferred",
+        previousHandoff: previous?.handoff ?? previous?.previousHandoff,
+      });
+      return {
+        allowed: true,
+        status: this.status(scopeId),
+        transition: "auto_rollover_advisory",
+      };
     }
 
-    const safe = YIELD_SAFE_READ_TOOLS.has(toolName)
+    if (status.phase !== "yield_required") {
+      this.touch(scopeId, turnId);
+      return { allowed: true, status: this.status(scopeId, turnId) };
+    }
+
+    const safe = YIELD_SAFE_TOOLS.has(toolName)
       || (readOnlyHint && toolName !== "open_workspace")
       || (toolName === "write_stdin" && safeWriteStdin(input));
     if (!safe) {
       return { allowed: false, status, reason: "yield_required" };
     }
 
-    this.touch(scopeId);
-    return { allowed: true, status: this.status(scopeId) };
+    this.touch(scopeId, turnId);
+    return { allowed: true, status: this.status(scopeId, turnId) };
   }
 
-  touch(scopeId: string | undefined): void {
+  touch(scopeId: string | undefined, turnId?: string): void {
     if (!scopeId) return;
     const entry = this.entries.get(executionScopeRef(scopeId));
+    const expectedTurnRef = turnId ? executorTurnRef(turnId) : undefined;
+    if (expectedTurnRef && entry?.turnRef !== expectedTurnRef) return;
     if (entry) entry.lastActivityAtMs = this.now();
   }
 
@@ -413,15 +519,22 @@ export function executorWindowFooter(status: ExecutorWindowStatus): string {
     return "[executor-window] NOT_STARTED — the first scoped tool call will begin the window automatically.";
   }
   if (status.phase === "yielded") {
-    return "[executor-window] YIELDED — end this assistant turn. The next scoped tool call will begin a new window.";
+    return "[executor-window] YIELDED — end this assistant turn. Resume only in a new host turn or after a later explicit executor_window_begin.";
   }
 
   const timing = `elapsed ${formatDuration(status.elapsedMs)} · drain in ${formatDuration(status.drainInMs)} · yield in ${formatDuration(status.yieldInMs)}`;
+  const advisory = status.enforcement === "advisory" ? " · advisory fallback" : "";
   if (status.phase === "active") {
-    return `[executor-window] ACTIVE · ${timing}`;
+    return `[executor-window] ACTIVE${advisory} · ${timing}`;
   }
   if (status.phase === "drain") {
+    if (status.enforcement === "advisory") {
+      return `[executor-window] ADVISORY_DRAIN · ${timing}\nNo exact turn identity was supplied; the next substantive tool call will roll into a fresh advisory window instead of blocking work.`;
+    }
     return `[executor-window] DRAIN · ${timing}\nFinish the current local causal chain, persist a recoverable handoff/checkpoint, and do not open a new major frontier or long-running command.`;
+  }
+  if (status.enforcement === "advisory") {
+    return `[executor-window] ADVISORY_ROLLOVER_DUE · ${timing}\nNo exact turn identity was supplied; the next substantive tool call will start a fresh advisory window instead of blocking work.`;
   }
   return `[executor-window] YIELD_REQUIRED · ${timing}\nNew mutation and new commands are closed. Read/reconcile, poll or interrupt an existing process, persist a recoverable handoff/checkpoint, then end this assistant turn. Call executor_window_yield when available.`;
 }

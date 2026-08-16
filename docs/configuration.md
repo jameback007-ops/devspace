@@ -52,18 +52,28 @@ DEVSPACE_EXECUTOR_WINDOW_YIELD_MINUTES=100 \
 npx @waishnav/devspace serve
 ```
 
-The window starts automatically on the first scoped tool call in a new MCP
-session. Hosts that expose dynamic tool updates may also use
-`executor_window_begin` as an explicit start or post-cutoff recovery control;
-repeated begin calls cannot reset an active window. Normal tool results include
-a compact window status. After the drain threshold, the model should finish the
-current local causal chain, persist a recoverable checkpoint or handoff, and
-avoid opening a new major frontier. At the yield threshold, DevSpace blocks new
-mutation and new command execution while still allowing read/reconciliation
-tools and polling or interrupting an existing process. The model records a
-bounded advisory handoff with `executor_window_yield` when that tool is visible,
-or otherwise persists the same state through the product-native checkpoint or
-continuation path and ends the turn.
+Conversation identity and assistant-turn identity are separate. A host that can
+identify one assistant turn should send the same `devspace/executor-turn`
+metadata value on every tool call in that turn and a different value in the
+next turn. Only those exact host-bound windows may enforce a hard landing.
+
+When a host does not expose turn identity, call
+`executor_window_begin(reason=new_turn)` exactly once as the first tool call of
+every assistant turn. That explicit call resets the clock even if the previous
+conversation window remains active or draining. Because DevSpace cannot prove
+where the host ended a turn, explicit and automatic fallback windows remain
+advisory: after the drain threshold they warn and roll into a fresh advisory
+window instead of blocking a later turn. Conversation age is never treated as
+turn age.
+
+Normal tool results include a compact window status. For an exact host-bound
+window, the model should finish its current local causal chain at DRAIN, persist
+a recoverable checkpoint or handoff, and avoid opening a new major frontier. At
+YIELD_REQUIRED, DevSpace blocks new mutation and command execution while still
+allowing read/reconciliation tools, bounded mailbox send/inbox/receipt
+operations, and polling or interrupting an existing process.
+`executor_window_yield` records a
+bounded advisory handoff before the assistant turn ends.
 
 The window is runtime scheduling metadata only. It is not task, checkpoint,
 memory, release, writer, or effect authority. The advisory handoff does not
@@ -88,9 +98,10 @@ capturing a transcript. See
 and authority boundaries.
 
 The metadata-only audit is enabled by default. It persists tool lifecycle,
-workspace links, process state, digests, timing, and redacted errors in the
-existing owner-only SQLite database. It never stores prompts, private reasoning,
-tool output, raw commands, patch bodies, credentials, or native file handles.
+workspace links, process state, digests, timing, and normalized error categories
+in the existing owner-only SQLite database. It never stores arbitrary exception
+messages, prompts, private reasoning, tool output, raw commands, patch bodies,
+credentials, or native file handles.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
@@ -98,6 +109,28 @@ tool output, raw commands, patch bodies, credentials, or native file handles.
 | `DEVSPACE_EXECUTION_OBSERVABILITY_RETENTION_HOURS` | `168` | Retain audit events for seven days. Maximum 90 days. |
 | `DEVSPACE_EXECUTION_OBSERVABILITY_MAX_EVENTS_PER_SCOPE` | `1000` | Maximum retained events per execution scope. |
 | `DEVSPACE_EXECUTION_OBSERVABILITY_IDLE_MINUTES` | `5` | Classify a non-running scope as idle after this interval. |
+
+## Execution-Scope Messaging
+
+The execution mailbox is enabled by default. It provides durable target-bound
+messages and monotonic observed, acknowledged, and acted receipts between known
+execution scopes. See
+[Execution-Scope Messaging](execution-scope-messaging.md) for delivery,
+security, and authority semantics.
+
+Messages reach WebChat at the target's next MCP boundary. A pure `write_stdin`
+poll also wakes immediately when new target-scope mail arrives; the process is
+not interrupted, and the message remains unread until the target calls
+`execution_scope_message_inbox`.
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `DEVSPACE_EXECUTION_MAILBOX` | `1` | Register durable execution-scope messaging tools and pending notices. |
+| `DEVSPACE_EXECUTION_MAILBOX_DEFAULT_TTL_HOURS` | `168` | Default seven-day message lifetime. |
+| `DEVSPACE_EXECUTION_MAILBOX_MAX_TTL_HOURS` | `720` | Maximum caller-selected lifetime. |
+| `DEVSPACE_EXECUTION_MAILBOX_TERMINAL_RETENTION_HOURS` | `168` | Retain acted or expired messages and receipts for later status review. |
+| `DEVSPACE_EXECUTION_MAILBOX_MAX_PENDING_PER_SCOPE` | `500` | Bound live unacted messages for one target scope. |
+| `DEVSPACE_EXECUTION_MAILBOX_MAX_BODY_CHARACTERS` | `12000` | Maximum persisted body length for one message. |
 
 ## Native Artifact Download
 
@@ -167,10 +200,10 @@ its fixed short tool names regardless of `DEVSPACE_TOOL_NAMING`.
 Codex-mode commands run without a PTY by default. Set `tty: true` on
 `exec_command` for interactive terminal programs. PTY support uses the optional
 `node-pty` dependency; `write_stdin` can send input, poll output, and resize PTY
-sessions. A pure `write_stdin` poll waits for new output or process completion
-and returns immediately when either occurs. Its default ceiling is 90 seconds
-and its maximum is 110 seconds. Calls that send input or resize a PTY retain the
-short interactive wait and 30-second maximum.
+sessions. A pure `write_stdin` poll waits for new output, process completion, or
+new target-scope mailbox activity and returns immediately when any occurs. Its
+default ceiling is 90 seconds and its maximum is 110 seconds. Calls that send
+input or resize a PTY retain the short interactive wait and 30-second maximum.
 
 ## Widgets
 

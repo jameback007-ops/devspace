@@ -17,6 +17,11 @@ export function openAiConversationScopeId(
 
 export type ExecutionScopeAdapter = "devspace" | "openai";
 
+export interface ExecutorTurnIdentity {
+  turnId: string;
+  turnRef: string;
+}
+
 export interface ExecutionScopeIdentity {
   /** Raw opaque host scope. Execution observability must not persist this value. */
   scopeId: string;
@@ -33,6 +38,24 @@ export function executionScopeDigestSha256(scopeId: string): string {
 
 export function executionScopeRef(scopeId: string): string {
   return executionScopeDigestSha256(scopeId).slice(0, 16);
+}
+
+export function executorTurnRef(turnId: string): string {
+  return createHash("sha256").update(turnId).digest("hex").slice(0, 16);
+}
+
+/**
+ * Optional provider-neutral assistant-turn identity. Hosts that can expose a
+ * stable value for all tool calls in one assistant turn should send this key.
+ * Conversation identity must never be reused as a turn identity.
+ */
+export function executorTurnIdentity(
+  meta: unknown,
+): ExecutorTurnIdentity | undefined {
+  const turnId = metadataString(meta, "devspace/executor-turn");
+  return turnId
+    ? { turnId, turnRef: executorTurnRef(turnId) }
+    : undefined;
 }
 
 /**
