@@ -192,6 +192,7 @@ function toolWidgetDescriptorMeta(
 
 const toolNames = {
   openWorkspace: "open_workspace",
+  skillSearch: "skill_search",
   read: "read",
   write: "write",
   edit: "edit",
@@ -379,7 +380,7 @@ function serverInstructions(config: ServerConfig): string {
     : `Prefer ${toolNames.read}, ${toolNames.grep}, ${toolNames.glob}, and ${toolNames.ls} for file inspection. `;
 
   const skills = config.skillsEnabled
-    ? `When ${toolNames.openWorkspace} returns available skills and a task matches a skill, use ${toolNames.read} to read that skill's path before proceeding. Skill paths may be outside the workspace, but ${toolNames.read} only permits advertised SKILL.md files and files under already-loaded skill directories. `
+    ? `When ${toolNames.openWorkspace} returns a relevant skill and the task matches it, use ${toolNames.read} to read that skill's path before proceeding. Use ${toolNames.skillSearch} only when a specialized project or host capability is needed but was not listed automatically. Skill paths may be outside the workspace, but ${toolNames.read} only permits skills advertised by ${toolNames.openWorkspace} or ${toolNames.skillSearch}, plus files under a skill directory after its SKILL.md has been read. `
     : "";
 
   const agentsMd = `Follow instructions returned by ${toolNames.openWorkspace}. Before working under a path listed in availableAgentsFiles, use ${toolNames.read} to inspect that instruction file and follow it. `;
@@ -1585,7 +1586,7 @@ export function createMcpServer(
       const loadedAgentsFiles = includeBootstrapContext ? cardAgentsFiles : [];
       const availableAgentsFileOutputs = includeBootstrapContext ? cardAvailableAgentsFiles : [];
       const cardInstruction = config.skillsEnabled
-        ? "Use this workspaceId for subsequent work in this project. Keep reusing it while working in this project. Follow loaded agentsFiles instructions. Before working under a path listed in availableAgentsFiles, read that instruction file. When a task matches an available skill in skills, read its path before proceeding."
+        ? "Use this workspaceId for subsequent work in this project. Keep reusing it while working in this project. Follow loaded agentsFiles instructions. Before working under a path listed in availableAgentsFiles, read that instruction file. When a task matches a listed skill, read its path before proceeding. Use skill_search only when a specialized project or host capability is needed but was not listed automatically."
         : "Use this workspaceId for subsequent work in this project. Keep reusing it while working in this project. Follow loaded agentsFiles instructions. Before working under a path listed in availableAgentsFiles, read that instruction file.";
       const instruction = workspaceReused
         ? [
@@ -1688,6 +1689,81 @@ export function createMcpServer(
     },
   );
 
+  if (config.skillsEnabled) {
+    registerAppTool(
+      server,
+      toolNames.skillSearch,
+      {
+        title: "Find workspace skills",
+        description:
+          "Search the metadata-only skill catalog for one open workspace when a specialized project or host procedure is needed but was not listed by open_workspace. Project-local and context-matched skills are advertised automatically; host-global niche skills remain on demand. A result authorizes reading that exact SKILL.md but does not load or execute it.",
+        inputSchema: {
+          workspaceId: z
+            .string()
+            .describe(workspaceIdDescription),
+          query: z
+            .string()
+            .min(2)
+            .max(500)
+            .describe(
+              "Capability or procedure to find, such as 'Codex thread relay' or 'AOQ execution accelerator'.",
+            ),
+          limit: z
+            .number()
+            .int()
+            .min(1)
+            .max(20)
+            .optional()
+            .describe("Maximum matches. Defaults to 10."),
+        },
+        outputSchema: resultOutputSchema({
+          workspaceId: z.string(),
+          skills: z.array(workspaceSkillOutputSchema),
+          instruction: z.string(),
+        }),
+        ...toolWidgetDescriptorMeta(config, "read"),
+        annotations: {
+          readOnlyHint: true,
+          destructiveHint: false,
+          idempotentHint: true,
+          openWorldHint: false,
+        },
+      },
+      async ({ workspaceId, query, limit }) => {
+        const startedAt = performance.now();
+        const matches = workspaces.searchSkills(workspaceId, query, limit ?? 10);
+        const skills = matches.map((skill) => ({
+          name: skill.name,
+          description: skill.description,
+          path: formatPathForPrompt(skill.filePath),
+        }));
+        const instruction = skills.length > 0
+          ? "Read a returned SKILL.md only when it matches the current task. Reading it activates access to referenced files under that skill directory."
+          : "No matching skill was found. Continue with normal workspace tools or refine the capability query; do not load unrelated skills.";
+        const result = skills.length > 0
+          ? `Matching skills: ${skills.map((skill) => skill.name).join(", ")}`
+          : "No matching skills found.";
+
+        logToolCall(config, {
+          tool: toolNames.skillSearch,
+          workspaceId,
+          success: true,
+          durationMs: Math.round(performance.now() - startedAt),
+        });
+
+        return {
+          content: [{ type: "text" as const, text: `${result}\n${instruction}` }],
+          structuredContent: {
+            result,
+            workspaceId,
+            skills,
+            instruction,
+          },
+        };
+      },
+    );
+  }
+
   registerAppTool(
     server,
     toolNames.read,
@@ -1698,7 +1774,7 @@ export function createMcpServer(
           "Read a file in a workspace. Use this for file inspection instead of shell commands like cat or sed.",
           "Use this tool to inspect relevant AGENTS.md or CLAUDE.md files listed by open_workspace before working in nested directories.",
           config.skillsEnabled
-            ? "If available skills were returned and a task matches one, read that skill's path before proceeding. Skill paths may be outside the workspace; only advertised SKILL.md files and files under already-loaded skill directories are readable."
+            ? "If a skill returned by open_workspace or skill_search matches the task, read that skill's path before proceeding. Skill paths may be outside the workspace; only those advertised SKILL.md files and files under already-loaded skill directories are readable."
             : "",
         ]
           .filter(Boolean)
@@ -1711,7 +1787,7 @@ export function createMcpServer(
           .string()
           .describe(
             config.skillsEnabled
-              ? "File path to read, relative to the workspace root. May also be an advertised skill path from open_workspace skills."
+              ? "File path to read, relative to the workspace root. May also be a skill path advertised by open_workspace or skill_search."
               : "File path to read, relative to the workspace root.",
           ),
         offset: z

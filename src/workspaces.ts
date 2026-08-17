@@ -20,8 +20,10 @@ import {
   loadWorkspaceSkills,
   markSkillActivated,
   resolveSkillReadPath,
+  searchWorkspaceSkills,
   type LoadedSkills,
   type SkillReadResolution,
+  type WorkspaceSkill,
 } from "./skills.js";
 import {
   loadLocalAgentProfiles,
@@ -53,6 +55,7 @@ export interface Workspace {
   sourceRoot?: string;
   worktree?: WorkspaceWorktree;
   skills: LoadedSkills["skills"];
+  skillCatalog: LoadedSkills["catalog"];
   skillDiagnostics: LoadedSkills["diagnostics"];
   agentProfiles: LocalAgentProfile[];
   activatedSkillDirs: Set<string>;
@@ -320,6 +323,22 @@ export class WorkspaceRegistry {
     }
   }
 
+  searchSkills(
+    workspaceId: string,
+    query: string,
+    limit = 10,
+  ): WorkspaceSkill[] {
+    const workspace = this.getWorkspace(workspaceId);
+    const matches = searchWorkspaceSkills(workspace.skillCatalog, query, limit);
+    const visiblePaths = new Set(workspace.skills.map((skill) => skill.filePath));
+    for (const skill of matches) {
+      if (visiblePaths.has(skill.filePath)) continue;
+      workspace.skills.push(skill);
+      visiblePaths.add(skill.filePath);
+    }
+    return matches;
+  }
+
   resolveWorkingDirectory(workspace: Workspace, workingDirectory: string | undefined): string {
     const directory = workingDirectory ? this.resolvePath(workspace, workingDirectory) : workspace.root;
     return assertAllowedPath(directory, [workspace.root]);
@@ -389,10 +408,13 @@ export class WorkspaceRegistry {
     };
   }
 
-  private loadSkillsForWorkspace(root: string): Pick<Workspace, "skills" | "skillDiagnostics"> {
+  private loadSkillsForWorkspace(
+    root: string,
+  ): Pick<Workspace, "skills" | "skillCatalog" | "skillDiagnostics"> {
     const result = loadWorkspaceSkills(this.config, root);
     return {
       skills: result.skills,
+      skillCatalog: result.catalog,
       skillDiagnostics: result.diagnostics,
     };
   }

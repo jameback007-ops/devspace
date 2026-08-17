@@ -203,6 +203,34 @@ It also keeps compatibility with:
 - `DEVSPACE_AGENT_DIR/skills`, defaulting to `~/.codex/skills`
 - additional paths from `DEVSPACE_SKILL_PATHS`
 
+Discovery and automatic exposure are separate. `open_workspace` advertises:
+
+- project-local skills under the opened workspace;
+- bundled feature skills such as `subagent-delegation` when enabled;
+- skills from explicit `DEVSPACE_SKILL_PATHS`;
+- host-global skills whose optional `x-devspace` metadata selects `auto` or
+  whose `contextual` workspace markers all exist.
+
+Other host-global skills remain in the metadata-only catalog and are available
+through `skill_search`. This keeps niche VPS or provider procedures out of every
+workspace context without making them undiscoverable. A search result authorizes
+reading that exact `SKILL.md`; DevSpace does not load the file automatically.
+
+Optional frontmatter extension:
+
+```yaml
+x-devspace:
+  exposure: contextual # auto | contextual | on-demand
+  workspace-markers:
+    - package.json
+    - src/server.ts
+```
+
+Markers are workspace-relative and all must exist. A skill with markers and no
+explicit exposure is treated as contextual. Host-global skills with no
+extension default to on-demand; project-local and explicitly configured skills
+default to auto.
+
 When Subagents are enabled, DevSpace discovers agent profiles
 from:
 

@@ -186,13 +186,24 @@ before use.
 
 Legacy project paths such as `.pi/skills` can be added through `DEVSPACE_SKILL_PATHS` when needed.
 
-When `open_workspace` returns matching skills, the model should read the
-advertised `SKILL.md` before following that skill.
+`open_workspace` advertises project-local, bundled, explicitly configured, and
+workspace-contextual skills. Host-global niche skills are kept out of the
+default context and remain discoverable with `skill_search`. Use that tool only
+when the task needs a specialized procedure that was not listed automatically.
+
+When either tool returns a matching skill, the model should read the advertised
+`SKILL.md` before following it. Search returns metadata only; it does not inject
+the skill body.
 
 Skill paths may be outside the workspace. DevSpace only permits reading:
 
-- advertised `SKILL.md` files
+- `SKILL.md` files advertised by `open_workspace` or `skill_search`
 - files under a skill directory after that skill's `SKILL.md` has been read
+
+Host-global skills default to on-demand. Project-local and explicitly
+configured skills default to automatic exposure. A skill can opt into
+workspace-contextual exposure with `x-devspace.workspace-markers` frontmatter;
+all markers must exist relative to the workspace.
 
 Set `DEVSPACE_SKILLS=0` to hide skills from workspace output. Set
 `DEVSPACE_SUBAGENTS=1` to expose the experimental subagent catalog and
@@ -217,6 +228,7 @@ starting an unrelated provider session. See
 DevSpace exposes these tool names:
 
 - `open_workspace`
+- `skill_search` when skills are enabled
 - `read`
 - `write`
 - `edit`
@@ -232,6 +244,7 @@ The experimental Codex-style surface is enabled with
 `DEVSPACE_TOOL_MODE=codex`. It exposes:
 
 - `open_workspace`
+- `skill_search` when skills are enabled
 - `read`
 - `apply_patch`
 - `exec_command`

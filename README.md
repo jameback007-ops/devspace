@@ -142,7 +142,7 @@ DevSpace gives ChatGPT tools to:
 - keep local subagents on fail-closed subscription auth unless PAYG is explicitly enabled
 - enqueue serialized follow-up turns into DevSpace-managed Codex, Claude, OpenCode, and Pi sessions
 - follow project instructions from `AGENTS.md` and `CLAUDE.md`
-- discover local agent skills from your skill folders
+- advertise relevant project/contextual skills and search niche host skills on demand
 - show tool cards and optional change summaries in ChatGPT Apps-compatible hosts
 
 ## Mental Model

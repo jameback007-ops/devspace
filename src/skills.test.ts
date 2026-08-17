@@ -8,6 +8,7 @@ import {
   formatPathForPrompt,
   loadWorkspaceSkills,
   resolveSkillReadPath,
+  searchWorkspaceSkills,
 } from "./skills.js";
 
 const root = await mkdtemp(join(tmpdir(), "devspace-skills-test-"));
@@ -26,6 +27,7 @@ try {
   const globalClaudeSkills = join(root, ".claude", "skills");
   const projectClaudeSkills = join(projectRoot, ".claude", "skills");
   await mkdir(join(globalAgentsSkills, "agent-global-skill"), { recursive: true });
+  await mkdir(join(globalAgentsSkills, "contextual-skill"), { recursive: true });
   await mkdir(join(projectAgentsSkills, "agent-project-skill"), { recursive: true });
   await mkdir(join(globalClaudeSkills, "claude-global-skill"), { recursive: true });
   await mkdir(join(projectClaudeSkills, "claude-project-skill"), { recursive: true });
@@ -36,6 +38,7 @@ try {
   await mkdir(join(explicitSkills, "disabled"), { recursive: true });
   await mkdir(join(explicitSkills, "subagent-delegation"), { recursive: true });
   await mkdir(join(devspaceSkills, "devspace-local-skill"), { recursive: true });
+  await writeFile(join(projectRoot, "project.marker"), "context\n");
 
   await writeFile(
     join(globalAgentsSkills, "agent-global-skill", "SKILL.md"),
@@ -46,6 +49,21 @@ try {
       "---",
       "",
       "# Agent Global Skill",
+    ].join("\n"),
+  );
+  await writeFile(
+    join(globalAgentsSkills, "contextual-skill", "SKILL.md"),
+    [
+      "---",
+      "name: contextual-skill",
+      "description: Contextual host skill description.",
+      "x-devspace:",
+      "  exposure: contextual",
+      "  workspace-markers:",
+      "    - project.marker",
+      "---",
+      "",
+      "# Contextual Skill",
     ].join("\n"),
   );
   await writeFile(
@@ -178,20 +196,72 @@ try {
     PORT: "1",
   });
   const loaded = loadWorkspaceSkills(config, projectRoot);
-  assert.equal(loaded.skills.some((skill) => skill.name === "agent-global-skill"), true);
+  assert.equal(
+    loaded.catalog.some((skill) => skill.name === "agent-global-skill"),
+    true,
+  );
+  assert.equal(
+    loaded.skills.some((skill) => skill.name === "agent-global-skill"),
+    false,
+  );
+  assert.equal(
+    loaded.skills.some((skill) => skill.name === "contextual-skill"),
+    true,
+  );
   assert.equal(loaded.skills.some((skill) => skill.name === "agent-project-skill"), true);
   assert.equal(loaded.skills.some((skill) => skill.name === "claude-global-skill"), true);
   assert.equal(loaded.skills.some((skill) => skill.name === "claude-project-skill"), true);
   assert.equal(loaded.skills.some((skill) => skill.name === "project-skill"), false);
-  assert.equal(loaded.skills.some((skill) => skill.name === "devspace-local-skill"), true);
+  assert.equal(
+    loaded.catalog.some((skill) => skill.name === "devspace-local-skill"),
+    true,
+  );
+  assert.equal(
+    loaded.skills.some((skill) => skill.name === "devspace-local-skill"),
+    false,
+  );
   assert.equal(loaded.skills.some((skill) => skill.name === "subagent-delegation"), false);
-  assert.equal(loaded.skills.filter((skill) => skill.name === "duplicate-skill").length, 1);
-  assert.equal(loaded.skills.some((skill) => skill.name === "hidden-skill"), true);
+  assert.equal(
+    loaded.catalog.filter((skill) => skill.name === "duplicate-skill").length,
+    1,
+  );
+  assert.equal(
+    loaded.catalog.some((skill) => skill.name === "hidden-skill"),
+    true,
+  );
+  assert.equal(
+    loaded.skills.some((skill) => skill.name === "hidden-skill"),
+    false,
+  );
   assert.equal(loaded.diagnostics.some((diagnostic) => diagnostic.type === "collision"), true);
   assert.equal(
     loaded.diagnostics.some(
       (diagnostic) => diagnostic.collision?.name === "subagent-delegation",
     ),
+    false,
+  );
+  const hostMatches = searchWorkspaceSkills(
+    loaded.catalog,
+    "how to use agent global skill",
+  );
+  assert.deepEqual(hostMatches.map((skill) => skill.name), ["agent-global-skill"]);
+  const hiddenHostSkill = loaded.catalog.find(
+    (skill) => skill.name === "agent-global-skill",
+  );
+  assert.ok(hiddenHostSkill);
+  assert.equal(
+    resolveSkillReadPath(loaded.skills, new Set(), hiddenHostSkill.filePath),
+    undefined,
+  );
+  const unmatchedProject = join(root, "unmatched-project");
+  await mkdir(unmatchedProject, { recursive: true });
+  const unmatched = loadWorkspaceSkills(config, unmatchedProject);
+  assert.equal(
+    unmatched.catalog.some((skill) => skill.name === "contextual-skill"),
+    true,
+  );
+  assert.equal(
+    unmatched.skills.some((skill) => skill.name === "contextual-skill"),
     false,
   );
 

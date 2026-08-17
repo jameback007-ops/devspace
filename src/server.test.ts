@@ -85,6 +85,77 @@ test("codex write_stdin exposes the output-aware long-poll contract", async (t) 
   assert.match(String(yieldTimeMs?.description), /bounded to 30000/i);
 });
 
+test("workspace skills are contextual by default and host skills stay searchable", async (t) => {
+  const context = await fixture(t, {
+    toolMode: "codex",
+    skillFixtures: true,
+  });
+  const opened = await callOpen(context.client, context.project, "skill-scope");
+  const workspaceId = String(structuredContent(opened).workspaceId);
+  const initialSkills = structuredContent(opened).skills as
+    | Array<Record<string, unknown>>
+    | undefined;
+  assert.equal(
+    initialSkills?.some((skill) => skill.name === "project-helper"),
+    true,
+  );
+  assert.equal(
+    initialSkills?.some((skill) => skill.name === "host-specialist"),
+    false,
+  );
+  assert.ok(context.hostSkillPath);
+
+  const blockedRead = await context.client.callTool({
+    name: "read",
+    arguments: { workspaceId, path: context.hostSkillPath },
+    _meta: { "openai/session": "skill-scope" },
+  } as Parameters<Client["callTool"]>[0]);
+  assert.equal(blockedRead.isError, true);
+
+  const tools = await context.client.listTools();
+  const searchTool = tools.tools.find((tool) => tool.name === "skill_search");
+  assert.ok(searchTool);
+  assert.equal(searchTool.annotations?.readOnlyHint, true);
+
+  const searched = await context.client.callTool({
+    name: "skill_search",
+    arguments: {
+      workspaceId,
+      query: "host specialist procedure",
+    },
+    _meta: { "openai/session": "skill-scope" },
+  } as Parameters<Client["callTool"]>[0]);
+  const searchData = structuredContent(searched);
+  const searchedSkills = searchData.skills as Array<Record<string, unknown>>;
+  assert.deepEqual(
+    searchedSkills.map((skill) => skill.name),
+    ["host-specialist"],
+  );
+
+  const loaded = await context.client.callTool({
+    name: "read",
+    arguments: {
+      workspaceId,
+      path: String(searchedSkills[0]?.path),
+    },
+    _meta: { "openai/session": "skill-scope" },
+  } as Parameters<Client["callTool"]>[0]);
+  assert.equal(loaded.isError, undefined);
+  assert.match(responseText(loaded), /Host Specialist/);
+});
+
+test("skill search is absent when skills are disabled", async (t) => {
+  const context = await fixture(t, {
+    toolMode: "codex",
+    skillsEnabled: false,
+  });
+  const tools = await context.client.listTools();
+  assert.equal(
+    tools.tools.some((tool) => tool.name === "skill_search"),
+    false,
+  );
+});
+
 test("one host scope can inspect another through bounded execution-scope tools", async (t) => {
   const context = await fixture(t, { toolMode: "codex" });
   const workerSession = "worker-private-session-id";
@@ -734,6 +805,7 @@ interface ServerFixture {
   project: string;
   config: ServerConfig;
   stateDir: string;
+  hostSkillPath?: string;
   localAgentCoordinator?: LocalAgentCoordinator;
   close: () => Promise<void>;
 }
@@ -745,6 +817,8 @@ async function fixture(
     toolMode?: ServerConfig["toolMode"];
     useDefaultExecutionScopes?: boolean;
     subagents?: boolean;
+    skillFixtures?: boolean;
+    skillsEnabled?: boolean;
     localAgentCoordinatorOptions?: LocalAgentCoordinatorOptions;
   } = {},
 ): Promise<ServerFixture> {
@@ -765,6 +839,36 @@ async function fixture(
     "---",
     "Review changes.",
   ].join("\n"));
+  let hostSkillPath: string | undefined;
+  if (options.skillFixtures) {
+    const projectSkillDir = join(project, ".agents", "skills", "project-helper");
+    const hostSkillDir = join(agentDir, "skills", "host-specialist");
+    await mkdir(projectSkillDir, { recursive: true });
+    await mkdir(hostSkillDir, { recursive: true });
+    await writeFile(
+      join(projectSkillDir, "SKILL.md"),
+      [
+        "---",
+        "name: project-helper",
+        "description: Project-local helper procedure.",
+        "---",
+        "",
+        "# Project Helper",
+      ].join("\n"),
+    );
+    hostSkillPath = join(hostSkillDir, "SKILL.md");
+    await writeFile(
+      hostSkillPath,
+      [
+        "---",
+        "name: host-specialist",
+        "description: Host specialist procedure for a rare capability.",
+        "---",
+        "",
+        "# Host Specialist",
+      ].join("\n"),
+    );
+  }
 
   if (options.git) {
     await writeFile(join(project, "README.md"), "hello\n");
@@ -783,6 +887,7 @@ async function fixture(
     DEVSPACE_AGENT_DIR: agentDir,
     DEVSPACE_WIDGETS: "full",
     DEVSPACE_TOOL_MODE: options.toolMode ?? "full",
+    DEVSPACE_SKILLS: options.skillsEnabled === false ? "0" : "1",
     DEVSPACE_SUBAGENTS: options.subagents ? "1" : "0",
     DEVSPACE_OAUTH_OWNER_TOKEN: "test-owner-token-that-is-long-enough",
     PORT: "1",
@@ -847,7 +952,15 @@ async function fixture(
     await rm(root, { recursive: true, force: true });
   });
 
-  return { client, project, config, stateDir, localAgentCoordinator, close };
+  return {
+    client,
+    project,
+    config,
+    stateDir,
+    hostSkillPath,
+    localAgentCoordinator,
+    close,
+  };
 }
 
 async function git(cwd: string, args: string[]): Promise<void> {

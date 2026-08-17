@@ -220,6 +220,25 @@ It also checks compatibility and custom paths:
 - `DEVSPACE_AGENT_DIR/skills`, defaulting to `~/.codex/skills`
 - additional paths from `DEVSPACE_SKILL_PATHS`
 
+Host-global discovery does not mean automatic advertisement. Project-local,
+bundled, explicitly configured, and context-matched skills appear in
+`open_workspace`; other host-global skills are intentionally on-demand. Search
+for a missing specialized procedure with `skill_search` before assuming it was
+not discovered.
+
+A host skill can control exposure with:
+
+```yaml
+x-devspace:
+  exposure: contextual # auto | contextual | on-demand
+  workspace-markers:
+    - path/that/must/exist
+```
+
+All markers are relative to the opened workspace. Invalid or nonmatching
+markers leave a contextual skill in the searchable catalog rather than exposing
+it globally.
+
 When `DEVSPACE_SUBAGENTS=1`, DevSpace loads agent profiles from
 `~/.devspace/agents/*.md` and project `.devspace/agents/*.md`, then exposes a
 compact profile catalog through `open_workspace`. The bundled
@@ -244,8 +263,8 @@ Copy or adapt them into one of the active profile directories before use.
 
 Legacy project paths such as `.pi/skills` can be added through `DEVSPACE_SKILL_PATHS` when needed.
 
-If a skill appears in `open_workspace`, the model must read that skill's
-`SKILL.md` before reading other files inside the skill directory.
+If a skill appears in `open_workspace` or `skill_search`, the model must read
+that skill's `SKILL.md` before reading other files inside the skill directory.
 
 ## Review Card Does Not Appear
 
