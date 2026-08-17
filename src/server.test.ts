@@ -1181,6 +1181,60 @@ test("new worktrees always receive a fresh workspace and complete worktree conte
   assert.equal(structuredContent(checkoutAgain).agentsFiles, undefined);
 });
 
+test("workspace lifecycle tools close managed worktrees and expose digest-bound GC", async (t) => {
+  const context = await fixture(t, { git: true, toolMode: "codex" });
+  const tools = await context.client.listTools();
+  for (const name of [
+    "workspace_list",
+    "workspace_status",
+    "workspace_close",
+    "workspace_gc_preview",
+    "workspace_gc_execute",
+  ]) {
+    assert.ok(tools.tools.some((tool) => tool.name === name), `${name} must be registered`);
+  }
+
+  const opened = await callOpen(context.client, context.project, "workspace-lifecycle", "worktree");
+  const workspaceId = String(structuredContent(opened).workspaceId);
+
+  const status = await context.client.callTool({
+    name: "workspace_status",
+    arguments: { workspaceId },
+    _meta: { "openai/session": "workspace-lifecycle" },
+  } as Parameters<Client["callTool"]>[0]);
+  const statusData = structuredData(status);
+  assert.equal(statusData.exists, true);
+  assert.equal(statusData.workspace.id, workspaceId);
+  assert.equal(statusData.git.readable, true);
+  assert.equal(statusData.git.dirty, false);
+
+  const closed = await context.client.callTool({
+    name: "workspace_close",
+    arguments: { workspaceId },
+    _meta: { "openai/session": "workspace-lifecycle" },
+  } as Parameters<Client["callTool"]>[0]);
+  const closedData = structuredData(closed);
+  assert.equal(closedData.closed, true);
+  assert.equal(closedData.removed, true);
+  assert.equal(closedData.workspace.status, "closed");
+
+  const closedStatus = await context.client.callTool({
+    name: "workspace_status",
+    arguments: { workspaceId },
+    _meta: { "openai/session": "workspace-lifecycle" },
+  } as Parameters<Client["callTool"]>[0]);
+  assert.equal(structuredData(closedStatus).exists, false);
+
+  const preview = await context.client.callTool({
+    name: "workspace_gc_preview",
+    arguments: { olderThanHours: 1, capsuleProtectionHours: 1 },
+    _meta: { "openai/session": "workspace-lifecycle" },
+  } as Parameters<Client["callTool"]>[0]);
+  const previewData = structuredData(preview);
+  assert.match(String(previewData.planIdSha256), /^[a-f0-9]{64}$/);
+  assert.equal(previewData.summary.directoryCount, 0);
+});
+
 test("checkout opened after a worktree receives its own complete context", async (t) => {
   const context = await fixture(t, { git: true });
   const worktree = await callOpen(context.client, context.project, "chat-1", "worktree");

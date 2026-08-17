@@ -38,6 +38,53 @@ npx @waishnav/devspace config set publicBaseUrl https://devspace.example.com
 | `DEVSPACE_OAUTH_OWNER_TOKEN` | Owner password for OAuth approval. Must be at least 16 characters. |
 | `DEVSPACE_WORKTREE_ROOT` | Directory for managed Git worktrees. Defaults to `~/.devspace/worktrees`. |
 | `DEVSPACE_STATE_DIR` | Directory for SQLite state. Defaults to `~/.local/share/devspace`. |
+| `DEVSPACE_COMMAND_ENV_PASSTHROUGH` | Comma- or whitespace-separated names of additional service environment variables that command processes may inherit. The control variable itself is never inherited. |
+
+## Command Environment Boundary
+
+Workspace commands do not inherit the DevSpace server's complete environment.
+They receive a bounded operating environment (`PATH`, identity/home, locale,
+temporary-directory, certificate, and platform variables), deterministic
+terminal settings, and the current workspace/execution-scope identifiers.
+Server credentials such as the OAuth owner token, provider keys, tunnel
+credentials, deployment attestations, and unrelated service variables are not
+passed to arbitrary commands.
+
+When a toolchain needs another service-level variable, name it explicitly in
+`DEVSPACE_COMMAND_ENV_PASSTHROUGH`. Values remain in the service environment;
+the configuration contains names only. Invalid names fail closed, duplicates
+are ignored, and `DEVSPACE_COMMAND_ENV_PASSTHROUGH` cannot pass itself.
+
+```bash
+DEVSPACE_COMMAND_ENV_PASSTHROUGH="UV_CACHE_DIR PANTS_LOCAL_STORE_DIR PANTS_NAMED_CACHES_DIR PANTS_PANTSD PANTS_WATCH_FILESYSTEM"
+```
+
+This boundary reduces accidental credential propagation. It is not a shell
+sandbox: commands still run with the configured operating-system identity.
+
+## Workspace Lifecycle and Worktree Garbage Collection
+
+DevSpace persists checkout and managed-worktree sessions. Use
+`workspace_list` and `workspace_status` to inspect them. `workspace_close`
+unregisters a checkout or safely removes a managed worktree. By default it
+refuses removal while a DevSpace or operating-system process references the
+worktree, while the tree is dirty, or while its HEAD is not reachable from a
+persistent Git ref.
+
+Worktree garbage collection is a two-step contract:
+
+1. `workspace_gc_preview` classifies every directory under
+   `DEVSPACE_WORKTREE_ROOT` and returns a SHA-256 plan ID.
+2. `workspace_gc_execute` accepts that exact plan ID and the same options,
+   recomputes the plan, then revalidates each candidate immediately before
+   removal.
+
+The collector protects workspaces loaded in the current server, recent
+workspace/scope activity, running processes, dirty or unreadable Git state,
+commits not reachable from a branch/tag/remote ref, and recent or explicitly
+active recovery capsules. Defaults are 24 hours for recent activity and 72
+hours for capsule protection. Measuring directory sizes is optional because it
+can make preview slower on large repositories.
 
 ## Advisory Turn Continuity and Recovery Capsules
 

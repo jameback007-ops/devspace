@@ -587,6 +587,7 @@ export class ExecutionScopeManager {
       errorDigestSha256: event.errorDigestSha256,
     }));
     const lastSequence = events.at(-1)?.sequence;
+    const summary = this.auditSummary(targetRef);
 
     return {
       schemaVersion: 1,
@@ -594,6 +595,7 @@ export class ExecutionScopeManager {
       scopeRef: targetRef,
       order: "newest_first",
       events,
+      summary,
       nextCursor: hasMore && lastSequence ? encodeCursor(lastSequence) : undefined,
       policy: this.policy(),
     };
@@ -840,6 +842,79 @@ export class ExecutionScopeManager {
       firstSeenAt: new Date(Number(row.first_seen_at_ms)).toISOString(),
       lastSeenAt: new Date(Number(row.last_seen_at_ms)).toISOString(),
     }));
+  }
+
+  private auditSummary(scopeRef: string): Record<string, unknown> {
+    const totals = this.database.sqlite
+      .prepare(`
+        select count(*) as events,
+               sum(case when outcome = 'succeeded' then 1 else 0 end) as succeeded,
+               sum(case when outcome = 'failed' then 1 else 0 end) as failed,
+               coalesce(sum(duration_ms), 0) as total_ms,
+               avg(duration_ms) as average_ms,
+               max(duration_ms) as max_ms,
+               min(started_at_ms) as first_event_at_ms,
+               max(coalesce(completed_at_ms, started_at_ms)) as last_event_at_ms
+          from execution_scope_events
+         where scope_ref = ?
+      `)
+      .get(scopeRef) as Record<string, unknown> | undefined;
+    const byToolRows = this.database.sqlite
+      .prepare(`
+        select tool_name,
+               count(*) as calls,
+               sum(case when outcome = 'succeeded' then 1 else 0 end) as succeeded,
+               sum(case when outcome = 'failed' then 1 else 0 end) as failed,
+               coalesce(sum(duration_ms), 0) as total_ms,
+               avg(duration_ms) as average_ms,
+               max(duration_ms) as max_ms
+          from execution_scope_events
+         where scope_ref = ?
+         group by tool_name
+         order by tool_name
+      `)
+      .all(scopeRef) as Array<Record<string, unknown>>;
+
+    const events = Number(totals?.events ?? 0);
+    return {
+      events,
+      succeeded: Number(totals?.succeeded ?? 0),
+      failed: Number(totals?.failed ?? 0),
+      totalMs: Number(totals?.total_ms ?? 0),
+      averageMs:
+        totals?.average_ms === null || totals?.average_ms === undefined
+          ? 0
+          : Number(totals.average_ms),
+      maxMs:
+        totals?.max_ms === null || totals?.max_ms === undefined
+          ? 0
+          : Number(totals.max_ms),
+      firstEventAt:
+        totals?.first_event_at_ms === null || totals?.first_event_at_ms === undefined
+          ? undefined
+          : iso(Number(totals.first_event_at_ms)),
+      lastEventAt:
+        totals?.last_event_at_ms === null || totals?.last_event_at_ms === undefined
+          ? undefined
+          : iso(Number(totals.last_event_at_ms)),
+      byTool: Object.fromEntries(byToolRows.map((row) => [
+        String(row.tool_name),
+        {
+          calls: Number(row.calls ?? 0),
+          succeeded: Number(row.succeeded ?? 0),
+          failed: Number(row.failed ?? 0),
+          totalMs: Number(row.total_ms ?? 0),
+          averageMs:
+            row.average_ms === null || row.average_ms === undefined
+              ? 0
+              : Number(row.average_ms),
+          maxMs:
+            row.max_ms === null || row.max_ms === undefined
+              ? 0
+              : Number(row.max_ms),
+        },
+      ])),
+    };
   }
 
   private scopeSummary(

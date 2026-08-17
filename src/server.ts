@@ -80,6 +80,7 @@ import {
 } from "./tool-surface-freshness.js";
 import { registerZesCodexInspectionTools } from "./zes-codex-inspection.js";
 import { createWorkspaceStore } from "./workspace-store.js";
+import { WorkspaceLifecycleManager } from "./workspace-lifecycle.js";
 import { formatAgentsPath, WorkspaceRegistry } from "./workspaces.js";
 import { summarizeLocalAgentProfile } from "./local-agent-profiles.js";
 import {
@@ -213,6 +214,11 @@ function toolWidgetDescriptorMeta(
 
 const toolNames = {
   openWorkspace: "open_workspace",
+  workspaceList: "workspace_list",
+  workspaceStatus: "workspace_status",
+  workspaceClose: "workspace_close",
+  workspaceGcPreview: "workspace_gc_preview",
+  workspaceGcExecute: "workspace_gc_execute",
   skillSearch: "skill_search",
   read: "read",
   write: "write",
@@ -478,6 +484,8 @@ function serverInstructions(config: ServerConfig): string {
   const artifactInstruction = config.artifactsEnabled && isArtifactDownloadSupportedPlatform()
     ? " When the user supplies or generates a file that is not present on the DevSpace host, use download_artifact with its native file value, the existing workspace ID, and a suitable relative destination path chosen from the user's request and project structure. The tool refuses to overwrite an existing destination and returns the normalized workspace-relative path. Use normal workspace tools when explicit inspection, replacement, movement, renaming, or deletion is needed. Do not recreate binary files with write/edit calls or place signed URLs, native file objects, base64 content, or invented host paths in shell commands or logs."
     : "";
+  const workspaceLifecycleInstruction =
+    " Use workspace_list and workspace_status to inspect persisted workspace lifecycle. Use workspace_close for one explicit workspace. For bulk cleanup, always call workspace_gc_preview first, inspect its protected/candidate reasons, and pass the exact returned plan digest with identical options to workspace_gc_execute. Never force-remove dirty, process-bound, or unpublished worktree state merely to reclaim space.";
   const showChangesInstruction =
     config.widgets === "changes"
       ? " If the turn successfully modifies files by creating, editing, overwriting, deleting, moving, or applying patches, call show_changes exactly once for that workspace after the final related file change and before your final response so the user can inspect the aggregate diff for that turn. Do not call it after every individual file change; do not skip it because individual file-change tools already returned diffs."
@@ -487,7 +495,7 @@ function serverInstructions(config: ServerConfig): string {
     const codexInspectionInstruction = config.codexNavigationTools
       ? ` Use ${toolNames.read} for direct file reads and prefer the native ${toolNames.grep}, ${toolNames.glob}, and ${toolNames.ls} tools for bounded workspace search and navigation. Use exec_command for tests, builds, Git inspection, package scripts, and commands that genuinely require a shell.`
       : ` Use ${toolNames.read} for direct file reads and exec_command for inspection, tests, builds, and other commands.`;
-    return `Use DevSpace for coding work. Call ${toolNames.openWorkspace} once for each project folder or isolated worktree, then keep using its workspaceId. During continued work in the same project or worktree, do not call ${toolNames.openWorkspace} again. Open another workspace only when changing projects, switching checkout/worktree mode, creating another isolated worktree, or when the current workspaceId is rejected.${codexInspectionInstruction} Use apply_patch for all file modifications and write_stdin to poll or interact with running processes. Follow instructions returned by ${toolNames.openWorkspace}; read applicable instruction and skill files before working in their scope.${artifactInstruction}${showChangesInstruction}${codexSessionInstruction}${executionScopeInstruction}${executionMailboxInstruction}${turnContinuityInstruction}${localAgentInstruction}`;
+    return `Use DevSpace for coding work. Call ${toolNames.openWorkspace} once for each project folder or isolated worktree, then keep using its workspaceId. During continued work in the same project or worktree, do not call ${toolNames.openWorkspace} again. Open another workspace only when changing projects, switching checkout/worktree mode, creating another isolated worktree, or when the current workspaceId is rejected.${codexInspectionInstruction} Use apply_patch for all file modifications and write_stdin to poll or interact with running processes. Follow instructions returned by ${toolNames.openWorkspace}; read applicable instruction and skill files before working in their scope.${workspaceLifecycleInstruction}${artifactInstruction}${showChangesInstruction}${codexSessionInstruction}${executionScopeInstruction}${executionMailboxInstruction}${turnContinuityInstruction}${localAgentInstruction}`;
   }
 
   const inspection = config.toolMode !== "full"
@@ -500,7 +508,7 @@ function serverInstructions(config: ServerConfig): string {
 
   const agentsMd = `Follow instructions returned by ${toolNames.openWorkspace}. Before working under a path listed in availableAgentsFiles, use ${toolNames.read} to inspect that instruction file and follow it. `;
 
-  return `Use DevSpace for coding work. Call ${toolNames.openWorkspace} once for each project folder or isolated worktree, then keep using its workspaceId. During continued work in the same project or worktree, do not call ${toolNames.openWorkspace} again. Open another workspace only when changing projects, switching checkout/worktree mode, creating another isolated worktree, or when the current workspaceId is rejected. ${agentsMd}${skills}${inspection}Prefer ${toolNames.edit} for targeted modifications, ${toolNames.write} only for new files or complete rewrites, and ${toolNames.shell} for tests, builds, git inspection, package scripts, and commands that are better executed by the shell. Do not create or modify files with ${toolNames.shell}; avoid shell redirection, heredocs, tee, sed -i, perl -i, node/python/ruby scripts, or any command whose purpose is to write project files.${artifactInstruction}${showChangesInstruction}${codexSessionInstruction}${executionScopeInstruction}${executionMailboxInstruction}${turnContinuityInstruction}${localAgentInstruction}`;
+  return `Use DevSpace for coding work. Call ${toolNames.openWorkspace} once for each project folder or isolated worktree, then keep using its workspaceId. During continued work in the same project or worktree, do not call ${toolNames.openWorkspace} again. Open another workspace only when changing projects, switching checkout/worktree mode, creating another isolated worktree, or when the current workspaceId is rejected. ${agentsMd}${skills}${inspection}Prefer ${toolNames.edit} for targeted modifications, ${toolNames.write} only for new files or complete rewrites, and ${toolNames.shell} for tests, builds, git inspection, package scripts, and commands that are better executed by the shell. Do not create or modify files with ${toolNames.shell}; avoid shell redirection, heredocs, tee, sed -i, perl -i, node/python/ruby scripts, or any command whose purpose is to write project files.${workspaceLifecycleInstruction}${artifactInstruction}${showChangesInstruction}${codexSessionInstruction}${executionScopeInstruction}${executionMailboxInstruction}${turnContinuityInstruction}${localAgentInstruction}`;
 }
 
 function formatVisibleAgent(agent: {
@@ -809,6 +817,14 @@ function processOutputSchema(): z.ZodRawShape {
     wakeReason: z.enum(["mailbox"]).optional(),
     wallTimeMs: z.number().nonnegative(),
     outputTruncated: z.boolean(),
+    outputDeltaBytes: z.number().int().nonnegative(),
+    outputDeltaDigestSha256: z.string().regex(/^[a-f0-9]{64}$/),
+    outputTotalBytes: z.number().int().nonnegative(),
+    outputDigestSha256: z.string().regex(/^[a-f0-9]{64}$/),
+    outputEventCount: z.number().int().nonnegative(),
+    outputSequenceStart: z.number().int().positive().optional(),
+    outputSequenceEnd: z.number().int().positive().optional(),
+    outputComplete: z.boolean(),
   });
 }
 
@@ -840,6 +856,14 @@ function processToolResponse(
       wakeReason: snapshot.wakeReason,
       wallTimeMs: snapshot.wallTimeMs,
       outputTruncated: snapshot.outputTruncated,
+      outputDeltaBytes: snapshot.outputDeltaBytes,
+      outputDeltaDigestSha256: snapshot.outputDeltaDigestSha256,
+      outputTotalBytes: snapshot.outputTotalBytes,
+      outputDigestSha256: snapshot.outputDigestSha256,
+      outputEventCount: snapshot.outputEventCount,
+      outputSequenceStart: snapshot.outputSequenceStart,
+      outputSequenceEnd: snapshot.outputSequenceEnd,
+      outputComplete: snapshot.outputComplete,
     },
   };
 }
@@ -1944,6 +1968,15 @@ export function createMcpServer(
   );
   const activeRuntimeCapabilities = runtimeCapabilities
     ?? new RuntimeCapabilityRegistry(config);
+  const lifecycleStore = workspaces.lifecycleStore();
+  const activeWorkspaceLifecycle = lifecycleStore
+    ? new WorkspaceLifecycleManager(
+        config,
+        lifecycleStore,
+        workspaces,
+        processSessions,
+      )
+    : undefined;
   const activeLocalAgentCoordinator = config.subagents
     ? localAgentCoordinator ?? new LocalAgentCoordinator(config, {
         launchWorker: (agentId, workerId) => launchDetachedLocalAgentWorker(
@@ -2055,6 +2088,7 @@ export function createMcpServer(
         sourceRoot: z.string().optional(),
         worktree: z
           .object({
+            sourceRoot: z.string(),
             path: z.string(),
             baseRef: z.string(),
             baseSha: z.string(),
@@ -2224,6 +2258,197 @@ export function createMcpServer(
       };
     },
   );
+
+  if (activeWorkspaceLifecycle) {
+    const gcInputSchema = {
+      olderThanHours: z
+        .number()
+        .min(1)
+        .max(365 * 24)
+        .optional()
+        .describe("Protect worktrees with activity newer than this many hours. Defaults to 24."),
+      capsuleProtectionHours: z
+        .number()
+        .min(1)
+        .max(365 * 24)
+        .optional()
+        .describe("Protect worktrees with a recovery capsule newer than this many hours. Defaults to 72."),
+      includeSizes: z
+        .boolean()
+        .optional()
+        .describe("Measure directory sizes for the plan. This can make preview slower."),
+    };
+
+    registerAppTool(
+      server,
+      toolNames.workspaceList,
+      {
+        title: "List workspaces",
+        description:
+          "List persisted DevSpace workspace sessions, optionally filtered by lifecycle state, mode, or managed-worktree ownership. This is executor-local state, not canonical task or writer authority.",
+        inputSchema: {
+          status: z.enum(["active", "closed"]).optional(),
+          mode: z.enum(["checkout", "worktree"]).optional(),
+          managed: z.boolean().optional(),
+          limit: z.number().int().min(1).max(500).optional(),
+        },
+        outputSchema: resultOutputSchema({ data: z.unknown() }),
+        ...toolWidgetDescriptorMeta(config, "workspace"),
+        annotations: {
+          readOnlyHint: true,
+          destructiveHint: false,
+          idempotentHint: true,
+          openWorldHint: false,
+        },
+      },
+      async (input) => {
+        const startedAt = performance.now();
+        const data = activeWorkspaceLifecycle.list(input);
+        logToolCall(config, {
+          tool: toolNames.workspaceList,
+          success: true,
+          durationMs: Math.round(performance.now() - startedAt),
+        });
+        return jsonToolResponse(data);
+      },
+    );
+
+    registerAppTool(
+      server,
+      toolNames.workspaceStatus,
+      {
+        title: "Read workspace status",
+        description:
+          "Inspect one persisted workspace, including existence, Git preservation state, linked process sessions, external process references, and current close safety.",
+        inputSchema: {
+          workspaceId: z.string().describe(workspaceIdDescription),
+        },
+        outputSchema: resultOutputSchema({ data: z.unknown() }),
+        ...toolWidgetDescriptorMeta(config, "workspace"),
+        annotations: {
+          readOnlyHint: true,
+          destructiveHint: false,
+          idempotentHint: true,
+          openWorldHint: false,
+        },
+      },
+      async ({ workspaceId }) => {
+        const startedAt = performance.now();
+        const data = await activeWorkspaceLifecycle.status(workspaceId);
+        logToolCall(config, {
+          tool: toolNames.workspaceStatus,
+          workspaceId,
+          success: true,
+          durationMs: Math.round(performance.now() - startedAt),
+        });
+        return jsonToolResponse(data);
+      },
+    );
+
+    registerAppTool(
+      server,
+      toolNames.workspaceClose,
+      {
+        title: "Close workspace",
+        description:
+          "Close one persisted workspace. Managed worktrees are removed by default only when no process references them, the tree is clean, and HEAD is reachable from a persistent ref. force must be explicit to override dirty or unpublished-commit protection; it never overrides a running-process boundary.",
+        inputSchema: {
+          workspaceId: z.string().describe(workspaceIdDescription),
+          remove: z
+            .boolean()
+            .optional()
+            .describe("Defaults to true for managed worktrees and false for checkouts."),
+          force: z
+            .boolean()
+            .optional()
+            .describe("Explicitly permit removal of dirty or unpublished managed-worktree state."),
+        },
+        outputSchema: resultOutputSchema({ data: z.unknown() }),
+        ...toolWidgetDescriptorMeta(config, "workspace"),
+        annotations: {
+          readOnlyHint: false,
+          destructiveHint: true,
+          idempotentHint: false,
+          openWorldHint: false,
+        },
+      },
+      async (input) => {
+        const startedAt = performance.now();
+        const data = await activeWorkspaceLifecycle.close(input);
+        logToolCall(config, {
+          tool: toolNames.workspaceClose,
+          workspaceId: input.workspaceId,
+          success: true,
+          durationMs: Math.round(performance.now() - startedAt),
+        });
+        return jsonToolResponse(data);
+      },
+    );
+
+    registerAppTool(
+      server,
+      toolNames.workspaceGcPreview,
+      {
+        title: "Preview workspace garbage collection",
+        description:
+          "Build a read-only, digest-bound garbage-collection plan for managed and orphan worktree directories. The plan protects loaded or recent workspaces, running processes, dirty trees, unpublished commits, unreadable Git state, and recent or active recovery capsules.",
+        inputSchema: gcInputSchema,
+        outputSchema: resultOutputSchema({ data: z.unknown() }),
+        ...toolWidgetDescriptorMeta(config, "workspace"),
+        annotations: {
+          readOnlyHint: true,
+          destructiveHint: false,
+          idempotentHint: true,
+          openWorldHint: false,
+        },
+      },
+      async (input) => {
+        const startedAt = performance.now();
+        const data = await activeWorkspaceLifecycle.preview(input);
+        logToolCall(config, {
+          tool: toolNames.workspaceGcPreview,
+          success: true,
+          durationMs: Math.round(performance.now() - startedAt),
+        });
+        return jsonToolResponse(data);
+      },
+    );
+
+    registerAppTool(
+      server,
+      toolNames.workspaceGcExecute,
+      {
+        title: "Execute workspace garbage collection",
+        description:
+          "Recompute and execute an exact workspace_gc_preview plan. The request fails when the plan digest changed; each candidate is revalidated again immediately before removal.",
+        inputSchema: {
+          ...gcInputSchema,
+          planIdSha256: z
+            .string()
+            .regex(/^[a-f0-9]{64}$/)
+            .describe("Exact planIdSha256 returned by workspace_gc_preview with the same options."),
+        },
+        outputSchema: resultOutputSchema({ data: z.unknown() }),
+        ...toolWidgetDescriptorMeta(config, "workspace"),
+        annotations: {
+          readOnlyHint: false,
+          destructiveHint: true,
+          idempotentHint: false,
+          openWorldHint: false,
+        },
+      },
+      async (input) => {
+        const startedAt = performance.now();
+        const data = await activeWorkspaceLifecycle.execute(input);
+        logToolCall(config, {
+          tool: toolNames.workspaceGcExecute,
+          success: true,
+          durationMs: Math.round(performance.now() - startedAt),
+        });
+        return jsonToolResponse(data);
+      },
+    );
+  }
 
   if (config.skillsEnabled) {
     registerAppTool(

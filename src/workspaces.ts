@@ -248,6 +248,13 @@ export class WorkspaceRegistry {
   getWorkspace(workspaceId: string): Workspace {
     const workspace = this.workspaces.get(workspaceId);
     if (workspace) {
+      const stored = this.store?.getSession(workspaceId);
+      if (stored && stored.status !== "active") {
+        this.workspaces.delete(workspaceId);
+        throw new Error(
+          `Workspace ${workspaceId} is ${stored.status}. Open the target project or worktree again and continue with the new workspaceId.`,
+        );
+      }
       this.store?.touchSession(workspaceId);
       return workspace;
     }
@@ -256,6 +263,11 @@ export class WorkspaceRegistry {
     if (!session) {
       throw new Error(
         `Unknown workspaceId: ${workspaceId}. Open the target project or worktree again and continue with the new workspaceId.`,
+      );
+    }
+    if (session.status !== "active") {
+      throw new Error(
+        `Workspace ${workspaceId} is ${session.status}. Open the target project or worktree again and continue with the new workspaceId.`,
       );
     }
 
@@ -284,6 +296,18 @@ export class WorkspaceRegistry {
     this.workspaces.set(restoredWorkspace.id, restoredWorkspace);
 
     return restoredWorkspace;
+  }
+
+  loadedWorkspaceIds(): string[] {
+    return [...this.workspaces.keys()].sort();
+  }
+
+  lifecycleStore(): WorkspaceStore | undefined {
+    return this.store;
+  }
+
+  forgetWorkspace(workspaceId: string): void {
+    this.workspaces.delete(workspaceId);
   }
 
   resolvePath(workspace: Workspace, inputPath: string): string {

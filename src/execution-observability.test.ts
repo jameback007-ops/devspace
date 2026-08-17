@@ -149,6 +149,14 @@ test("execution scope inspection joins durable audit with live workspace and pro
   assert.match(String(detail.cmdDigestSha256), /^[a-f0-9]{64}$/);
   assert.equal("cmd" in detail, false);
   assert.equal(JSON.stringify(audit).includes("secret-value-from-command"), false);
+  const summary = audit.summary as Record<string, unknown>;
+  assert.equal(summary.events, 1);
+  assert.equal(summary.succeeded, 1);
+  assert.equal(summary.failed, 0);
+  const byTool = summary.byTool as Record<string, Record<string, unknown>>;
+  assert.equal(byTool.exec_command?.calls, 1);
+  assert.equal(byTool.exec_command?.succeeded, 1);
+  assert.equal(byTool.exec_command?.failed, 0);
 
   processes.terminate("ws_test", process.sessionId);
   await processes.write({

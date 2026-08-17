@@ -62,6 +62,13 @@ const CRITICAL_TOOL_GROUPS = {
     "recovery_capsule_record",
     "recovery_capsule_status",
   ],
+  workspaceLifecycle: [
+    "workspace_list",
+    "workspace_status",
+    "workspace_close",
+    "workspace_gc_preview",
+    "workspace_gc_execute",
+  ],
   localAgentContinuation: [
     "local_agent_session_list",
     "local_agent_session_status",

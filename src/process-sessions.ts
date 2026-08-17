@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, type Hash } from "node:crypto";
 import { resolveShellCommand, terminateProcessTree } from "./process-platform.js";
 
 export const DEFAULT_EXEC_YIELD_MS = 10_000;
@@ -10,9 +10,35 @@ export const MAX_POLL_YIELD_MS = 110_000;
 const DEFAULT_MAX_OUTPUT_TOKENS = 10_000;
 const DEFAULT_BUFFER_CHARACTERS = 1_000_000;
 const COMPLETED_SESSION_TTL_MS = 5 * 60 * 1_000;
+const DEFAULT_MAX_CONCURRENT_SESSIONS = 32;
 const OUTPUT_EXIT_GRACE_MS = 25;
 const DEFAULT_COLUMNS = 80;
 const DEFAULT_ROWS = 24;
+export const COMMAND_ENV_PASSTHROUGH_VARIABLE = "DEVSPACE_COMMAND_ENV_PASSTHROUGH";
+
+const SAFE_PARENT_ENVIRONMENT_KEYS = [
+  "PATH",
+  "HOME",
+  "USER",
+  "LOGNAME",
+  "SHELL",
+  "LANG",
+  "LC_ALL",
+  "LC_CTYPE",
+  "XDG_CACHE_HOME",
+  "XDG_CONFIG_HOME",
+  "XDG_DATA_HOME",
+  "TMPDIR",
+  "TEMP",
+  "TMP",
+  "SSL_CERT_FILE",
+  "SSL_CERT_DIR",
+  "SYSTEMROOT",
+  "WINDIR",
+  "COMSPEC",
+  "PATHEXT",
+  "WSLENV",
+] as const;
 
 export interface StartCommandInput {
   workspaceId: string;
@@ -42,6 +68,14 @@ export interface ProcessSnapshot {
   sessionId?: number;
   output: string;
   outputTruncated: boolean;
+  outputDeltaBytes: number;
+  outputDeltaDigestSha256: string;
+  outputTotalBytes: number;
+  outputDigestSha256: string;
+  outputEventCount: number;
+  outputSequenceStart?: number;
+  outputSequenceEnd?: number;
+  outputComplete: boolean;
   running: boolean;
   exitCode?: number;
   signal?: string;
@@ -63,6 +97,8 @@ export interface ProcessSessionInspection {
   commandLength: number;
   commandDigestSha256: string;
   outputEventCount: number;
+  outputTotalBytes: number;
+  outputDigestSha256: string;
   bufferedOutputAvailable: boolean;
 }
 
@@ -80,6 +116,9 @@ interface ProcessSession {
   startedAt: number;
   lastOutputAt?: number;
   outputEventCount: number;
+  outputTotalBytes: number;
+  outputHash: Hash;
+  deliveredThroughSequence: number;
   tty: boolean;
   workingDirectory: string;
   commandLength: number;
@@ -97,9 +136,10 @@ interface ProcessSession {
   cleanupTimer?: NodeJS.Timeout;
 }
 
-interface ProcessSessionManagerOptions {
+export interface ProcessSessionManagerOptions {
   maxBufferCharacters?: number;
   completedSessionTtlMs?: number;
+  maxConcurrentSessions?: number;
 }
 
 function deferredSignal(): { promise: Promise<void>; resolve: () => void } {
@@ -134,23 +174,56 @@ function validatedExecutionScopeRef(value: string | undefined): string | undefin
   return value;
 }
 
-function processEnvironment(input?: {
+function validatedEnvironmentKey(value: string): string {
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(value)) {
+    throw new Error(`${COMMAND_ENV_PASSTHROUGH_VARIABLE} contains an invalid environment variable name: ${value}`);
+  }
+  if (value === COMMAND_ENV_PASSTHROUGH_VARIABLE) {
+    throw new Error(`${COMMAND_ENV_PASSTHROUGH_VARIABLE} cannot pass itself to command processes.`);
+  }
+  return value;
+}
+
+export function commandEnvironmentPassthroughKeys(raw: string | undefined): string[] {
+  if (!raw?.trim()) return [];
+  const seen = new Set<string>();
+  const keys: string[] = [];
+  for (const item of raw.replaceAll(",", " ").split(/\s+/).filter(Boolean)) {
+    const key = validatedEnvironmentKey(item);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    keys.push(key);
+  }
+  return keys;
+}
+
+export function processEnvironment(input?: {
   workspaceId?: string;
   workspaceRoot?: string;
   executionScopeRef?: string;
-}): Record<string, string> {
+}, parentEnvironment: NodeJS.ProcessEnv = process.env): Record<string, string> {
+  const inherited: Record<string, string> = {};
+  for (const key of SAFE_PARENT_ENVIRONMENT_KEYS) {
+    const value = parentEnvironment[key];
+    if (value !== undefined) inherited[key] = value;
+  }
+  for (const key of commandEnvironmentPassthroughKeys(
+    parentEnvironment[COMMAND_ENV_PASSTHROUGH_VARIABLE],
+  )) {
+    const value = parentEnvironment[key];
+    if (value !== undefined) inherited[key] = value;
+  }
+
   return {
-    ...Object.fromEntries(
-      Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined),
-    ),
+    ...inherited,
     NO_COLOR: "1",
     TERM: "dumb",
     PAGER: "cat",
     GIT_PAGER: "cat",
     GH_PAGER: "cat",
     CODEX_CI: "1",
-    LANG: process.env.LANG ?? "C.UTF-8",
-    LC_ALL: process.env.LC_ALL ?? "C.UTF-8",
+    LANG: parentEnvironment.LANG ?? "C.UTF-8",
+    LC_ALL: parentEnvironment.LC_ALL ?? "C.UTF-8",
     ...(input?.workspaceId ? { DEVSPACE_WORKSPACE_ID: input.workspaceId } : {}),
     ...(input?.workspaceRoot ? { DEVSPACE_WORKSPACE_ROOT: input.workspaceRoot } : {}),
     ...(input?.executionScopeRef
@@ -266,14 +339,23 @@ export class ProcessSessionManager {
   private readonly sessions = new Map<number, ProcessSession>();
   private readonly maxBufferCharacters: number;
   private readonly completedSessionTtlMs: number;
+  private readonly maxConcurrentSessions: number;
   private nextSessionId = 1;
 
   constructor(options: ProcessSessionManagerOptions = {}) {
     this.maxBufferCharacters = options.maxBufferCharacters ?? DEFAULT_BUFFER_CHARACTERS;
     this.completedSessionTtlMs = options.completedSessionTtlMs ?? COMPLETED_SESSION_TTL_MS;
+    this.maxConcurrentSessions = options.maxConcurrentSessions ?? DEFAULT_MAX_CONCURRENT_SESSIONS;
+    if (!Number.isInteger(this.maxConcurrentSessions) || this.maxConcurrentSessions < 1) {
+      throw new Error("maxConcurrentSessions must be a positive integer.");
+    }
   }
 
   async start(input: StartCommandInput): Promise<ProcessSnapshot> {
+    const runningSessions = Array.from(this.sessions.values()).filter((session) => session.running).length;
+    if (runningSessions >= this.maxConcurrentSessions) {
+      throw new Error(`Process session limit reached (${this.maxConcurrentSessions}).`);
+    }
     const session = this.createSession(input);
     this.sessions.set(session.id, session);
 
@@ -371,6 +453,8 @@ export class ProcessSessionManager {
         commandLength: session.commandLength,
         commandDigestSha256: session.commandDigestSha256,
         outputEventCount: session.outputEventCount,
+        outputTotalBytes: session.outputTotalBytes,
+        outputDigestSha256: session.outputHash.copy().digest("hex"),
         bufferedOutputAvailable: session.buffer.hasOutput(),
       }));
   }
@@ -438,6 +522,9 @@ export class ProcessSessionManager {
       executionScopeRef: validatedExecutionScopeRef(input.executionScopeRef),
       startedAt: Date.now(),
       outputEventCount: 0,
+      outputTotalBytes: 0,
+      outputHash: createHash("sha256"),
+      deliveredThroughSequence: 0,
       tty: input.tty === true,
       workingDirectory: input.cwd,
       commandLength: input.command.length,
@@ -533,6 +620,8 @@ export class ProcessSessionManager {
   private append(session: ProcessSession, output: string): void {
     if (!output) return;
     session.buffer.append(output);
+    session.outputTotalBytes += Buffer.byteLength(output);
+    session.outputHash.update(output);
     session.lastOutputAt = Date.now();
     session.outputEventCount += 1;
     session.resolveOutput();
@@ -545,7 +634,15 @@ export class ProcessSessionManager {
   ): ProcessSnapshot {
     const limit = boundedInteger(maxOutputTokens, DEFAULT_MAX_OUTPUT_TOKENS, 100_000);
     const maxCharacters = Math.max(256, limit * 4);
+    const hadBufferedOutput = session.buffer.hasOutput();
+    const outputSequenceStart = hadBufferedOutput
+      ? session.deliveredThroughSequence + 1
+      : undefined;
+    const outputSequenceEnd = hadBufferedOutput
+      ? session.outputEventCount
+      : undefined;
     const buffered = session.buffer.drain(maxCharacters);
+    if (hadBufferedOutput) session.deliveredThroughSequence = session.outputEventCount;
     if (session.running) {
       const output = deferredSignal();
       session.outputPromise = output.promise;
@@ -556,6 +653,14 @@ export class ProcessSessionManager {
       sessionId: session.running ? session.id : undefined,
       output: buffered.output,
       outputTruncated: buffered.truncated,
+      outputDeltaBytes: Buffer.byteLength(buffered.output),
+      outputDeltaDigestSha256: createHash("sha256").update(buffered.output).digest("hex"),
+      outputTotalBytes: session.outputTotalBytes,
+      outputDigestSha256: session.outputHash.copy().digest("hex"),
+      outputEventCount: session.outputEventCount,
+      outputSequenceStart,
+      outputSequenceEnd,
+      outputComplete: !session.running,
       running: session.running,
       exitCode: session.exitCode,
       signal: session.signal,

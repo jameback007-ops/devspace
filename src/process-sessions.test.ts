@@ -1,5 +1,11 @@
 import assert from "node:assert/strict";
-import { HeadTailBuffer, ProcessSessionManager } from "./process-sessions.js";
+import { createHash } from "node:crypto";
+import {
+  COMMAND_ENV_PASSTHROUGH_VARIABLE,
+  HeadTailBuffer,
+  ProcessSessionManager,
+  processEnvironment,
+} from "./process-sessions.js";
 
 const smallBuffer = new HeadTailBuffer(100);
 smallBuffer.append("hello\n");
@@ -36,6 +42,45 @@ const manager = new ProcessSessionManager({
 const node = process.platform === "win32"
   ? `"${process.execPath}"`
   : JSON.stringify(process.execPath);
+
+const filteredEnvironment = processEnvironment(
+  {
+    workspaceId: "workspace-filter",
+    workspaceRoot: "/tmp/workspace-filter",
+    executionScopeRef: "0123456789abcdef",
+  },
+  {
+    PATH: "/usr/bin:/bin",
+    HOME: "/home/devspace",
+    USER: "devspace",
+    LOGNAME: "devspace",
+    DEVSPACE_OAUTH_OWNER_TOKEN: "owner-secret",
+    EXA_API_KEY: "research-secret",
+    PANTS_LOCAL_STORE_DIR: "/tmp/pants-local-store",
+    PANTS_PANTSD: "false",
+    [COMMAND_ENV_PASSTHROUGH_VARIABLE]: "PANTS_LOCAL_STORE_DIR, PANTS_PANTSD PANTS_PANTSD",
+  },
+);
+assert.equal(filteredEnvironment.PATH, "/usr/bin:/bin");
+assert.equal(filteredEnvironment.HOME, "/home/devspace");
+assert.equal(filteredEnvironment.PANTS_LOCAL_STORE_DIR, "/tmp/pants-local-store");
+assert.equal(filteredEnvironment.PANTS_PANTSD, "false");
+assert.equal(filteredEnvironment.DEVSPACE_OAUTH_OWNER_TOKEN, undefined);
+assert.equal(filteredEnvironment.EXA_API_KEY, undefined);
+assert.equal(filteredEnvironment[COMMAND_ENV_PASSTHROUGH_VARIABLE], undefined);
+assert.equal(filteredEnvironment.DEVSPACE_WORKSPACE_ID, "workspace-filter");
+assert.throws(
+  () => processEnvironment(undefined, {
+    [COMMAND_ENV_PASSTHROUGH_VARIABLE]: "VALID invalid-name",
+  }),
+  /invalid environment variable name/,
+);
+assert.throws(
+  () => processEnvironment(undefined, {
+    [COMMAND_ENV_PASSTHROUGH_VARIABLE]: COMMAND_ENV_PASSTHROUGH_VARIABLE,
+  }),
+  /cannot pass itself/,
+);
 
 const foreground = await manager.start({
   workspaceId: "workspace-a",
@@ -87,6 +132,31 @@ assert.equal(
   background.sessionId,
 );
 assert.deepEqual(manager.inspect(["workspace-a"], ["bbbbbbbbbbbbbbbb"]), []);
+
+const limitedManager = new ProcessSessionManager({ maxConcurrentSessions: 1 });
+const limitedFirst = await limitedManager.start({
+  workspaceId: "workspace-limit",
+  cwd: process.cwd(),
+  command: `${node} -e "setTimeout(() => {}, 5000)"`,
+  yieldTimeMs: 5,
+});
+assert.equal(limitedFirst.running, true);
+assert.ok(limitedFirst.sessionId);
+await assert.rejects(
+  () => limitedManager.start({
+    workspaceId: "workspace-limit",
+    cwd: process.cwd(),
+    command: `${node} -e "process.exit(0)"`,
+  }),
+  /Process session limit reached \(1\)/,
+);
+limitedManager.terminate("workspace-limit", limitedFirst.sessionId);
+await limitedManager.write({
+  workspaceId: "workspace-limit",
+  sessionId: limitedFirst.sessionId,
+  yieldTimeMs: 2_000,
+});
+limitedManager.shutdown();
 
 await assert.rejects(
   manager.start({
@@ -178,6 +248,47 @@ await manager.write({
   sessionId: progressive.sessionId,
   yieldTimeMs: 2_000,
 });
+
+const streamProtocol = await manager.start({
+  workspaceId: "workspace-stream-protocol",
+  cwd: process.cwd(),
+  command: `${node} -e "console.log('stream-delta'); setTimeout(() => {}, 150)"`,
+  yieldTimeMs: 5,
+});
+assert.equal(streamProtocol.running, true);
+assert.ok(streamProtocol.sessionId);
+let streamDelta = await manager.write({
+  workspaceId: "workspace-stream-protocol",
+  sessionId: streamProtocol.sessionId,
+  yieldTimeMs: 2_000,
+});
+assert.match(streamDelta.output, /stream-delta/);
+assert.equal(streamDelta.outputComplete, false);
+assert.equal(streamDelta.outputSequenceStart, 1);
+assert.equal(streamDelta.outputSequenceEnd, 1);
+assert.equal(streamDelta.outputEventCount, 1);
+assert.equal(streamDelta.outputDeltaBytes, Buffer.byteLength(streamDelta.output));
+assert.equal(
+  streamDelta.outputDeltaDigestSha256,
+  createHash("sha256").update(streamDelta.output).digest("hex"),
+);
+if (streamDelta.running) {
+  streamDelta = await manager.write({
+    workspaceId: "workspace-stream-protocol",
+    sessionId: streamProtocol.sessionId,
+    yieldTimeMs: 2_000,
+  });
+}
+assert.equal(streamDelta.running, false);
+assert.equal(streamDelta.outputComplete, true);
+assert.equal(streamDelta.output, "");
+assert.equal(streamDelta.outputSequenceStart, undefined);
+assert.equal(streamDelta.outputSequenceEnd, undefined);
+assert.equal(streamDelta.outputTotalBytes, Buffer.byteLength("stream-delta\n"));
+assert.equal(
+  streamDelta.outputDigestSha256,
+  createHash("sha256").update("stream-delta\n").digest("hex"),
+);
 
 const interactive = await manager.start({
   workspaceId: "workspace-a",

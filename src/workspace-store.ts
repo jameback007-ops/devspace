@@ -1,6 +1,7 @@
-import { and, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import { openDatabase, type DatabaseHandle } from "./db/client.js";
 import {
+  loadedAgentFiles,
   workspaceConversationBindings,
   workspaceSessions,
   type WorkspaceConversationBindingRow,
@@ -30,6 +31,18 @@ export interface WorkspaceConversationBinding {
   lastUsedAt: string;
 }
 
+export interface WorkspaceRecoveryObservation {
+  recordedAtMs: number;
+  semantic?: Record<string, unknown>;
+}
+
+export interface WorkspaceActivityObservation {
+  workspaceId: string;
+  scopeLastActivityAtMs?: number;
+  bindingLastUsedAt?: string;
+  recovery?: WorkspaceRecoveryObservation;
+}
+
 export interface WorkspaceStore {
   createSession(input: {
     id: string;
@@ -41,7 +54,11 @@ export interface WorkspaceStore {
     managed?: boolean;
   }): WorkspaceSession;
   getSession(id: string): WorkspaceSession | undefined;
+  listSessions(): WorkspaceSession[];
+  getSessionByRoot(root: string): WorkspaceSession | undefined;
+  workspaceActivity(id: string): WorkspaceActivityObservation;
   touchSession(id: string): void;
+  closeSession(id: string, closedAt?: string): WorkspaceSession | undefined;
   getConversationBinding(
     conversationScopeId: string,
     targetKey: string,
@@ -115,12 +132,107 @@ export class SqliteWorkspaceStore implements WorkspaceStore {
     return row ? rowToWorkspaceSession(row) : undefined;
   }
 
+  listSessions(): WorkspaceSession[] {
+    return this.database.db
+      .select()
+      .from(workspaceSessions)
+      .orderBy(desc(workspaceSessions.lastUsedAt))
+      .all()
+      .map(rowToWorkspaceSession);
+  }
+
+  getSessionByRoot(root: string): WorkspaceSession | undefined {
+    const row = this.database.db
+      .select()
+      .from(workspaceSessions)
+      .where(eq(workspaceSessions.root, root))
+      .orderBy(desc(workspaceSessions.lastUsedAt))
+      .get();
+    return row ? rowToWorkspaceSession(row) : undefined;
+  }
+
+  workspaceActivity(id: string): WorkspaceActivityObservation {
+    const scopeRow = this.database.sqlite
+      .prepare(`
+        select max(scope.last_activity_at_ms) as last_activity_at_ms
+          from execution_scope_workspaces link
+          join execution_scopes scope on scope.scope_ref = link.scope_ref
+         where link.workspace_session_id = ?
+      `)
+      .get(id) as { last_activity_at_ms?: number | null } | undefined;
+    const bindingRow = this.database.sqlite
+      .prepare(`
+        select max(last_used_at) as last_used_at
+          from workspace_conversation_bindings
+         where workspace_session_id = ?
+      `)
+      .get(id) as { last_used_at?: string | null } | undefined;
+    const recoveryRow = this.database.sqlite
+      .prepare(`
+        select recorded_at_ms, semantic_json
+          from execution_recovery_capsules
+         where workspace_session_id = ?
+         order by recorded_at_ms desc
+         limit 1
+      `)
+      .get(id) as { recorded_at_ms: number; semantic_json: string } | undefined;
+
+    let semantic: Record<string, unknown> | undefined;
+    if (recoveryRow) {
+      try {
+        const decoded = JSON.parse(recoveryRow.semantic_json) as unknown;
+        if (typeof decoded === "object" && decoded !== null && !Array.isArray(decoded)) {
+          semantic = decoded as Record<string, unknown>;
+        }
+      } catch {
+        semantic = undefined;
+      }
+    }
+
+    return {
+      workspaceId: id,
+      scopeLastActivityAtMs:
+        scopeRow?.last_activity_at_ms === null || scopeRow?.last_activity_at_ms === undefined
+          ? undefined
+          : Number(scopeRow.last_activity_at_ms),
+      bindingLastUsedAt: bindingRow?.last_used_at ?? undefined,
+      recovery: recoveryRow
+        ? {
+            recordedAtMs: Number(recoveryRow.recorded_at_ms),
+            semantic,
+          }
+        : undefined,
+    };
+  }
+
   touchSession(id: string): void {
     this.database.db
       .update(workspaceSessions)
       .set({ lastUsedAt: new Date().toISOString() })
       .where(eq(workspaceSessions.id, id))
       .run();
+  }
+
+  closeSession(id: string, closedAt = new Date().toISOString()): WorkspaceSession | undefined {
+    const existing = this.getSession(id);
+    if (!existing) return undefined;
+    const close = this.database.sqlite.transaction(() => {
+      this.database.db
+        .delete(workspaceConversationBindings)
+        .where(eq(workspaceConversationBindings.workspaceSessionId, id))
+        .run();
+      this.database.db
+        .delete(loadedAgentFiles)
+        .where(eq(loadedAgentFiles.workspaceSessionId, id))
+        .run();
+      this.database.db
+        .update(workspaceSessions)
+        .set({ status: "closed", lastUsedAt: closedAt })
+        .where(eq(workspaceSessions.id, id))
+        .run();
+    });
+    close();
+    return { ...existing, status: "closed", lastUsedAt: closedAt };
   }
 
   getConversationBinding(
