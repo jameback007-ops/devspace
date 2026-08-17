@@ -245,6 +245,84 @@ export const localAgentSessions = sqliteTable(
   ],
 );
 
+export const localAgentTurns = sqliteTable(
+  "local_agent_turns",
+  {
+    id: text("id").primaryKey(),
+    agentId: text("agent_id")
+      .notNull()
+      .references(() => localAgentSessions.id, { onDelete: "cascade" }),
+    sourceKind: text("source_kind").notNull(),
+    senderScopeRef: text("sender_scope_ref"),
+    idempotencyNamespace: text("idempotency_namespace").notNull(),
+    idempotencyKey: text("idempotency_key").notNull(),
+    payloadDigestSha256: text("payload_digest_sha256").notNull(),
+    kind: text("kind").notNull(),
+    priority: text("priority").notNull(),
+    body: text("body").notNull(),
+    correlationRef: text("correlation_ref"),
+    model: text("model"),
+    thinking: text("thinking"),
+    status: text("status").notNull(),
+    sequence: integer("sequence").notNull(),
+    createdAtMs: integer("created_at_ms").notNull(),
+    claimedAtMs: integer("claimed_at_ms"),
+    startedAtMs: integer("started_at_ms"),
+    completedAtMs: integer("completed_at_ms"),
+    workerId: text("worker_id"),
+    providerSessionIdBefore: text("provider_session_id_before"),
+    providerSessionIdAfter: text("provider_session_id_after"),
+    finalResponse: text("final_response"),
+    resultCharacters: integer("result_characters"),
+    resultDigestSha256: text("result_digest_sha256"),
+    errorKind: text("error_kind"),
+    errorSummary: text("error_summary"),
+    errorDigestSha256: text("error_digest_sha256"),
+    cancelRequestedAtMs: integer("cancel_requested_at_ms"),
+    cancelNote: text("cancel_note"),
+    resolution: text("resolution"),
+    resolutionNote: text("resolution_note"),
+    supersededByTurnId: text("superseded_by_turn_id"),
+  },
+  (table) => [
+    uniqueIndex("local_agent_turns_sequence_idx").on(
+      table.agentId,
+      table.sequence,
+    ),
+    uniqueIndex("local_agent_turns_idempotency_idx").on(
+      table.agentId,
+      table.idempotencyNamespace,
+      table.idempotencyKey,
+    ),
+    index("local_agent_turns_queue_idx").on(
+      table.agentId,
+      table.status,
+      table.priority,
+      table.sequence,
+    ),
+    index("local_agent_turns_sender_idx").on(
+      table.senderScopeRef,
+      table.createdAtMs,
+    ),
+  ],
+);
+
+export const localAgentWorkerLeases = sqliteTable(
+  "local_agent_worker_leases",
+  {
+    agentId: text("agent_id")
+      .primaryKey()
+      .references(() => localAgentSessions.id, { onDelete: "cascade" }),
+    workerId: text("worker_id").notNull(),
+    acquiredAtMs: integer("acquired_at_ms").notNull(),
+    heartbeatAtMs: integer("heartbeat_at_ms").notNull(),
+    expiresAtMs: integer("expires_at_ms").notNull(),
+  },
+  (table) => [
+    index("local_agent_worker_leases_expiry_idx").on(table.expiresAtMs),
+  ],
+);
+
 export type WorkspaceSessionRow = typeof workspaceSessions.$inferSelect;
 export type NewWorkspaceSessionRow = typeof workspaceSessions.$inferInsert;
 export type LoadedAgentFileRow = typeof loadedAgentFiles.$inferSelect;
@@ -263,3 +341,7 @@ export type ExecutionScopeMessageReceiptRow = typeof executionScopeMessageReceip
 export type NewExecutionScopeMessageReceiptRow = typeof executionScopeMessageReceipts.$inferInsert;
 export type LocalAgentSessionRow = typeof localAgentSessions.$inferSelect;
 export type NewLocalAgentSessionRow = typeof localAgentSessions.$inferInsert;
+export type LocalAgentTurnRow = typeof localAgentTurns.$inferSelect;
+export type NewLocalAgentTurnRow = typeof localAgentTurns.$inferInsert;
+export type LocalAgentWorkerLeaseRow = typeof localAgentWorkerLeases.$inferSelect;
+export type NewLocalAgentWorkerLeaseRow = typeof localAgentWorkerLeases.$inferInsert;

@@ -169,6 +169,40 @@ binding, and monotonic receipts bound replay and queue growth. A mailbox wakeup
 may end a pure process poll, but it does not interrupt the process, consume the
 message, create a WebChat turn, or inject text into a host transcript.
 
+## Local-Agent Provider Continuation
+
+Local-agent prompt bodies and final provider responses are intentionally
+persisted in the owner-only SQLite database because they are the durable input
+and output of provider-session continuation. Do not include credentials,
+private reasoning, signed URLs, or unrestricted tool output. Execution-scope
+audit records only bounded metadata, lengths, and digests for these calls.
+
+One worker lease per agent prevents overlapping provider turns. The lease holder
+renews while a provider call is active. A stale lease before provider admission
+may safely requeue a claimed turn; a stale lease after provider execution began
+marks the turn `indeterminate` and blocks later turns. DevSpace never
+automatically replays an unknown provider effect.
+
+An unexpired lease is scheduling evidence, not an OS-process liveness claim.
+Status therefore exposes lease activity and expiry rather than asserting that a
+worker process is alive.
+
+Provider output that arrives after worker authority becomes uncertain is stored
+only as candidate evidence on the indeterminate turn. It does not update the
+agent's active provider session or latest response until an explicit succeeded
+resolution. Oversized candidate responses retain length and digest without the
+body.
+
+Running cancellation uses the provider's best available native mechanism, but
+remains `cancel_requested` until execution terminates. Successful completion
+after a cancellation request remains successful. Explicit indeterminate
+resolution is available only through the same authenticated single-Owner MCP
+or local CLI boundary and may require external Git, runtime, or effect evidence.
+
+Cursor and Copilot ACP adapters are not advertised as resumable provider
+sessions in this version. DevSpace rejects follow-up continuation rather than
+silently starting a new unrelated session.
+
 ## Executor-Turn Boundary
 
 Conversation identity is not a safe clock for one assistant turn. Hard

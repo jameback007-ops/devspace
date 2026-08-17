@@ -3,7 +3,14 @@ import { resolve } from "node:path";
 import { openDatabase, type DatabaseHandle } from "./db/client.js";
 import type { ServerConfig } from "./config.js";
 
-export type LocalAgentStatus = "starting" | "running" | "idle" | "error" | "stopped";
+export type LocalAgentStatus =
+  | "starting"
+  | "queued"
+  | "running"
+  | "idle"
+  | "blocked"
+  | "error"
+  | "stopped";
 
 export interface LocalAgentRecord {
   id: string;
@@ -233,8 +240,10 @@ function rowToLocalAgentRecord(row: LocalAgentRow): LocalAgentRecord {
 function readStatus(status: string): LocalAgentStatus {
   if (
     status === "starting" ||
+    status === "queued" ||
     status === "running" ||
     status === "idle" ||
+    status === "blocked" ||
     status === "error" ||
     status === "stopped"
   ) {

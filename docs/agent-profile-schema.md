@@ -129,12 +129,16 @@ Recommended body content:
 
 ## Model-facing workflow
 
-The Subagent skill teaches only:
+The Subagent skill prefers the first-class local-agent MCP tools when visible
+and otherwise uses the queue-backed CLI:
 
 ```bash
 devspace agents ls
 devspace agents run <profile-or-id> "<prompt>"
 devspace agents show <id>
+devspace agents turn <turn-id>
+devspace agents cancel <turn-id> [note]
+devspace agents resume <agent-id> [note]
 ```
 
 `open_workspace` exposes compact profile metadata:
@@ -152,6 +156,11 @@ devspace agents show <id>
 `devspace agents ls` lists existing subagent sessions for the current workspace;
 it does not list profile definitions.
 
+`agents run <existing-id>` enqueues a durable follow-up rather than launching an
+overlapping provider process. Codex, Claude, OpenCode, and Pi resume the
+provider session committed by the preceding successful turn. See
+[Local-Agent Session Continuation](local-agent-continuation.md).
+
 The full profile body stays out of the model context until DevSpace launches the
 profile.
 
@@ -161,5 +170,5 @@ profile.
 - Inferring changed files, tests, or diffs from worker output.
 - Exposing raw provider transcripts by default.
 - Teaching the model provider-specific CLIs.
-- First-class MCP agent tools. Future tools should wrap the same provider
-  adapter registry used by `devspace agents`.
+- Claiming provider-session continuation where an adapter has not qualified a
+  resume mechanism.

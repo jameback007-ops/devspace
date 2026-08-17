@@ -6,6 +6,7 @@ import type { OAuthConfig } from "./oauth-provider.js";
 import type { ExecutorWindowConfig } from "./executor-window.js";
 import type { ExecutionObservabilityConfig } from "./execution-observability.js";
 import type { ExecutionMailboxConfig } from "./execution-mailbox.js";
+import type { LocalAgentQueueConfig } from "./local-agent-queue.js";
 import { devspaceAgentsDir, devspaceSkillsDir, loadDevspaceFiles } from "./user-config.js";
 
 export type ToolMode = "minimal" | "full" | "codex";
@@ -24,6 +25,12 @@ const DEFAULT_EXECUTION_MAILBOX_MAX_TTL_HOURS = 30 * 24;
 const DEFAULT_EXECUTION_MAILBOX_TERMINAL_RETENTION_HOURS = 7 * 24;
 const DEFAULT_EXECUTION_MAILBOX_MAX_PENDING_PER_SCOPE = 500;
 const DEFAULT_EXECUTION_MAILBOX_MAX_BODY_CHARACTERS = 12_000;
+const DEFAULT_LOCAL_AGENT_MAX_PENDING = 200;
+const DEFAULT_LOCAL_AGENT_MAX_BODY_CHARACTERS = 24_000;
+const DEFAULT_LOCAL_AGENT_MAX_RESPONSE_CHARACTERS = 200_000;
+const DEFAULT_LOCAL_AGENT_LEASE_SECONDS = 120;
+const DEFAULT_LOCAL_AGENT_HEARTBEAT_SECONDS = 15;
+const DEFAULT_LOCAL_AGENT_TERMINAL_RETENTION_HOURS = 7 * 24;
 
 export interface ServerConfig {
   host: string;
@@ -47,6 +54,7 @@ export interface ServerConfig {
   executorWindow: ExecutorWindowConfig;
   executionObservability: ExecutionObservabilityConfig;
   executionMailbox: ExecutionMailboxConfig;
+  localAgentQueue: LocalAgentQueueConfig;
   logging: LoggingConfig;
 }
 
@@ -292,6 +300,54 @@ function parseExecutionMailboxConfig(
   };
 }
 
+function parseLocalAgentQueueConfig(env: NodeJS.ProcessEnv): LocalAgentQueueConfig {
+  const leaseSeconds = parsePositiveInteger(
+    env.DEVSPACE_LOCAL_AGENT_LEASE_SECONDS,
+    DEFAULT_LOCAL_AGENT_LEASE_SECONDS,
+    "DEVSPACE_LOCAL_AGENT_LEASE_SECONDS",
+    24 * 60 * 60,
+  );
+  const heartbeatSeconds = parsePositiveInteger(
+    env.DEVSPACE_LOCAL_AGENT_HEARTBEAT_SECONDS,
+    DEFAULT_LOCAL_AGENT_HEARTBEAT_SECONDS,
+    "DEVSPACE_LOCAL_AGENT_HEARTBEAT_SECONDS",
+    60 * 60,
+  );
+  if (heartbeatSeconds >= leaseSeconds) {
+    throw new Error(
+      "DEVSPACE_LOCAL_AGENT_HEARTBEAT_SECONDS must be less than DEVSPACE_LOCAL_AGENT_LEASE_SECONDS",
+    );
+  }
+  return {
+    maxPendingPerAgent: parsePositiveInteger(
+      env.DEVSPACE_LOCAL_AGENT_MAX_PENDING,
+      DEFAULT_LOCAL_AGENT_MAX_PENDING,
+      "DEVSPACE_LOCAL_AGENT_MAX_PENDING",
+      100_000,
+    ),
+    maxBodyCharacters: parsePositiveInteger(
+      env.DEVSPACE_LOCAL_AGENT_MAX_BODY_CHARACTERS,
+      DEFAULT_LOCAL_AGENT_MAX_BODY_CHARACTERS,
+      "DEVSPACE_LOCAL_AGENT_MAX_BODY_CHARACTERS",
+      200_000,
+    ),
+    maxResponseCharacters: parsePositiveInteger(
+      env.DEVSPACE_LOCAL_AGENT_MAX_RESPONSE_CHARACTERS,
+      DEFAULT_LOCAL_AGENT_MAX_RESPONSE_CHARACTERS,
+      "DEVSPACE_LOCAL_AGENT_MAX_RESPONSE_CHARACTERS",
+      2_000_000,
+    ),
+    leaseMs: leaseSeconds * 1_000,
+    heartbeatMs: heartbeatSeconds * 1_000,
+    terminalRetentionMs: parsePositiveInteger(
+      env.DEVSPACE_LOCAL_AGENT_TERMINAL_RETENTION_HOURS,
+      DEFAULT_LOCAL_AGENT_TERMINAL_RETENTION_HOURS,
+      "DEVSPACE_LOCAL_AGENT_TERMINAL_RETENTION_HOURS",
+      24 * 365,
+    ) * 60 * 60 * 1_000,
+  };
+}
+
 function parseWidgetMode(value: string | undefined): WidgetMode {
   if (!value || value === "full") return "full";
   if (value === "off" || value === "changes") return value;
@@ -392,6 +448,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     executorWindow: parseExecutorWindowConfig(env),
     executionObservability: parseExecutionObservabilityConfig(env),
     executionMailbox: parseExecutionMailboxConfig(env),
+    localAgentQueue: parseLocalAgentQueueConfig(env),
     logging: parseLoggingConfig(env),
   };
 }

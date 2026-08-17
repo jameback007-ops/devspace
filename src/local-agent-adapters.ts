@@ -57,43 +57,50 @@ class ClaudeLocalAgentAdapter implements LocalAgentAdapter {
   readonly provider = "claude" as const;
 
   async run(input: LocalAgentRunInput): Promise<LocalAgentRunResult> {
+    throwIfAborted(input.signal);
     const { query } = await import("@anthropic-ai/claude-agent-sdk");
     const claudeExecutable = process.env.CLAUDE_COMMAND ?? resolveExecutable("claude");
-    const messages = query({
-      prompt: input.prompt,
-      options: {
-        cwd: input.workspace,
-        model: input.model,
-        ...(input.thinking ? { thinking: { type: "adaptive" } as const, effort: input.thinking as EffortLevel } : {}),
-        resume: input.providerSessionId,
-        permissionMode: "bypassPermissions",
-        allowDangerouslySkipPermissions: true,
-        env: claudeCommandEnvironment(process.env),
-        ...(claudeExecutable ? { pathToClaudeCodeExecutable: claudeExecutable } : {}),
-      },
-    });
+    const linked = linkedAbortController(input.signal);
+    try {
+      const messages = query({
+        prompt: input.prompt,
+        options: {
+          cwd: input.workspace,
+          model: input.model,
+          ...(input.thinking ? { thinking: { type: "adaptive" } as const, effort: input.thinking as EffortLevel } : {}),
+          resume: input.providerSessionId,
+          permissionMode: "bypassPermissions",
+          allowDangerouslySkipPermissions: true,
+          abortController: linked.controller,
+          env: claudeCommandEnvironment(process.env),
+          ...(claudeExecutable ? { pathToClaudeCodeExecutable: claudeExecutable } : {}),
+        },
+      });
 
-    let providerSessionId = input.providerSessionId ?? null;
-    let finalResponse = "";
-    const items: unknown[] = [];
-    for await (const message of messages) {
-      items.push(message);
-      const record = message as Record<string, unknown>;
-      if (typeof record.session_id === "string") providerSessionId = record.session_id;
-      if (record.type === "result" && typeof record.result === "string") {
-        const resultError = claudeResultError(record);
-        if (resultError) throw new Error(resultError);
-        finalResponse = record.result;
+      let providerSessionId = input.providerSessionId ?? null;
+      let finalResponse = "";
+      const items: unknown[] = [];
+      for await (const message of messages) {
+        items.push(message);
+        const record = message as Record<string, unknown>;
+        if (typeof record.session_id === "string") providerSessionId = record.session_id;
+        if (record.type === "result" && typeof record.result === "string") {
+          const resultError = claudeResultError(record);
+          if (resultError) throw new Error(resultError);
+          finalResponse = record.result;
+        }
       }
-    }
 
-    finalResponse = requireFinalResponse("Claude", finalResponse);
-    return {
-      provider: this.provider,
-      providerSessionId,
-      finalResponse,
-      items,
-    };
+      finalResponse = requireFinalResponse("Claude", finalResponse);
+      return {
+        provider: this.provider,
+        providerSessionId,
+        finalResponse,
+        items,
+      };
+    } finally {
+      linked.dispose();
+    }
   }
 }
 
@@ -142,13 +149,18 @@ class OpencodeLocalAgentAdapter implements LocalAgentAdapter {
   readonly provider = "opencode" as const;
 
   async run(input: LocalAgentRunInput): Promise<LocalAgentRunResult> {
+    throwIfAborted(input.signal);
     const { createOpencode } = await import("@opencode-ai/sdk/v2");
     const { client, server } = await createOpencode();
+    let disposeAbort = (): void => undefined;
     try {
       const sessionId = input.providerSessionId ?? await createOpencodeSession(client, input);
+      disposeAbort = onAbort(input.signal, () => {
+        void abortOpencodeSession(client, sessionId).catch(() => undefined);
+      });
       const promptResult = await promptOpencodeSession(client, sessionId, input);
-      await waitForOpencodeSession(client, sessionId);
-      const messages = await readOpencodeMessages(client, sessionId);
+      await waitForOpencodeSession(client, sessionId, input.signal);
+      const messages = await readOpencodeMessages(client, sessionId, input.signal);
       const finalResponse = requireFinalResponse(
         "OpenCode",
         extractOpenCodeFinalResponse(messages) || extractOpenCodeFinalResponse(promptResult),
@@ -160,6 +172,7 @@ class OpencodeLocalAgentAdapter implements LocalAgentAdapter {
         items: [promptResult, messages],
       };
     } finally {
+      disposeAbort();
       server.close();
     }
   }
@@ -172,6 +185,7 @@ class AcpLocalAgentAdapter implements LocalAgentAdapter {
   ) {}
 
   async run(input: LocalAgentRunInput): Promise<LocalAgentRunResult> {
+    throwIfAborted(input.signal);
     const { client } = await import("@agentclientprotocol/sdk");
     const { methods } = await import("@agentclientprotocol/sdk");
     const { ndJsonStream } = await import("@agentclientprotocol/sdk");
@@ -204,6 +218,11 @@ class AcpLocalAgentAdapter implements LocalAgentAdapter {
         .connectWith(stream, async (context) => {
           const session = await context.buildSession(input.workspace).start();
           providerSessionId = session.sessionId;
+          const disposeAbort = onAbort(input.signal, () => {
+            void context.notify(methods.agent.session.cancel, {
+              sessionId: session.sessionId,
+            }).catch(() => undefined);
+          });
           try {
             if (input.model) {
               const config = resolveAcpModelConfigUpdate(session, input.model, this.provider);
@@ -219,6 +238,7 @@ class AcpLocalAgentAdapter implements LocalAgentAdapter {
               const message = await session.nextUpdate();
               if (message.kind === "stop") {
                 await prompt;
+                if (message.stopReason === "cancelled") throw abortError();
                 return textParts.join("").trim();
               }
 
@@ -228,6 +248,7 @@ class AcpLocalAgentAdapter implements LocalAgentAdapter {
               if (content.type === "text") textParts.push(content.text);
             }
           } finally {
+            disposeAbort();
             session.dispose();
           }
         });
@@ -334,6 +355,7 @@ class PiRpcLocalAgentAdapter implements LocalAgentAdapter {
   readonly provider = "pi" as const;
 
   async run(input: LocalAgentRunInput): Promise<LocalAgentRunResult> {
+    throwIfAborted(input.signal);
     const args = ["--mode", "rpc"];
     if (input.model) args.push("--model", input.model);
     if (input.thinking) args.push("--thinking", input.thinking);
@@ -345,6 +367,7 @@ class PiRpcLocalAgentAdapter implements LocalAgentAdapter {
       windowsHide: true,
     });
     assertPipedChild(child);
+    const disposeAbort = onAbort(input.signal, () => child.kill("SIGINT"));
     const rpc = new JsonLineRpc(child);
     const events: unknown[] = [];
     rpc.onEvent((event) => events.push(event));
@@ -374,6 +397,7 @@ class PiRpcLocalAgentAdapter implements LocalAgentAdapter {
         items: [...events, sessionMessages],
       };
     } finally {
+      disposeAbort();
       child.kill();
     }
   }
@@ -526,25 +550,49 @@ async function promptOpencodeSession(
     ...(input.model ? { model: parseOpencodeModel(input.model) } : {}),
     ...(input.thinking ? { variant: input.thinking } : {}),
   };
-  return session.prompt(promptInput, { throwOnError: true });
+  return session.prompt(promptInput, {
+    throwOnError: true,
+    signal: input.signal,
+  });
 }
 
-async function waitForOpencodeSession(client: unknown, sessionId: string): Promise<void> {
+async function waitForOpencodeSession(
+  client: unknown,
+  sessionId: string,
+  signal?: AbortSignal,
+): Promise<void> {
   const session = (client as {
     session?: { wait?: (parameters?: unknown, options?: unknown) => Promise<unknown> };
   }).session;
   if (!session?.wait) return;
-  await session.wait({ sessionID: sessionId }, { throwOnError: true });
+  await session.wait({ sessionID: sessionId }, { throwOnError: true, signal });
 }
 
-async function readOpencodeMessages(client: unknown, sessionId: string): Promise<unknown> {
+async function readOpencodeMessages(
+  client: unknown,
+  sessionId: string,
+  signal?: AbortSignal,
+): Promise<unknown> {
   const session = (client as {
     session?: {
       messages?: (parameters?: unknown, options?: unknown) => Promise<unknown>;
     };
   }).session;
   if (!session?.messages) return undefined;
-  return session.messages({ sessionID: sessionId, order: "asc", limit: 100 }, { throwOnError: true });
+  return session.messages(
+    { sessionID: sessionId, order: "asc", limit: 100 },
+    { throwOnError: true, signal },
+  );
+}
+
+async function abortOpencodeSession(client: unknown, sessionId: string): Promise<void> {
+  const session = (client as {
+    session?: {
+      abort?: (parameters?: unknown, options?: unknown) => Promise<unknown>;
+    };
+  }).session;
+  if (!session?.abort) return;
+  await session.abort({ sessionID: sessionId }, { throwOnError: false });
 }
 
 function parseOpencodeModel(model: string): { providerID: string; modelID: string } {
@@ -715,6 +763,39 @@ function readNestedString(value: unknown, path: string[]): string | undefined {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function abortError(): Error {
+  const error = new Error("Local agent provider turn was cancelled.");
+  error.name = "AbortError";
+  return error;
+}
+
+function throwIfAborted(signal: AbortSignal | undefined): void {
+  if (!signal?.aborted) return;
+  throw abortError();
+}
+
+function onAbort(
+  signal: AbortSignal | undefined,
+  callback: () => void,
+): () => void {
+  if (!signal) return () => undefined;
+  if (signal.aborted) {
+    callback();
+    return () => undefined;
+  }
+  signal.addEventListener("abort", callback, { once: true });
+  return () => signal.removeEventListener("abort", callback);
+}
+
+function linkedAbortController(signal: AbortSignal | undefined): {
+  controller: AbortController;
+  dispose(): void;
+} {
+  const controller = new AbortController();
+  const dispose = onAbort(signal, () => controller.abort(signal?.reason));
+  return { controller, dispose };
 }
 
 function requireFinalResponse(provider: string, response: string): string {

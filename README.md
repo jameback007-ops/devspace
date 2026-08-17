@@ -139,6 +139,7 @@ DevSpace gives ChatGPT tools to:
 - use isolated Git worktrees for parallel coding sessions
 - inspect independent host execution scopes without merging their conversations
 - send durable target-bound messages between execution scopes with receipts
+- enqueue serialized follow-up turns into DevSpace-managed Codex, Claude, OpenCode, and Pi sessions
 - follow project instructions from `AGENTS.md` and `CLAUDE.md`
 - discover local agent skills from your skill folders
 - show tool cards and optional change summaries in ChatGPT Apps-compatible hosts
@@ -184,6 +185,7 @@ devspace doctor
 - [Configuration Reference](https://github.com/Waishnav/devspace/blob/main/docs/configuration.md)
 - [Execution-Scope Observability](https://github.com/Waishnav/devspace/blob/main/docs/execution-scope-observability.md)
 - [Execution-Scope Messaging](https://github.com/Waishnav/devspace/blob/main/docs/execution-scope-messaging.md)
+- [Local-Agent Session Continuation](https://github.com/Waishnav/devspace/blob/main/docs/local-agent-continuation.md)
 - [Native File Download](https://github.com/Waishnav/devspace/blob/main/docs/artifact-exchange.md)
 - [Security Model](https://github.com/Waishnav/devspace/blob/main/docs/security.md)
 - [Troubleshooting Gotchas](https://github.com/Waishnav/devspace/blob/main/docs/gotchas.md)

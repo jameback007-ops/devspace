@@ -88,6 +88,10 @@ import {
   getLocalAgentProviderAvailabilitySnapshot,
   type LocalAgentProviderAvailability,
 } from "./local-agent-availability.js";
+import {
+  LocalAgentCoordinator,
+  launchDetachedLocalAgentWorker,
+} from "./local-agent-coordinator.js";
 
 type Transport = StreamableHTTPServerTransport;
 // MCP clients can reconnect without closing the previous transport. Bound stale
@@ -483,6 +487,9 @@ function serverInstructions(config: ServerConfig): string {
   const executionMailboxInstruction = config.executionMailbox.enabled
     ? " Use execution_scope_message_send to leave a durable message for another known scope, reusing one idempotencyKey for retries. Acceptance means stored, not observed. When a tool result reports pending mail, call execution_scope_message_inbox before opening a new major frontier, then record acknowledged or acted state with execution_scope_message_receipt. Use execution_scope_message_status to inspect a message you sent or received. The mailbox is executor-local coordination, not task, decision, effect, writer, or canonical-memory authority, and it cannot wake or inject text directly into an inactive WebChat transcript."
     : "";
+  const localAgentInstruction = config.subagents
+    ? " Use local_agent_session_list and local_agent_session_status to discover DevSpace-managed provider sessions. local_agent_message_send enqueues one idempotent turn for an existing Codex, Claude, OpenCode, or Pi session; one worker lease serializes provider turns and acceptance means queued, not completed. Inspect local_agent_turn_status for the result. local_agent_turn_cancel is best-effort for running providers. An ordinary provider failure pauses later queued turns; use local_agent_session_resume after inspecting the failure. Never retry an indeterminate turn without explicit evidence-backed reconciliation through local_agent_turn_resolve because the prior provider effect may be unknown. Local-agent sessions and queues are executor-local coordination, not standing ZES identity, task, decision, writer, effect, or canonical-memory authority."
+    : "";
   const artifactInstruction = config.artifactsEnabled && isArtifactDownloadSupportedPlatform()
     ? " When the user supplies or generates a file that is not present on the DevSpace host, use download_artifact with its native file value, the existing workspace ID, and a suitable relative destination path chosen from the user's request and project structure. The tool refuses to overwrite an existing destination and returns the normalized workspace-relative path. Use normal workspace tools when explicit inspection, replacement, movement, renaming, or deletion is needed. Do not recreate binary files with write/edit calls or place signed URLs, native file objects, base64 content, or invented host paths in shell commands or logs."
     : "";
@@ -492,7 +499,7 @@ function serverInstructions(config: ServerConfig): string {
       : "";
 
   if (config.toolMode === "codex") {
-    return `Use DevSpace for coding work. Call ${toolNames.openWorkspace} once for each project folder or isolated worktree, then keep using its workspaceId. During continued work in the same project or worktree, do not call ${toolNames.openWorkspace} again. Open another workspace only when changing projects, switching checkout/worktree mode, creating another isolated worktree, or when the current workspaceId is rejected. Use ${toolNames.read} for direct file reads, apply_patch for all file modifications, exec_command for inspection, tests, builds, and other commands, and write_stdin to poll or interact with running processes. Follow instructions returned by ${toolNames.openWorkspace}; read applicable instruction and skill files before working in their scope.${artifactInstruction}${showChangesInstruction}${codexSessionInstruction}${executorWindowInstruction}${executionScopeInstruction}${executionMailboxInstruction}`;
+    return `Use DevSpace for coding work. Call ${toolNames.openWorkspace} once for each project folder or isolated worktree, then keep using its workspaceId. During continued work in the same project or worktree, do not call ${toolNames.openWorkspace} again. Open another workspace only when changing projects, switching checkout/worktree mode, creating another isolated worktree, or when the current workspaceId is rejected. Use ${toolNames.read} for direct file reads, apply_patch for all file modifications, exec_command for inspection, tests, builds, and other commands, and write_stdin to poll or interact with running processes. Follow instructions returned by ${toolNames.openWorkspace}; read applicable instruction and skill files before working in their scope.${artifactInstruction}${showChangesInstruction}${codexSessionInstruction}${executorWindowInstruction}${executionScopeInstruction}${executionMailboxInstruction}${localAgentInstruction}`;
   }
 
   const inspection = config.toolMode !== "full"
@@ -505,7 +512,7 @@ function serverInstructions(config: ServerConfig): string {
 
   const agentsMd = `Follow instructions returned by ${toolNames.openWorkspace}. Before working under a path listed in availableAgentsFiles, use ${toolNames.read} to inspect that instruction file and follow it. `;
 
-  return `Use DevSpace for coding work. Call ${toolNames.openWorkspace} once for each project folder or isolated worktree, then keep using its workspaceId. During continued work in the same project or worktree, do not call ${toolNames.openWorkspace} again. Open another workspace only when changing projects, switching checkout/worktree mode, creating another isolated worktree, or when the current workspaceId is rejected. ${agentsMd}${skills}${inspection}Prefer ${toolNames.edit} for targeted modifications, ${toolNames.write} only for new files or complete rewrites, and ${toolNames.shell} for tests, builds, git inspection, package scripts, and commands that are better executed by the shell. Do not create or modify files with ${toolNames.shell}; avoid shell redirection, heredocs, tee, sed -i, perl -i, node/python/ruby scripts, or any command whose purpose is to write project files.${artifactInstruction}${showChangesInstruction}${codexSessionInstruction}${executorWindowInstruction}${executionScopeInstruction}${executionMailboxInstruction}`;
+  return `Use DevSpace for coding work. Call ${toolNames.openWorkspace} once for each project folder or isolated worktree, then keep using its workspaceId. During continued work in the same project or worktree, do not call ${toolNames.openWorkspace} again. Open another workspace only when changing projects, switching checkout/worktree mode, creating another isolated worktree, or when the current workspaceId is rejected. ${agentsMd}${skills}${inspection}Prefer ${toolNames.edit} for targeted modifications, ${toolNames.write} only for new files or complete rewrites, and ${toolNames.shell} for tests, builds, git inspection, package scripts, and commands that are better executed by the shell. Do not create or modify files with ${toolNames.shell}; avoid shell redirection, heredocs, tee, sed -i, perl -i, node/python/ruby scripts, or any command whose purpose is to write project files.${artifactInstruction}${showChangesInstruction}${codexSessionInstruction}${executorWindowInstruction}${executionScopeInstruction}${executionMailboxInstruction}${localAgentInstruction}`;
 }
 
 function formatVisibleAgent(agent: {
@@ -1258,6 +1265,250 @@ function registerExecutionMailboxTools(
   );
 }
 
+function registerLocalAgentTools(
+  server: McpServer,
+  config: ServerConfig,
+  coordinator: LocalAgentCoordinator,
+): void {
+  if (!config.subagents) return;
+  const agentIdSchema = z
+    .string()
+    .regex(/^agt_[a-f0-9]{8}$/)
+    .describe("Exact DevSpace local-agent session ID returned by list or status.");
+  const turnIdSchema = z
+    .string()
+    .regex(/^atn_[a-f0-9]{32}$/)
+    .describe("Exact durable local-agent turn ID returned by send or status.");
+  const agentMessageAnnotations = {
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: true,
+  };
+  const agentControlAnnotations = {
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: true,
+  };
+
+  registerAppTool(
+    server,
+    "local_agent_session_list",
+    {
+      title: "List DevSpace local-agent sessions",
+      description:
+        "List durable DevSpace-managed agent sessions and queue summaries. These are executor-local provider sessions, not standing ZES agent identities or canonical work authority.",
+      inputSchema: {
+        workspaceId: z
+          .string()
+          .optional()
+          .describe("Optionally restrict sessions to one open DevSpace workspace."),
+      },
+      outputSchema: resultOutputSchema({ data: z.unknown() }),
+      ...toolWidgetDescriptorMeta(config, "read"),
+      annotations: CODEX_SESSION_TOOL_ANNOTATIONS,
+    },
+    async ({ workspaceId }) => jsonToolResponse({
+      sessions: coordinator.listSessions(workspaceId ? { workspaceId } : {}),
+    }),
+  );
+
+  registerAppTool(
+    server,
+    "local_agent_session_status",
+    {
+      title: "Inspect DevSpace local-agent session",
+      description:
+        "Read one local-agent provider session, continuation capability, queue state, lease state, and recent durable turns.",
+      inputSchema: {
+        agentId: agentIdSchema,
+        turnLimit: z.number().int().min(1).max(100).optional(),
+      },
+      outputSchema: resultOutputSchema({ data: z.unknown() }),
+      ...toolWidgetDescriptorMeta(config, "read"),
+      annotations: CODEX_SESSION_TOOL_ANNOTATIONS,
+    },
+    async ({ agentId, turnLimit }) => jsonToolResponse(
+      coordinator.sessionStatus(agentId, {
+        includeRecentTurns: true,
+        turnLimit,
+      }),
+    ),
+  );
+
+  registerAppTool(
+    server,
+    "local_agent_session_resume",
+    {
+      title: "Resume paused DevSpace local-agent session",
+      description:
+        "Clear an ordinary failed-session pause or reconcile queued/active work whose worker lease disappeared, then request one serialized worker when safe. This cannot bypass an indeterminate turn; reconcile that exact turn first.",
+      inputSchema: {
+        agentId: agentIdSchema,
+        note: z
+          .string()
+          .min(1)
+          .max(4_000)
+          .optional()
+          .describe("Optional reason or evidence for resuming after the provider failure."),
+      },
+      outputSchema: resultOutputSchema({ data: z.unknown() }),
+      ...toolWidgetDescriptorMeta(config, "read"),
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: true,
+      },
+    },
+    async ({ agentId, note }) => jsonToolResponse(
+      coordinator.resumeSession(agentId, note),
+    ),
+  );
+
+  registerAppTool(
+    server,
+    "local_agent_message_send",
+    {
+      title: "Send message to DevSpace local-agent session",
+      description:
+        "Enqueue one durable provider-neutral message for an existing DevSpace-managed Codex, Claude, OpenCode, or Pi session. A worker lease serializes provider turns; acceptance means queued, not completed. Reuse the exact idempotencyKey on retries.",
+      inputSchema: {
+        agentId: agentIdSchema,
+        idempotencyKey: z.string().min(1).max(200),
+        kind: z.enum([
+          "instruction",
+          "correction",
+          "question",
+          "notice",
+          "handoff",
+        ]),
+        priority: z.enum(["low", "normal", "high", "urgent"]).optional(),
+        body: z
+          .string()
+          .min(1)
+          .max(config.localAgentQueue.maxBodyCharacters)
+          .describe("Message content. Do not include credentials or private reasoning."),
+        correlationRef: z.string().min(1).max(1_000).optional(),
+        supersedePending: z
+          .boolean()
+          .optional()
+          .describe("Cancel older queued turns before adding this turn. Running work is never superseded."),
+      },
+      outputSchema: resultOutputSchema({ data: z.unknown() }),
+      ...toolWidgetDescriptorMeta(config, "read"),
+      annotations: agentMessageAnnotations,
+    },
+    async (
+      {
+        agentId,
+        idempotencyKey,
+        kind,
+        priority,
+        body,
+        correlationRef,
+        supersedePending,
+      },
+      { _meta },
+    ) => jsonToolResponse(
+      coordinator.enqueueExecutionMessage(executionScopeIdentity(_meta), {
+        agentId,
+        idempotencyKey,
+        kind: kind as ExecutionMessageKind,
+        priority: priority as ExecutionMessagePriority | undefined,
+        body,
+        correlationRef,
+        supersedePending,
+      }),
+    ),
+  );
+
+  registerAppTool(
+    server,
+    "local_agent_turn_status",
+    {
+      title: "Read local-agent turn status",
+      description:
+        "Read queued, claimed, running, cancel-requested, succeeded, failed, cancelled, or indeterminate state for one durable provider turn.",
+      inputSchema: { turnId: turnIdSchema },
+      outputSchema: resultOutputSchema({ data: z.unknown() }),
+      ...toolWidgetDescriptorMeta(config, "read"),
+      annotations: CODEX_SESSION_TOOL_ANNOTATIONS,
+    },
+    async ({ turnId }) => jsonToolResponse(coordinator.turnStatus(turnId)),
+  );
+
+  registerAppTool(
+    server,
+    "local_agent_turn_cancel",
+    {
+      title: "Cancel local-agent turn",
+      description:
+        "Cancel a queued/claimed turn immediately or request best-effort native cancellation for a running provider turn. A request is not reported as cancelled until provider execution actually stops or terminates.",
+      inputSchema: {
+        turnId: turnIdSchema,
+        note: z.string().min(1).max(4_000).optional(),
+      },
+      outputSchema: resultOutputSchema({ data: z.unknown() }),
+      ...toolWidgetDescriptorMeta(config, "read"),
+      annotations: agentControlAnnotations,
+    },
+    async ({ turnId, note }) => jsonToolResponse(
+      coordinator.cancelTurn(turnId, note),
+    ),
+  );
+
+  registerAppTool(
+    server,
+    "local_agent_turn_resolve",
+    {
+      title: "Reconcile indeterminate local-agent turn",
+      description:
+        "Explicitly reconcile a turn left indeterminate after a stale worker lease. retry may duplicate an unknown provider effect; cancelled or succeeded records the Owner's evidence-backed resolution and unblocks later queued turns.",
+      inputSchema: {
+        turnId: turnIdSchema,
+        resolution: z.enum(["retry", "cancelled", "succeeded"]),
+        note: z.string().min(1).max(4_000),
+        providerSessionIdAfter: z.string().min(1).max(2_000).optional(),
+        finalResponse: z
+          .string()
+          .max(config.localAgentQueue.maxResponseCharacters)
+          .optional(),
+      },
+      outputSchema: resultOutputSchema({ data: z.unknown() }),
+      ...toolWidgetDescriptorMeta(config, "read"),
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
+        openWorldHint: true,
+      },
+    },
+    async (
+      {
+        turnId,
+        resolution,
+        note,
+        providerSessionIdAfter,
+        finalResponse,
+      },
+    ) => jsonToolResponse(
+      coordinator.resolveTurn(turnId, resolution, note, {
+        providerSessionIdAfter,
+        finalResponse,
+      }),
+    ),
+  );
+}
+
+function localAgentWorkerEntrypoint(): string {
+  const currentModule = fileURLToPath(import.meta.url);
+  return fileURLToPath(
+    new URL(currentModule.endsWith(".ts") ? "./cli.ts" : "./cli.js", import.meta.url),
+  );
+}
+
 function registerCodexProcessTools(
   server: McpServer,
   config: ServerConfig,
@@ -1439,9 +1690,11 @@ export function createMcpServer(
   executorWindows = new ExecutorWindowRegistry(config.executorWindow),
   executionScopes?: ExecutionScopeManager,
   executionMailbox?: ExecutionMailboxManager,
+  localAgentCoordinator?: LocalAgentCoordinator,
 ): McpServer {
   const ownsExecutionScopes = executionScopes === undefined;
   const ownsExecutionMailbox = executionMailbox === undefined;
+  const ownsLocalAgentCoordinator = config.subagents && localAgentCoordinator === undefined;
   const activeExecutionScopes = executionScopes ?? new ExecutionScopeManager(
     config.executionObservability,
     config.stateDir,
@@ -1452,13 +1705,22 @@ export function createMcpServer(
     config.executionMailbox,
     config.stateDir,
   );
+  const activeLocalAgentCoordinator = config.subagents
+    ? localAgentCoordinator ?? new LocalAgentCoordinator(config, {
+        launchWorker: (agentId, workerId) => launchDetachedLocalAgentWorker(
+          localAgentWorkerEntrypoint(),
+          agentId,
+          workerId,
+        ),
+      })
+    : undefined;
   const server = new McpServer(
     {
       name: "devspace",
       title: "DevSpace",
-      version: "0.6.0-zes.1",
+      version: "0.7.0-zes.1",
       description:
-        "Coding tools for project workspaces, per-turn executor safety, provider-neutral execution-scope observability and messaging, and broad read-only inspection of the exact live AOQ Codex task and worktree.",
+        "Coding tools for project workspaces, per-turn executor safety, execution-scope observability and messaging, serialized local-agent provider continuation, and broad read-only inspection of the exact live AOQ Codex task and worktree.",
     },
     {
       instructions: serverInstructions(config),
@@ -1506,6 +1768,9 @@ export function createMcpServer(
   registerExecutorWindowTools(server, config, executorWindows);
   registerExecutionScopeTools(server, config, activeExecutionScopes);
   registerExecutionMailboxTools(server, config, activeExecutionMailbox);
+  if (activeLocalAgentCoordinator) {
+    registerLocalAgentTools(server, config, activeLocalAgentCoordinator);
+  }
   registerZesCodexInspectionTools(server, config, registerAppTool);
 
   registerAppTool(
@@ -2424,7 +2689,7 @@ export function createMcpServer(
     });
   }
 
-  if (ownsExecutionScopes || ownsExecutionMailbox) {
+  if (ownsExecutionScopes || ownsExecutionMailbox || ownsLocalAgentCoordinator) {
     const close = server.close.bind(server);
     let closing: Promise<void> | undefined;
     server.close = () => {
@@ -2434,6 +2699,7 @@ export function createMcpServer(
         } finally {
           if (ownsExecutionScopes) activeExecutionScopes.close();
           if (ownsExecutionMailbox) activeExecutionMailbox.close();
+          if (ownsLocalAgentCoordinator) activeLocalAgentCoordinator?.close();
         }
       })();
       return closing;
@@ -2484,6 +2750,15 @@ export function createServer(
     config.executionMailbox,
     config.stateDir,
   );
+  const localAgentCoordinator = config.subagents
+    ? new LocalAgentCoordinator(config, {
+        launchWorker: (agentId, workerId) => launchDetachedLocalAgentWorker(
+          localAgentWorkerEntrypoint(),
+          agentId,
+          workerId,
+        ),
+      })
+    : undefined;
   const localAgentProviders = config.subagents
     ? getLocalAgentProviderAvailabilitySnapshot()
     : [];
@@ -2634,6 +2909,7 @@ export function createServer(
           executorWindows,
           executionScopes,
           executionMailbox,
+          localAgentCoordinator,
         );
         await server.connect(transport);
         res.on("close", () => {
@@ -2679,6 +2955,7 @@ export function createServer(
           executorWindows,
           executionScopes,
           executionMailbox,
+          localAgentCoordinator,
         );
         await server.connect(transport);
       } else if (req.method === "POST") {
@@ -2698,6 +2975,7 @@ export function createServer(
           executorWindows,
           executionScopes,
           executionMailbox,
+          localAgentCoordinator,
         );
         await server.connect(transport);
         res.on("close", () => {
@@ -2732,6 +3010,7 @@ export function createServer(
         const results = await transports.closeAll();
         logSessionCloseResults("server_shutdown", results);
         processSessions.shutdown();
+        localAgentCoordinator?.close();
         executionMailbox.close();
         executionScopes.close();
         oauthProvider.close();
@@ -2775,6 +3054,9 @@ if (await isMainModule()) {
     console.log(`native artifact download: ${artifactDownloadStatus}`);
     if (config.subagents) {
       console.log(`subagent providers: ${formatLocalAgentProviderAvailabilitySummary(localAgentProviders)}`);
+      console.log(
+        `local-agent queue: max pending ${config.localAgentQueue.maxPendingPerAgent}, lease ${Math.round(config.localAgentQueue.leaseMs / 1_000)}s, heartbeat ${Math.round(config.localAgentQueue.heartbeatMs / 1_000)}s`,
+      );
     }
   });
 

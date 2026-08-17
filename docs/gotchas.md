@@ -223,10 +223,21 @@ It also checks compatibility and custom paths:
 When `DEVSPACE_SUBAGENTS=1`, DevSpace loads agent profiles from
 `~/.devspace/agents/*.md` and project `.devspace/agents/*.md`, then exposes a
 compact profile catalog through `open_workspace`. The bundled
-`subagent-delegation` skill keeps the model-facing workflow to
-`devspace agents ls`, `devspace agents run`, and `devspace agents show`.
+`subagent-delegation` skill prefers the first-class local-agent MCP tools and
+falls back to the durable `devspace agents` queue.
 `devspace agents ls` lists existing subagent sessions, not profile
 definitions.
+
+Follow-ups are not executed by spawning one uncontrolled worker per prompt.
+They enter a per-agent queue and one lease holder invokes the provider at a
+time. If a worker lease expires before provider execution starts, the claimed
+turn can requeue. If it expires after execution starts, the turn becomes
+`indeterminate` and blocks later work until explicitly reconciled. Do not retry
+an indeterminate turn merely because no final response is visible.
+
+Cursor and Copilot sessions are not qualified for durable continuation in this
+version. An explicit rejection is safer than assuming a new ACP process resumed
+the old provider conversation.
 
 Packaged agent profile examples under `examples/agents/` are starter templates.
 Copy or adapt them into one of the active profile directories before use.

@@ -53,6 +53,8 @@ architectural purity.
 - **Process session** — a long-running command tracked for later input, output, or termination.
 - **Execution scope** — a stable provider-neutral host conversation/task scope used to join executor-local workspace, process, window, and bounded audit observations. It is not a transcript or product authority.
 - **Executor turn** — one host assistant turn identified independently from the conversation scope. Exact host identity may enforce a hard landing; fallback windows are advisory and must not accumulate conversation age.
+- **Local-agent turn** — one durable queued prompt for a DevSpace-managed provider session. It is serialized by a worker lease and is not canonical work or effect authority.
+- **Worker lease** — the executor-local single-worker claim that prevents overlapping provider turns for one local-agent session. Lease expiry during provider execution creates an indeterminate turn rather than authorizing replay.
 - **Execution message** — a durable target-bound executor-local coordination envelope with idempotent send and monotonic observed/acknowledged/acted receipts. It is not product task, writer, decision, effect, checkpoint, or memory authority.
 - **Instruction file** — an `AGENTS.md` or `CLAUDE.md` discovered while navigating a workspace.
 - **Subagent** — a bounded model invocation delegated and coordinated by the host.

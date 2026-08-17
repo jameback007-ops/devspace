@@ -151,11 +151,12 @@ readback, and the real writer or lease contract before relying on that request.
 
 ## Downstream Executor Adapters
 
-The same envelope can later support stronger delivery adapters without changing
-mailbox semantics:
+The same envelope supports or can later support stronger delivery adapters
+without changing mailbox semantics:
 
-- DevSpace-managed Codex, Claude, OpenCode, or Pi sessions can dequeue a message
-  into a serialized provider-session continuation;
+- DevSpace-managed Codex, Claude, OpenCode, or Pi sessions now use a separate
+  durable per-agent turn queue and worker lease for serialized provider-session
+  continuation; see [Local-Agent Session Continuation](local-agent-continuation.md);
 - Codex App Server can map it to its native thread relay;
 - Hermes or a ZES-owned executor can receive direct queue wakeups;
 - WebChat remains next-MCP-boundary delivery unless the host provides a future

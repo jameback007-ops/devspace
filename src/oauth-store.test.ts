@@ -47,6 +47,7 @@ async function testDatabaseConfiguration(stateDir: string): Promise<void> {
       { version: 4, name: "workspace-conversation-bindings" },
       { version: 5, name: "execution-scope-observability" },
       { version: 6, name: "execution-scope-mailbox" },
+      { version: 7, name: "local-agent-turn-queue" },
     ]);
   } finally {
     database.close();

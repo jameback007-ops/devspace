@@ -13,11 +13,13 @@ const emptyTurn = (finalResponse: string): RunResult => ({
 
 class FakeThread {
   prompts: string[] = [];
+  signals: Array<AbortSignal | undefined> = [];
 
   constructor(readonly id: string | null) {}
 
-  async run(prompt: string): Promise<RunResult> {
+  async run(prompt: string, options?: { signal?: AbortSignal }): Promise<RunResult> {
     this.prompts.push(prompt);
+    this.signals.push(options?.signal);
     return emptyTurn(`response:${prompt}`);
   }
 }
@@ -95,6 +97,14 @@ assert.deepEqual(codex.resumed, [
     },
   },
 ]);
+
+const controller = new AbortController();
+await runtime.run({
+  prompt: "cancellable",
+  workspace: "/tmp/project",
+  signal: controller.signal,
+});
+assert.equal(codex.startThreadInstance.signals.at(-1), controller.signal);
 
 const created = await createCodexSdkLocalAgentRuntime(undefined, () => new FakeCodex());
 assert.equal(created.provider, "codex");

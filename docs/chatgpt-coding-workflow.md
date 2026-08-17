@@ -192,10 +192,21 @@ Skill paths may be outside the workspace. DevSpace only permits reading:
 
 Set `DEVSPACE_SKILLS=0` to hide skills from workspace output. Set
 `DEVSPACE_SUBAGENTS=1` to expose the experimental subagent catalog and
-`subagent-delegation` skill. That skill teaches the minimal
-`devspace agents ls`, `devspace agents run`, and `devspace agents show`
-workflow. The catalog comes from `open_workspace`; `devspace agents ls` lists
-existing subagent sessions for that workspace.
+`subagent-delegation` skill. When local-agent MCP tools are visible, use
+`local_agent_session_list`, `local_agent_message_send`, and
+`local_agent_turn_status` so follow-ups enter the durable serialized queue.
+Use `local_agent_turn_cancel` for cancellation and reserve
+`local_agent_turn_resolve` for evidence-backed reconciliation of an
+indeterminate turn. An ordinary provider failure pauses later queued work; use
+`local_agent_session_resume` after inspecting it. The CLI exposes the same state
+machine through `devspace agents ls`, `run`, `show`, `turn`, `cancel`, `resume`,
+and `resolve`.
+
+Codex, Claude, OpenCode, and Pi follow-ups resume the committed provider session
+ID from the preceding successful turn. Cursor and Copilot do not advertise
+qualified continuation in this version; DevSpace fails explicitly rather than
+starting an unrelated provider session. See
+[Local-Agent Session Continuation](local-agent-continuation.md).
 
 ## Tool Names
 

@@ -1,21 +1,14 @@
 #!/usr/bin/env node
 import { createRequire } from "node:module";
 import { stdin as input, stdout as output } from "node:process";
-import { spawn } from "node:child_process";
-import { mkdtempSync, writeFileSync } from "node:fs";
-import { readFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import * as prompts from "@clack/prompts";
 import { getShellConfig } from "@earendil-works/pi-coding-agent";
 import { satisfies } from "semver";
 import { loadConfig } from "./config.js";
-import { runLocalAgentProvider } from "./local-agent-adapters.js";
 import {
-  isLocalAgentProvider,
   loadLocalAgentProfiles,
-  type LocalAgentProfile,
 } from "./local-agent-profiles.js";
 import {
   assertLocalAgentProviderAvailable,
@@ -26,8 +19,11 @@ import {
   parseLocalAgentRunArgs,
   resolveLocalAgentTarget,
 } from "./local-agent-targets.js";
-import { createLocalAgentStore, type LocalAgentRecord } from "./local-agent-store.js";
-import type { LocalAgentRunResult } from "./local-agent-runtime.js";
+import type { LocalAgentRecord } from "./local-agent-store.js";
+import {
+  LocalAgentCoordinator,
+  launchDetachedLocalAgentWorker,
+} from "./local-agent-coordinator.js";
 import {
   ensureDevspaceDefaultSkills,
   generateOwnerToken,
@@ -226,6 +222,9 @@ async function serve(): Promise<void> {
     console.log(`logging: ${config.logging.level} ${config.logging.format}`);
     if (config.subagents) {
       console.log(`subagent providers: ${formatLocalAgentProviderAvailabilitySummary(localAgentProviders)}`);
+      console.log(
+        `local-agent queue: max pending ${config.localAgentQueue.maxPendingPerAgent}, lease ${Math.round(config.localAgentQueue.leaseMs / 1_000)}s, heartbeat ${Math.round(config.localAgentQueue.heartbeatMs / 1_000)}s`,
+      );
     }
   });
 
@@ -313,8 +312,12 @@ function printHelp(): void {
       "  devspace config get      Print persisted config",
       "  devspace config set publicBaseUrl <url|null>",
       "  devspace agents ls       List subagent sessions",
-      "  devspace agents run <profile-or-provider-or-id> [--model <model>] <prompt>",
+      "  devspace agents run <profile-or-provider-or-id> [--model <model>] [--idempotency-key <key>] [--supersede-pending] <prompt>",
       "  devspace agents show <id>",
+      "  devspace agents turn <turn-id>",
+      "  devspace agents cancel <turn-id> [note]",
+      "  devspace agents resume <agent-id> [note]",
+      "  devspace agents resolve <turn-id> <retry|cancelled|succeeded> <note>",
       "  devspace -v, --version   Print the installed version",
       "",
       "For temporary tunnels:",
@@ -336,6 +339,18 @@ async function runAgentsCommand(args: string[]): Promise<void> {
     case "show":
       await runAgentsShow(rest);
       return;
+    case "turn":
+      await runAgentsTurn(rest);
+      return;
+    case "cancel":
+      await runAgentsCancel(rest);
+      return;
+    case "resume":
+      await runAgentsResume(rest);
+      return;
+    case "resolve":
+      await runAgentsResolve(rest);
+      return;
     case "__worker":
       await runAgentsWorker(rest);
       return;
@@ -352,16 +367,19 @@ async function runAgentsCommand(args: string[]): Promise<void> {
 
 async function runAgentsList(): Promise<void> {
   const config = loadConfig();
-  const store = createLocalAgentStore(config);
-  const agents = store.list(resolveCurrentWorkspaceScope());
+  const coordinator = createCliLocalAgentCoordinator(config);
+  try {
+    const agents = coordinator.listSessions(resolveCurrentWorkspaceScope());
+    if (agents.length === 0) {
+      console.log("No subagent sessions found for this workspace.");
+      return;
+    }
 
-  if (agents.length === 0) {
-    console.log("No subagent sessions found for this workspace.");
-    return;
-  }
-
-  for (const agent of agents) {
-    console.log(formatAgentLine(agent));
+    for (const agent of agents) {
+      console.log(formatAgentLine(agent));
+    }
+  } finally {
+    coordinator.close();
   }
 }
 
@@ -370,53 +388,47 @@ async function runAgentsRun(args: string[]): Promise<void> {
 
   const config = loadConfig();
   const workspaceRoot = resolveCurrentWorkspaceRoot();
-  const store = createLocalAgentStore(config);
-  const existing = store.get(parsed.target);
-
-  if (existing) {
-    if (!isLocalAgentProvider(existing.provider)) {
-      throw new Error(`Unknown subagent provider for existing session: ${existing.provider}`);
+  const coordinator = createCliLocalAgentCoordinator(config);
+  try {
+    let record = coordinator.store.get(parsed.target);
+    if (!record) {
+      const profiles = await loadLocalAgentProfiles(config, workspaceRoot);
+      const target = resolveLocalAgentTarget(
+        parsed.target,
+        profiles,
+        parsed.model,
+        parsed.thinking,
+      );
+      if (!target) {
+        throw new Error(
+          `Unknown subagent profile, provider, or id: ${parsed.target}. Available ${formatAvailableLocalAgentTargets(profiles)}`,
+        );
+      }
+      assertLocalAgentProviderAvailable(target.provider);
+      record = coordinator.store.create({
+        workspaceId: process.env.DEVSPACE_WORKSPACE_ID,
+        workspaceRoot,
+        profileName: target.name,
+        provider: target.provider,
+        model: target.model,
+        thinking: target.thinking,
+      });
     }
-    assertLocalAgentProviderAvailable(existing.provider);
-    const promptFile = writeAgentPromptFile(parsed.prompt);
-    store.update(existing.id, {
-      status: "starting",
-      model: parsed.model ?? existing.model,
-      thinking: parsed.thinking ?? existing.thinking,
-      latestResponse: undefined,
-      error: undefined,
+
+    const queued = coordinator.enqueueCliPrompt(record.id, parsed.prompt, {
+      model: parsed.model,
+      thinking: parsed.thinking,
+      idempotencyKey: parsed.idempotencyKey,
+      supersedePending: parsed.supersedePending,
     });
-    spawnAgentWorker(existing.id, promptFile);
-    console.log(formatAgentLine({
-      ...existing,
-      status: "running",
-      model: parsed.model ?? existing.model,
-      thinking: parsed.thinking ?? existing.thinking,
-    }));
-    return;
-  }
-
-  const profiles = await loadLocalAgentProfiles(config, workspaceRoot);
-  const target = resolveLocalAgentTarget(parsed.target, profiles, parsed.model, parsed.thinking);
-  if (!target) {
-    throw new Error(
-      `Unknown subagent profile, provider, or id: ${parsed.target}. Available ${formatAvailableLocalAgentTargets(profiles)}`,
+    const current = coordinator.sessionStatus(record.id);
+    console.log(formatAgentLine(current));
+    console.log(
+      `${queued.turn.turnId} ${queued.turn.status} sequence=${queued.turn.sequence}`,
     );
+  } finally {
+    coordinator.close();
   }
-  assertLocalAgentProviderAvailable(target.provider);
-
-  const promptFile = writeAgentPromptFile(parsed.prompt);
-  const record = store.create({
-    workspaceId: process.env.DEVSPACE_WORKSPACE_ID,
-    workspaceRoot,
-    profileName: target.name,
-    provider: target.provider,
-    model: target.model,
-    thinking: target.thinking,
-  });
-
-  spawnAgentWorker(record.id, promptFile);
-  console.log(formatAgentLine({ ...record, status: "running" }));
 }
 
 async function runAgentsShow(args: string[]): Promise<void> {
@@ -424,120 +436,131 @@ async function runAgentsShow(args: string[]): Promise<void> {
   if (!id) throw new Error("Usage: devspace agents show <id>");
 
   const config = loadConfig();
-  const store = createLocalAgentStore(config);
-  let record = store.get(id);
-  if (!record) throw new Error(`Unknown subagent id: ${id}`);
+  const coordinator = createCliLocalAgentCoordinator(config, false);
+  try {
+    let record = coordinator.sessionStatus(id, { includeRecentTurns: true });
+    const deadline = Date.now() + 15_000;
+    while (
+      ["starting", "queued", "running"].includes(record.status)
+      && Date.now() < deadline
+    ) {
+      await sleep(500);
+      record = coordinator.sessionStatus(record.id, { includeRecentTurns: true });
+    }
 
-  const deadline = Date.now() + 15_000;
-  while ((record.status === "starting" || record.status === "running") && Date.now() < deadline) {
-    await sleep(500);
-    record = store.get(id) ?? record;
-  }
-
-  console.log(formatAgentLine(record));
-  if (record.latestResponse) {
-    console.log(record.latestResponse);
-    return;
-  }
-  if (record.error) {
-    console.log(record.error);
-    return;
-  }
-  if (record.status === "starting" || record.status === "running") {
-    console.log(`No final response yet. Call \`devspace agents show ${record.id}\` again later.`);
+    console.log(formatAgentLine(record));
+    for (const turn of record.recentTurns ?? []) {
+      console.log(
+        `${turn.turnId} ${turn.status} ${turn.kind} priority=${turn.priority} sequence=${turn.sequence}`,
+      );
+    }
+    if (record.latestResponse) {
+      console.log(record.latestResponse);
+      return;
+    }
+    if (record.error) {
+      console.log(record.error);
+      return;
+    }
+    if (["starting", "queued", "running"].includes(record.status)) {
+      console.log(`No final response yet. Call \`devspace agents show ${record.id}\` again later.`);
+    }
+  } finally {
+    coordinator.close();
   }
 }
 
 async function runAgentsWorker(args: string[]): Promise<void> {
-  const [id, promptFileFlag, promptFile] = args;
-  if (!id || promptFileFlag !== "--prompt-file" || !promptFile) {
-    throw new Error("Usage: devspace agents __worker <id> --prompt-file <path>");
+  const [id, workerIdFlag, workerId] = args;
+  if (!id || workerIdFlag !== "--worker-id" || !workerId) {
+    throw new Error("Usage: devspace agents __worker <id> --worker-id <worker-id>");
   }
-
   const config = loadConfig();
-  const store = createLocalAgentStore(config);
-  const record = store.get(id);
-  if (!record) throw new Error(`Unknown subagent id: ${id}`);
-
-  store.update(record.id, { status: "running", error: undefined });
+  const coordinator = createCliLocalAgentCoordinator(config, false);
   try {
-    const profiles = await loadLocalAgentProfiles(config, record.workspaceRoot);
-    const profile = profiles.find((candidate) => candidate.name === record.profileName);
-    const prompt = await readFile(promptFile, "utf8");
-    const result = profile
-      ? await runLocalAgentProfile(profile, record, prompt)
-      : await runRawLocalAgentProvider(record, prompt);
-    store.update(record.id, {
-      providerSessionId: result.providerSessionId ?? undefined,
-      status: "idle",
-      latestResponse: result.finalResponse,
-      error: undefined,
-    });
-  } catch (error) {
-    store.update(record.id, {
-      status: "error",
-      error: error instanceof Error ? error.message : String(error),
-    });
+    await coordinator.runWorker(id, workerId);
+  } finally {
+    coordinator.close();
   }
 }
 
-async function runLocalAgentProfile(
-  profile: LocalAgentProfile,
-  record: LocalAgentRecord,
-  prompt: string,
-): Promise<LocalAgentRunResult> {
-  const body = profile.body.trim();
-  const fullPrompt = body ? `${body}\n\nTask:\n${prompt}` : prompt;
-  return runLocalAgentProvider(profile.provider, {
-    prompt: fullPrompt,
-    workspace: record.workspaceRoot,
-    providerSessionId: record.providerSessionId,
-    writeMode: "allowed",
-    model: record.model ?? profile.model,
-    thinking: record.thinking ?? profile.thinking,
-  });
-}
-
-async function runRawLocalAgentProvider(
-  record: LocalAgentRecord,
-  prompt: string,
-): Promise<LocalAgentRunResult> {
-  if (record.profileName !== record.provider || !isLocalAgentProvider(record.provider)) {
-    throw new Error(`Subagent profile not found: ${record.profileName}`);
+async function runAgentsTurn(args: string[]): Promise<void> {
+  const [turnId] = args;
+  if (!turnId) throw new Error("Usage: devspace agents turn <turn-id>");
+  const coordinator = createCliLocalAgentCoordinator(loadConfig(), false);
+  try {
+    console.log(JSON.stringify(coordinator.turnStatus(turnId), null, 2));
+  } finally {
+    coordinator.close();
   }
-
-  return runLocalAgentProvider(record.provider, {
-    prompt,
-    workspace: record.workspaceRoot,
-    providerSessionId: record.providerSessionId,
-    writeMode: "allowed",
-    model: record.model,
-    thinking: record.thinking,
-  });
 }
 
-function spawnAgentWorker(agentId: string, promptFile: string): void {
-  const child = spawn(process.execPath, [
-    ...process.execArgv,
-    fileURLToPath(import.meta.url),
-    "agents",
-    "__worker",
-    agentId,
-    "--prompt-file",
-    promptFile,
-  ], {
-    detached: true,
-    stdio: "ignore",
-    env: process.env,
-  });
-  child.unref();
+async function runAgentsCancel(args: string[]): Promise<void> {
+  const [turnId, ...noteParts] = args;
+  if (!turnId) throw new Error("Usage: devspace agents cancel <turn-id> [note]");
+  const coordinator = createCliLocalAgentCoordinator(loadConfig(), false);
+  try {
+    console.log(JSON.stringify(
+      coordinator.cancelTurn(turnId, noteParts.join(" ") || undefined),
+      null,
+      2,
+    ));
+  } finally {
+    coordinator.close();
+  }
 }
 
-function writeAgentPromptFile(prompt: string): string {
-  const directory = mkdtempSync(join(tmpdir(), "devspace-agent-prompt-"));
-  const filePath = join(directory, "prompt.txt");
-  writeFileSync(filePath, prompt, { mode: 0o600 });
-  return filePath;
+async function runAgentsResume(args: string[]): Promise<void> {
+  const [agentId, ...noteParts] = args;
+  if (!agentId) throw new Error("Usage: devspace agents resume <agent-id> [note]");
+  const coordinator = createCliLocalAgentCoordinator(loadConfig());
+  try {
+    console.log(JSON.stringify(
+      coordinator.resumeSession(agentId, noteParts.join(" ") || undefined),
+      null,
+      2,
+    ));
+  } finally {
+    coordinator.close();
+  }
+}
+
+async function runAgentsResolve(args: string[]): Promise<void> {
+  const [turnId, resolution, ...noteParts] = args;
+  if (
+    !turnId
+    || (resolution !== "retry" && resolution !== "cancelled" && resolution !== "succeeded")
+    || noteParts.length === 0
+  ) {
+    throw new Error(
+      "Usage: devspace agents resolve <turn-id> <retry|cancelled|succeeded> <note>",
+    );
+  }
+  const coordinator = createCliLocalAgentCoordinator(loadConfig());
+  try {
+    console.log(JSON.stringify(
+      coordinator.resolveTurn(turnId, resolution, noteParts.join(" ")),
+      null,
+      2,
+    ));
+  } finally {
+    coordinator.close();
+  }
+}
+
+function createCliLocalAgentCoordinator(
+  config: ReturnType<typeof loadConfig>,
+  launchWorkers = true,
+): LocalAgentCoordinator {
+  return new LocalAgentCoordinator(config, {
+    launchWorker: launchWorkers
+      ? (agentId, workerId) => launchDetachedLocalAgentWorker(
+          fileURLToPath(import.meta.url),
+          agentId,
+          workerId,
+        )
+      : undefined,
+  });
 }
 
 function resolveCurrentWorkspaceRoot(): string {
@@ -571,8 +594,12 @@ function printAgentsHelp(): void {
       "",
       "Usage:",
       "  devspace agents ls",
-      "  devspace agents run <profile-or-provider-or-id> [--model <model>] [--thinking <level>] <prompt>",
+      "  devspace agents run <profile-or-provider-or-id> [--model <model>] [--thinking <level>] [--idempotency-key <key>] [--supersede-pending] <prompt>",
       "  devspace agents show <id>",
+      "  devspace agents turn <turn-id>",
+      "  devspace agents cancel <turn-id> [note]",
+      "  devspace agents resume <agent-id> [note]",
+      "  devspace agents resolve <turn-id> <retry|cancelled|succeeded> <note>",
     ].join("\n"),
   );
 }

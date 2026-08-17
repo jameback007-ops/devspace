@@ -16,6 +16,7 @@ export interface LocalAgentRunInput {
   writeMode?: LocalAgentWriteMode;
   model?: string;
   thinking?: string;
+  signal?: AbortSignal;
 }
 
 export interface LocalAgentRunResult {
@@ -32,7 +33,7 @@ export interface LocalAgentRuntime {
 
 interface CodexThreadLike {
   readonly id: string | null;
-  run(prompt: string): Promise<RunResult>;
+  run(prompt: string, options?: { signal?: AbortSignal }): Promise<RunResult>;
 }
 
 interface CodexClientLike {
@@ -77,7 +78,7 @@ export class CodexSdkLocalAgentRuntime implements LocalAgentRuntime {
     const thread = input.providerSessionId
       ? this.codex.resumeThread(input.providerSessionId, options)
       : this.codex.startThread(options);
-    const turn = await thread.run(input.prompt);
+    const turn = await thread.run(input.prompt, { signal: input.signal });
 
     return {
       provider: this.provider,

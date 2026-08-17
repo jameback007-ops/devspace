@@ -63,6 +63,21 @@ assert.deepEqual(parseLocalAgentRunArgs(["codex", "--thinking=high", "hello"]), 
   thinking: "high",
 });
 
+assert.deepEqual(parseLocalAgentRunArgs([
+  "codex",
+  "--idempotency-key",
+  "retry-123",
+  "--supersede-pending",
+  "hello",
+]), {
+  target: "codex",
+  prompt: "hello",
+  model: undefined,
+  thinking: undefined,
+  idempotencyKey: "retry-123",
+  supersedePending: true,
+});
+
 assert.throws(
   () => parseLocalAgentRunArgs(["codex", "--model"]),
   /Missing value for --model/,
@@ -71,6 +86,11 @@ assert.throws(
 assert.throws(
   () => parseLocalAgentRunArgs(["codex", "--thinking"]),
   /Missing value for --thinking/,
+);
+
+assert.throws(
+  () => parseLocalAgentRunArgs(["codex", "--idempotency-key"]),
+  /Missing value for --idempotency-key/,
 );
 
 {

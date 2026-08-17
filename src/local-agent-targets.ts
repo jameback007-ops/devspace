@@ -10,6 +10,8 @@ export interface ParsedLocalAgentRunArgs {
   prompt: string;
   model?: string;
   thinking?: string;
+  idempotencyKey?: string;
+  supersedePending?: boolean;
 }
 
 export type LocalAgentTarget =
@@ -32,11 +34,13 @@ export type LocalAgentTarget =
 export function parseLocalAgentRunArgs(args: string[]): ParsedLocalAgentRunArgs {
   const [target, ...rest] = args;
   if (!target) {
-    throw new Error('Usage: devspace agents run <profile-or-provider-or-id> [--model <model>] [--thinking <level>] "<prompt>"');
+    throw new Error('Usage: devspace agents run <profile-or-provider-or-id> [--model <model>] [--thinking <level>] [--idempotency-key <key>] [--supersede-pending] "<prompt>"');
   }
 
   let model: string | undefined;
   let thinking: string | undefined;
+  let idempotencyKey: string | undefined;
+  let supersedePending = false;
   const promptParts: string[] = [];
   for (let index = 0; index < rest.length; index += 1) {
     const part = rest[index];
@@ -66,15 +70,39 @@ export function parseLocalAgentRunArgs(args: string[]): ParsedLocalAgentRunArgs 
       thinking = value;
       continue;
     }
+    if (part === "--idempotency-key") {
+      const value = rest[index + 1]?.trim();
+      if (!value) throw new Error("Missing value for --idempotency-key.");
+      idempotencyKey = value;
+      index += 1;
+      continue;
+    }
+    if (part?.startsWith("--idempotency-key=")) {
+      const value = part.slice("--idempotency-key=".length).trim();
+      if (!value) throw new Error("Missing value for --idempotency-key.");
+      idempotencyKey = value;
+      continue;
+    }
+    if (part === "--supersede-pending") {
+      supersedePending = true;
+      continue;
+    }
     promptParts.push(part ?? "");
   }
 
   const prompt = promptParts.join(" ").trim();
   if (!prompt) {
-    throw new Error('Usage: devspace agents run <profile-or-provider-or-id> [--model <model>] [--thinking <level>] "<prompt>"');
+    throw new Error('Usage: devspace agents run <profile-or-provider-or-id> [--model <model>] [--thinking <level>] [--idempotency-key <key>] [--supersede-pending] "<prompt>"');
   }
 
-  return { target, prompt, model, thinking };
+  return {
+    target,
+    prompt,
+    model,
+    thinking,
+    ...(idempotencyKey ? { idempotencyKey } : {}),
+    ...(supersedePending ? { supersedePending: true } : {}),
+  };
 }
 
 export function resolveLocalAgentTarget(

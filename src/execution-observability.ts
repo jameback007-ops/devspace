@@ -202,9 +202,13 @@ export function summarizeExecutionToolInput(
     "scopeRef",
     "targetScopeRef",
     "messageId",
+    "agentId",
+    "turnId",
     "kind",
     "priority",
     "state",
+    "resolution",
+    "correlationRef",
   ]) {
     addString(detail, input, key);
   }
@@ -240,6 +244,8 @@ export function summarizeExecutionToolInput(
     "body",
     "note",
     "idempotencyKey",
+    "finalResponse",
+    "providerSessionIdAfter",
   ]) {
     addSensitiveStringDigest(detail, input, key);
   }

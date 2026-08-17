@@ -10,6 +10,10 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { loadConfig, type ServerConfig } from "./config.js";
 import { ExecutorWindowRegistry } from "./executor-window.js";
 import { ExecutionScopeManager } from "./execution-observability.js";
+import {
+  LocalAgentCoordinator,
+  type LocalAgentCoordinatorOptions,
+} from "./local-agent-coordinator.js";
 import { createReviewCheckpointManager } from "./review-checkpoints.js";
 import { ProcessSessionManager } from "./process-sessions.js";
 import { createMcpServer } from "./server.js";
@@ -319,6 +323,256 @@ test("execution-scope mailbox delivers at the target's next MCP boundary with re
   assert.doesNotMatch(responseAllText(cleanRead), /\[execution-mailbox\]/);
 });
 
+test("MCP local-agent tools enqueue serialized provider-session continuation", async (t) => {
+  const launched: Array<{ agentId: string; workerId: string }> = [];
+  const providerInputs: Array<Record<string, unknown>> = [];
+  const context = await fixture(t, {
+    toolMode: "codex",
+    subagents: true,
+    localAgentCoordinatorOptions: {
+      launchWorker: (agentId, workerId) => launched.push({ agentId, workerId }),
+      assertProviderAvailable: () => undefined,
+      loadProfiles: async () => [],
+      runProvider: async (provider, input) => {
+        providerInputs.push({ provider, ...input });
+        return {
+          provider,
+          providerSessionId: input.providerSessionId ?? "thread-server-1",
+          finalResponse: `server-response-${providerInputs.length}`,
+          items: [],
+        };
+      },
+    },
+  });
+  const coordinator = context.localAgentCoordinator;
+  assert.ok(coordinator);
+  const agent = coordinator.store.update(
+    coordinator.store.create({
+      workspaceId: "ws_agent",
+      workspaceRoot: context.project,
+      profileName: "codex",
+      provider: "codex",
+    }).id,
+    { status: "idle" },
+  );
+  const supervisorSession = "local-agent-supervisor-session";
+
+  const tools = await context.client.listTools();
+  for (const name of [
+    "local_agent_session_list",
+    "local_agent_session_status",
+    "local_agent_session_resume",
+    "local_agent_message_send",
+    "local_agent_turn_status",
+    "local_agent_turn_cancel",
+    "local_agent_turn_resolve",
+  ]) {
+    assert.ok(tools.tools.some((tool) => tool.name === name), `${name} should be registered`);
+  }
+
+  const listed = await context.client.callTool({
+    name: "local_agent_session_list",
+    arguments: {},
+    _meta: { "openai/session": supervisorSession },
+  } as Parameters<Client["callTool"]>[0]);
+  const sessions = structuredData(listed).sessions as Array<Record<string, unknown>>;
+  assert.equal(sessions[0]?.id, agent.id);
+  assert.equal(sessions[0]?.continuationSupported, true);
+
+  const firstSent = await context.client.callTool({
+    name: "local_agent_message_send",
+    arguments: {
+      agentId: agent.id,
+      idempotencyKey: "server-agent-1",
+      kind: "correction",
+      priority: "urgent",
+      body: "Reconcile the provider session before continuing.",
+      correlationRef: "work:agent-server-test",
+    },
+    _meta: { "openai/session": supervisorSession },
+  } as Parameters<Client["callTool"]>[0]);
+  assert.equal(firstSent.isError, undefined, responseText(firstSent));
+  const firstData = structuredData(firstSent);
+  const firstTurn = firstData.turn as Record<string, unknown>;
+  const firstTurnId = String(firstTurn.turnId);
+  assert.equal(firstTurn.status, "queued");
+  assert.equal(firstData.workerRequested, true);
+  assert.equal(launched.length, 1);
+  const firstWorkerId = launched[0]?.workerId;
+  assert.ok(firstWorkerId);
+
+  const audit = await context.client.callTool({
+    name: "execution_scope_audit",
+    arguments: { limit: 20 },
+    _meta: { "openai/session": supervisorSession },
+  } as Parameters<Client["callTool"]>[0]);
+  const auditData = structuredData(audit);
+  const auditSerialized = JSON.stringify(auditData);
+  assert.equal(
+    auditSerialized.includes("Reconcile the provider session before continuing."),
+    false,
+  );
+  const sendEvent = (auditData.events as Array<Record<string, unknown>>)
+    .find((event) => event.tool === "local_agent_message_send");
+  assert.ok(sendEvent);
+  const sendDetail = sendEvent.detail as Record<string, unknown>;
+  assert.equal(sendDetail.agentId, agent.id);
+  assert.match(String(sendDetail.bodyDigestSha256), /^[a-f0-9]{64}$/);
+
+  const firstWorker = await coordinator.runWorker(
+    agent.id,
+    firstWorkerId,
+  );
+  assert.deepEqual(firstWorker.processedTurnIds, [firstTurnId]);
+  const firstStatus = await context.client.callTool({
+    name: "local_agent_turn_status",
+    arguments: { turnId: firstTurnId },
+    _meta: { "openai/session": supervisorSession },
+  } as Parameters<Client["callTool"]>[0]);
+  assert.equal(structuredData(firstStatus).status, "succeeded");
+
+  const secondSent = await context.client.callTool({
+    name: "local_agent_message_send",
+    arguments: {
+      agentId: agent.id,
+      idempotencyKey: "server-agent-2",
+      kind: "instruction",
+      body: "Continue in the same provider session.",
+    },
+    _meta: { "openai/session": supervisorSession },
+  } as Parameters<Client["callTool"]>[0]);
+  const secondTurnId = String(
+    (structuredData(secondSent).turn as Record<string, unknown>).turnId,
+  );
+  assert.equal(launched.length, 2);
+  const secondWorkerId = launched[1]?.workerId;
+  assert.ok(secondWorkerId);
+  await coordinator.runWorker(agent.id, secondWorkerId);
+  assert.equal(providerInputs.length, 2);
+  assert.equal(providerInputs[0]?.providerSessionId, undefined);
+  assert.equal(providerInputs[1]?.providerSessionId, "thread-server-1");
+  assert.equal(coordinator.turnStatus(secondTurnId).status, "succeeded");
+
+  const cancellable = await context.client.callTool({
+    name: "local_agent_message_send",
+    arguments: {
+      agentId: agent.id,
+      idempotencyKey: "server-agent-3",
+      kind: "notice",
+      body: "This queued turn will be cancelled.",
+    },
+    _meta: { "openai/session": supervisorSession },
+  } as Parameters<Client["callTool"]>[0]);
+  const cancellableTurnId = String(
+    (structuredData(cancellable).turn as Record<string, unknown>).turnId,
+  );
+  const cancelled = await context.client.callTool({
+    name: "local_agent_turn_cancel",
+    arguments: {
+      turnId: cancellableTurnId,
+      note: "No longer needed.",
+    },
+    _meta: { "openai/session": supervisorSession },
+  } as Parameters<Client["callTool"]>[0]);
+  assert.equal(structuredData(cancelled).status, "cancelled");
+
+  const sessionStatus = await context.client.callTool({
+    name: "local_agent_session_status",
+    arguments: { agentId: agent.id, turnLimit: 10 },
+    _meta: { "openai/session": supervisorSession },
+  } as Parameters<Client["callTool"]>[0]);
+  const sessionData = structuredData(sessionStatus);
+  assert.equal(sessionData.providerSessionId, "thread-server-1");
+  assert.equal(sessionData.queue.running, 0);
+});
+
+test("MCP local-agent session resume restarts queued work after an ordinary failure", async (t) => {
+  const launched: Array<{ agentId: string; workerId: string }> = [];
+  let providerCall = 0;
+  const context = await fixture(t, {
+    toolMode: "codex",
+    subagents: true,
+    localAgentCoordinatorOptions: {
+      launchWorker: (agentId, workerId) => launched.push({ agentId, workerId }),
+      assertProviderAvailable: () => undefined,
+      loadProfiles: async () => [],
+      runProvider: async (provider, input) => {
+        providerCall += 1;
+        if (providerCall === 1) throw new Error("provider temporarily unavailable");
+        return {
+          provider,
+          providerSessionId: input.providerSessionId ?? "thread-resumed-1",
+          finalResponse: "resumed response",
+          items: [],
+        };
+      },
+    },
+  });
+  const coordinator = context.localAgentCoordinator;
+  assert.ok(coordinator);
+  const agent = coordinator.store.update(
+    coordinator.store.create({
+      workspaceId: "ws_resume",
+      workspaceRoot: context.project,
+      profileName: "codex",
+      provider: "codex",
+    }).id,
+    { status: "idle" },
+  );
+  const session = "local-agent-resume-supervisor";
+  const send = async (key: string, body: string) => context.client.callTool({
+    name: "local_agent_message_send",
+    arguments: {
+      agentId: agent.id,
+      idempotencyKey: key,
+      kind: "instruction",
+      body,
+    },
+    _meta: { "openai/session": session },
+  } as Parameters<Client["callTool"]>[0]);
+
+  const first = await send("resume-first", "first turn fails");
+  const second = await send("resume-second", "second turn remains queued");
+  const firstTurnId = String(
+    (structuredData(first).turn as Record<string, unknown>).turnId,
+  );
+  const secondTurnId = String(
+    (structuredData(second).turn as Record<string, unknown>).turnId,
+  );
+  assert.equal(launched.length, 1);
+  const firstWorkerId = launched[0]?.workerId;
+  assert.ok(firstWorkerId);
+  const failedWorker = await coordinator.runWorker(agent.id, firstWorkerId);
+  assert.equal(failedWorker.stoppedAfterFailure, true);
+  assert.equal(coordinator.turnStatus(firstTurnId).status, "failed");
+  assert.equal(coordinator.turnStatus(secondTurnId).status, "queued");
+
+  const paused = await context.client.callTool({
+    name: "local_agent_session_status",
+    arguments: { agentId: agent.id },
+    _meta: { "openai/session": session },
+  } as Parameters<Client["callTool"]>[0]);
+  assert.equal(structuredData(paused).status, "error");
+
+  const resumed = await context.client.callTool({
+    name: "local_agent_session_resume",
+    arguments: {
+      agentId: agent.id,
+      note: "Provider availability was restored.",
+    },
+    _meta: { "openai/session": session },
+  } as Parameters<Client["callTool"]>[0]);
+  const resumedData = structuredData(resumed);
+  assert.equal(resumedData.workerRequested, true);
+  assert.equal(resumedData.session.status, "queued");
+  assert.equal(launched.length, 2);
+  const secondWorkerId = launched[1]?.workerId;
+  assert.ok(secondWorkerId);
+  await coordinator.runWorker(agent.id, secondWorkerId);
+  assert.equal(coordinator.turnStatus(secondTurnId).status, "succeeded");
+  assert.equal(coordinator.sessionStatus(agent.id).status, "idle");
+});
+
 test("createMcpServer keeps its prior public call shape and owns the default observer", async (t) => {
   const context = await fixture(t, {
     toolMode: "codex",
@@ -480,6 +734,7 @@ interface ServerFixture {
   project: string;
   config: ServerConfig;
   stateDir: string;
+  localAgentCoordinator?: LocalAgentCoordinator;
   close: () => Promise<void>;
 }
 
@@ -489,6 +744,8 @@ async function fixture(
     git?: boolean;
     toolMode?: ServerConfig["toolMode"];
     useDefaultExecutionScopes?: boolean;
+    subagents?: boolean;
+    localAgentCoordinatorOptions?: LocalAgentCoordinatorOptions;
   } = {},
 ): Promise<ServerFixture> {
   const root = await mkdtemp(join(tmpdir(), "devspace-server-test-"));
@@ -526,6 +783,7 @@ async function fixture(
     DEVSPACE_AGENT_DIR: agentDir,
     DEVSPACE_WIDGETS: "full",
     DEVSPACE_TOOL_MODE: options.toolMode ?? "full",
+    DEVSPACE_SUBAGENTS: options.subagents ? "1" : "0",
     DEVSPACE_OAUTH_OWNER_TOKEN: "test-owner-token-that-is-long-enough",
     PORT: "1",
   });
@@ -541,6 +799,9 @@ async function fixture(
         processSessions,
         executorWindows,
       );
+  const localAgentCoordinator = options.subagents
+    ? new LocalAgentCoordinator(config, options.localAgentCoordinatorOptions)
+    : undefined;
   const server = executionScopes
     ? createMcpServer(
         config,
@@ -551,6 +812,8 @@ async function fixture(
         [],
         executorWindows,
         executionScopes,
+        undefined,
+        localAgentCoordinator,
       )
     : createMcpServer(
         config,
@@ -560,6 +823,9 @@ async function fixture(
         [],
         [],
         executorWindows,
+        undefined,
+        undefined,
+        localAgentCoordinator,
       );
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: "devspace-test-client", version: "1.0.0" });
@@ -575,6 +841,7 @@ async function fixture(
     await client.close();
     await server.close();
     processSessions.shutdown();
+    localAgentCoordinator?.close();
     executionScopes?.close();
     store.close();
   };
@@ -584,7 +851,7 @@ async function fixture(
     await rm(root, { recursive: true, force: true });
   });
 
-  return { client, project, config, stateDir, close };
+  return { client, project, config, stateDir, localAgentCoordinator, close };
 }
 
 async function git(cwd: string, args: string[]): Promise<void> {

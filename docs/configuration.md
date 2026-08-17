@@ -247,8 +247,8 @@ descriptions, providers, and optional models/thinking levels so the host model c
 agent without reading provider-specific launch details. `devspace agents ls`
 lists existing subagent sessions for the current workspace, scoped by the
 workspace environment injected into shell commands. The `subagent-delegation`
-skill teaches the model to use only the minimal `devspace agents ls`,
-`devspace agents run`, and `devspace agents show` workflow.
+skill teaches the model to enqueue work, inspect the durable turn, and cancel or
+reconcile it when necessary instead of launching overlapping provider workers.
 
 Starter profile templates are available under `examples/agents/`. Copy or adapt
 them into one of the active profile directories before use.
@@ -261,6 +261,32 @@ Example:
 DEVSPACE_SKILL_PATHS="$HOME/.claude/skills,$HOME/company/skills" \
 npx @waishnav/devspace serve
 ```
+
+## Local-Agent Continuation
+
+When `DEVSPACE_SUBAGENTS=1`, CLI and MCP-originated prompts share one durable
+per-agent queue and worker lease. Codex, Claude, OpenCode, and Pi follow-up turns
+resume the provider session committed by the preceding successful turn. Cursor
+and Copilot remain initial-invocation adapters in this version; DevSpace does
+not silently claim continuation for an existing ACP session.
+
+See [Local-Agent Session Continuation](local-agent-continuation.md) for queue,
+lease, cancellation, crash-recovery, and authority semantics.
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `DEVSPACE_LOCAL_AGENT_MAX_PENDING` | `200` | Bound queued, active, and indeterminate turns for one agent session. |
+| `DEVSPACE_LOCAL_AGENT_MAX_BODY_CHARACTERS` | `24000` | Maximum persisted prompt body for one local-agent turn. |
+| `DEVSPACE_LOCAL_AGENT_MAX_RESPONSE_CHARACTERS` | `200000` | Maximum persisted final provider response for one turn. |
+| `DEVSPACE_LOCAL_AGENT_LEASE_SECONDS` | `120` | Worker lease duration. A new worker may recover only after expiry. |
+| `DEVSPACE_LOCAL_AGENT_HEARTBEAT_SECONDS` | `15` | Lease renewal and running-cancellation poll interval. Must be less than the lease duration. |
+| `DEVSPACE_LOCAL_AGENT_TERMINAL_RETENTION_HOURS` | `168` | Retain succeeded, failed, and cancelled turns for seven days. |
+
+The MCP surface adds `local_agent_session_list`,
+`local_agent_session_status`, `local_agent_session_resume`, `local_agent_message_send`,
+`local_agent_turn_status`, `local_agent_turn_cancel`, and
+`local_agent_turn_resolve`. The CLI uses the same queue through `devspace agents
+run`, `show`, `turn`, `cancel`, `resume`, and `resolve`.
 
 ## Logging
 

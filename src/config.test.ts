@@ -48,6 +48,33 @@ assert.deepEqual(loadConfig(baseEnv).executionMailbox, {
   maxPendingPerScope: 500,
   maxBodyCharacters: 12_000,
 });
+assert.deepEqual(loadConfig(baseEnv).localAgentQueue, {
+  maxPendingPerAgent: 200,
+  maxBodyCharacters: 24_000,
+  maxResponseCharacters: 200_000,
+  leaseMs: 120 * 1_000,
+  heartbeatMs: 15 * 1_000,
+  terminalRetentionMs: 7 * 24 * 60 * 60 * 1_000,
+});
+assert.deepEqual(
+  loadConfig({
+    ...baseEnv,
+    DEVSPACE_LOCAL_AGENT_MAX_PENDING: "25",
+    DEVSPACE_LOCAL_AGENT_MAX_BODY_CHARACTERS: "4096",
+    DEVSPACE_LOCAL_AGENT_MAX_RESPONSE_CHARACTERS: "8192",
+    DEVSPACE_LOCAL_AGENT_LEASE_SECONDS: "60",
+    DEVSPACE_LOCAL_AGENT_HEARTBEAT_SECONDS: "5",
+    DEVSPACE_LOCAL_AGENT_TERMINAL_RETENTION_HOURS: "48",
+  }).localAgentQueue,
+  {
+    maxPendingPerAgent: 25,
+    maxBodyCharacters: 4_096,
+    maxResponseCharacters: 8_192,
+    leaseMs: 60 * 1_000,
+    heartbeatMs: 5 * 1_000,
+    terminalRetentionMs: 48 * 60 * 60 * 1_000,
+  },
+);
 assert.deepEqual(
   loadConfig({
     ...baseEnv,
@@ -240,6 +267,14 @@ assert.throws(
     DEVSPACE_EXECUTION_MAILBOX_MAX_TTL_HOURS: "24",
   }),
   /DEFAULT_TTL_HOURS must not exceed/,
+);
+assert.throws(
+  () => loadConfig({
+    ...baseEnv,
+    DEVSPACE_LOCAL_AGENT_LEASE_SECONDS: "10",
+    DEVSPACE_LOCAL_AGENT_HEARTBEAT_SECONDS: "10",
+  }),
+  /HEARTBEAT_SECONDS must be less than/,
 );
 assert.throws(
   () => loadConfig({

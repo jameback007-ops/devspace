@@ -37,6 +37,11 @@ const migrations: Migration[] = [
     name: "execution-scope-mailbox",
     up: migrateExecutionScopeMailbox,
   },
+  {
+    version: 7,
+    name: "local-agent-turn-queue",
+    up: migrateLocalAgentTurnQueue,
+  },
 ];
 
 export function migrateDatabase(sqlite: Database.Database): void {
@@ -319,6 +324,71 @@ function migrateExecutionScopeMailbox(sqlite: Database.Database): void {
 
     create index if not exists execution_scope_message_receipts_message_idx
       on execution_scope_message_receipts(message_id, recorded_at_ms);
+  `);
+}
+
+function migrateLocalAgentTurnQueue(sqlite: Database.Database): void {
+  sqlite.exec(`
+    create table if not exists local_agent_turns (
+      id text primary key,
+      agent_id text not null,
+      source_kind text not null,
+      sender_scope_ref text,
+      idempotency_namespace text not null,
+      idempotency_key text not null,
+      payload_digest_sha256 text not null,
+      kind text not null,
+      priority text not null,
+      body text not null,
+      correlation_ref text,
+      model text,
+      thinking text,
+      status text not null,
+      sequence integer not null,
+      created_at_ms integer not null,
+      claimed_at_ms integer,
+      started_at_ms integer,
+      completed_at_ms integer,
+      worker_id text,
+      provider_session_id_before text,
+      provider_session_id_after text,
+      final_response text,
+      result_characters integer,
+      result_digest_sha256 text,
+      error_kind text,
+      error_summary text,
+      error_digest_sha256 text,
+      cancel_requested_at_ms integer,
+      cancel_note text,
+      resolution text,
+      resolution_note text,
+      superseded_by_turn_id text,
+      unique (agent_id, sequence),
+      unique (agent_id, idempotency_namespace, idempotency_key),
+      foreign key (agent_id)
+        references local_agent_sessions(id)
+        on delete cascade
+    );
+
+    create index if not exists local_agent_turns_queue_idx
+      on local_agent_turns(agent_id, status, priority, sequence);
+
+    create index if not exists local_agent_turns_sender_idx
+      on local_agent_turns(sender_scope_ref, created_at_ms desc);
+
+    create table if not exists local_agent_worker_leases (
+      agent_id text primary key,
+      worker_id text not null,
+      acquired_at_ms integer not null,
+      heartbeat_at_ms integer not null,
+      expires_at_ms integer not null,
+      foreign key (agent_id)
+        references local_agent_sessions(id)
+        on delete cascade
+    );
+
+    create index if not exists local_agent_worker_leases_expiry_idx
+      on local_agent_worker_leases(expires_at_ms);
   `);
 }
 

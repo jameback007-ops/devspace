@@ -165,6 +165,34 @@ test("yield-required mode blocks new mutation and commands but permits landing r
     ).allowed,
     true,
   );
+  for (const tool of [
+    "local_agent_session_list",
+    "local_agent_session_status",
+    "local_agent_turn_status",
+    "local_agent_turn_cancel",
+  ]) {
+    assert.equal(
+      registry.beforeTool(
+        "conversation-1",
+        tool,
+        {},
+        tool !== "local_agent_turn_cancel",
+      ).allowed,
+      true,
+      `${tool} should remain available for bounded landing/reconciliation`,
+    );
+  }
+  for (const tool of [
+    "local_agent_message_send",
+    "local_agent_session_resume",
+    "local_agent_turn_resolve",
+  ]) {
+    assert.equal(
+      registry.beforeTool("conversation-1", tool, {}, false).allowed,
+      false,
+      `${tool} should not open new provider work after the hard landing boundary`,
+    );
+  }
 });
 
 test("yield records an advisory handoff and a later begin carries it forward", () => {
