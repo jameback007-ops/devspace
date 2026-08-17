@@ -35,7 +35,16 @@ memory, or standing agent identity.
 
 Returns recent scopes ordered by activity. Each summary includes the opaque
 `scopeRef`, current-scope marker, adapter, activity state, last tool outcome,
-and workspace and live-process counts.
+workspace and live-process counts, and an explicit observation block. When the
+target has recorded a recovery capsule, the summary also includes a compact
+`semanticHint` with a human-readable display label, mission/frontier, current
+causal slice, and capsule reference.
+
+The display label comes from the capsule's `missionRef`, falling back to its
+current frontier. It is not the ChatGPT/host conversation title and does not
+replace the opaque `scopeRef`. When no capsule exists, the semantic hint reports
+`available: false`; DevSpace does not derive a label from paths, filenames, tool
+events, or timing correlation.
 
 ### `execution_scope_status`
 
@@ -44,6 +53,8 @@ Returns one scope's current projection:
 - linked checkout and worktree workspaces;
 - live or recently completed tracked DevSpace process sessions;
 - activity and audit counters.
+- the elapsed observation gap since the last MCP/tool event, with an explicit
+  statement that model progress and provider generation are not observable;
 - when explicitly recorded by the target scope, a bounded recovery-capsule
   projection with mission, frontier, current causal slice, established state,
   validation/worktree/writer/effect safety, next-action candidate,
@@ -64,6 +75,28 @@ available for reliance. Local workspace freshness is separate: another
 executor may advance Git/main, PostgreSQL, writer, runtime, or effect state
 without changing the recorded workspace.
 
+## Blind Intervals
+
+Execution observability sees MCP tool lifecycle and tracked process state. It
+does not receive a heartbeat while the host/model is reasoning or generating
+without a tool call. Each scope therefore reports:
+
+- the last observed MCP activity time;
+- `observationGapMs` and, when no tool or process is running,
+  `blindIntervalMs`;
+- the currently observable executor state: tool running, process running, or
+  no running tool/process;
+- `modelProgressObservable: false`;
+- `providerGenerationObservable: false`;
+- `hungDetermination: unavailable`.
+
+A long observation gap may be normal reasoning, provider generation, host
+queueing, network delay, an inactive turn, or a failure. DevSpace does not
+classify those possibilities without a host/provider lifecycle signal. A
+future adapter may add exact turn or generation heartbeats, but timeout
+heuristics must remain explicitly heuristic rather than becoming a false
+liveness claim.
+
 ### `execution_scope_audit`
 
 Returns a bounded newest-first event stream with opaque pagination. Events show
@@ -81,6 +114,8 @@ executor lane:
 
 - scope reference, full collision-check digest, and adapter class;
 - first and last activity times;
+- the observation gap and whether an executor tool/process is currently
+  observable;
 - tool name, lifecycle outcome, and duration;
 - workspace IDs and safe path/mode locators;
 - process IDs, state, timing, command length, and command digest;
@@ -130,6 +165,8 @@ DevSpace SQLite database. They survive a registry or server restart. Live
 process handles remain process-local and are joined at query time; they are
 observations, not reconstructed authority. DevSpace does not infer assistant
 turn age or impose a synthetic execution deadline from the stable scope age.
+The configured idle threshold classifies executor observation only; it does not
+assert that the model, provider, or host is idle or hung.
 
 Defaults:
 

@@ -47,6 +47,26 @@ The model should interpret a landing opportunity as:
 > or abandon the mission. Record a current capsule, then end only the assistant
 > turn.
 
+### One-shot adoption guidance
+
+After `turn_horizon_begin` (or exact host turn metadata), the first successful
+explicit file/artifact mutation in a turn may append one
+`[recovery capsule available]` notice when that turn has not yet recorded a
+capsule. The notice is deliberately limited to `apply_patch`, write/edit
+primitives, and artifact download; ordinary reads and generic shell inspection
+do not trigger it.
+
+The notice does not require an immediate capsule. It tells the model to continue
+the current causal chain and record a rolling capsule at the next natural
+material transition, once mission/frontier semantics are established. It never
+blocks tools, forces a commit, changes task priority, reduces validation, or
+grants authority. One notice is emitted per advisory turn epoch.
+
+Older host conversations may retain a cached MCP schema that predates the
+capsule tools. A fresh host connection is required before relying on this
+adoption path; the server does not infer semantic state for an old scope that
+cannot explicitly record it.
+
 ## Recovery Capsule
 
 `recovery_capsule_record` accepts semantic recovery state such as:

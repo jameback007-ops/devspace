@@ -35,8 +35,12 @@ open the same checkout. A supervisor conversation can use
 to inspect another scope's bounded operational state—linked workspaces, live
 processes, tool outcomes, and normalized error categories—without sharing model
 context or reading a transcript. When the target explicitly recorded a recovery
-capsule, status also projects its bounded semantic mission/frontier and safety
-state; it never invents those fields from tool events. Cross-scope authority
+capsule, the list includes a compact mission/frontier-derived display label and
+status projects the fuller bounded semantic mission/frontier and safety state.
+The label is not the host chat title, and DevSpace never invents semantic fields
+from paths or tool events. Scope summaries also expose the elapsed MCP
+observation gap while stating that model progress, provider generation, and a
+hang determination are unavailable between MCP calls. Cross-scope authority
 freshness remains unverified, so reconcile the project's current canonical,
 writer, runtime, and effect state before takeover. This does not grant writer
 authority; use an isolated worktree for parallel writers.
@@ -47,6 +51,12 @@ DevSpace does not run a blocking assistant-turn timer. When the host supplies no
 exact turn identity, call `turn_horizon_begin` once near the first tool call of
 the assistant turn. The fallback horizon emits sparse advisory notices only;
 tools remain fully available before and after the estimate.
+
+After the horizon starts, the first explicit file/artifact mutation may append
+one adoption notice when the current turn has no recovery capsule. Continue the
+current causal chain; record the rolling capsule at the next natural material
+transition. The notice does not require an immediate checkpoint or alter task
+selection.
 
 Continue normal dynamic work until the current causal slice reaches a coherent
 recovery cut. Do not hurry the task, reduce validation, force a commit, or avoid

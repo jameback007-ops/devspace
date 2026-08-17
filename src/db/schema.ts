@@ -203,6 +203,7 @@ export const executionTurnHorizons = sqliteTable(
     awarenessEmittedAtMs: integer("awareness_emitted_at_ms"),
     landingEmittedAtMs: integer("landing_emitted_at_ms"),
     staleCheckpointNoticeEmittedAtMs: integer("stale_checkpoint_notice_emitted_at_ms"),
+    capsuleNudgeEmittedAtMs: integer("capsule_nudge_emitted_at_ms"),
   },
   (table) => [
     index("execution_turn_horizons_activity_idx").on(table.lastActivityAtMs),

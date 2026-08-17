@@ -121,6 +121,35 @@ test("turn continuity is advisory-only and recovery capsules detect later worksp
   assert.equal(begunStatus.toolsBlocked, false);
   assert.equal(begunStatus.taskCompletionRequired, false);
 
+  const adoptionProbe = await context.client.callTool({
+    name: "apply_patch",
+    arguments: {
+      workspaceId,
+      patch: [
+        "*** Begin Patch",
+        "*** Add File: adoption.txt",
+        "+semantic recovery adoption probe",
+        "*** End Patch",
+      ].join("\n"),
+    },
+    _meta: { "openai/session": session },
+  } as Parameters<Client["callTool"]>[0]);
+  assert.match(responseAllText(adoptionProbe), /recovery capsule available/i);
+  assert.match(
+    responseAllText(adoptionProbe),
+    /Continue the current causal chain normally/i,
+  );
+
+  const noRepeatedNudge = await context.client.callTool({
+    name: "read",
+    arguments: { workspaceId, path: "README.md" },
+    _meta: { "openai/session": session },
+  } as Parameters<Client["callTool"]>[0]);
+  assert.equal(
+    /recovery capsule available/i.test(responseAllText(noRepeatedNudge)),
+    false,
+  );
+
   const recorded = await context.client.callTool({
     name: "recovery_capsule_record",
     arguments: {
@@ -135,7 +164,7 @@ test("turn continuity is advisory-only and recovery capsules detect later worksp
       established: ["initial commit exists"],
       validationState: "passed",
       validationRefs: ["git:HEAD"],
-      worktreeState: "clean",
+      worktreeState: "intentional_dirty",
       effectState: "none",
       writerState: "none",
       retryPolicy: "normal",
@@ -328,6 +357,33 @@ test("one host scope can inspect another through bounded execution-scope tools",
   const scopeRef = String(scopes[0]?.scopeRef);
   assert.match(scopeRef, /^[a-f0-9]{16}$/);
   assert.equal(scopes[0]?.isCurrent, false);
+  assert.equal(scopes[0]?.displayLabel, "DEVSPACE-SEMANTIC-OBSERVABILITY");
+  assert.equal(
+    scopes[0]?.displayLabelSource,
+    "recovery_capsule_mission_ref",
+  );
+  assert.equal(scopes[0]?.displayLabelIsHostChatTitle, false);
+  const semanticHint = scopes[0]?.semanticHint as Record<string, unknown>;
+  assert.equal(semanticHint.available, true);
+  assert.equal(semanticHint.displayLabel, "DEVSPACE-SEMANTIC-OBSERVABILITY");
+  assert.equal(
+    semanticHint.displayLabelSource,
+    "recovery_capsule_mission_ref",
+  );
+  assert.equal(semanticHint.labelIsHostChatTitle, false);
+  assert.equal(
+    semanticHint.currentFrontier,
+    "Expose safe semantic session status",
+  );
+  assert.equal(semanticHint.authorityFreshness, "unverified");
+  assert.equal(
+    semanticHint.exactActionReliance,
+    "requires_current_authority_reconciliation",
+  );
+  const listedObservation = scopes[0]?.observation as Record<string, unknown>;
+  assert.equal(listedObservation.modelProgressObservable, false);
+  assert.equal(listedObservation.providerGenerationObservable, false);
+  assert.equal(listedObservation.hungDetermination, "unavailable");
   assert.equal(JSON.stringify(listData).includes(workerSession), false);
   assert.equal(JSON.stringify(listData).includes(supervisorSession), false);
 

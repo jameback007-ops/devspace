@@ -52,6 +52,11 @@ const migrations: Migration[] = [
     name: "semantic-execution-observability",
     up: migrateSemanticExecutionObservability,
   },
+  {
+    version: 10,
+    name: "recovery-capsule-adoption-nudge",
+    up: migrateRecoveryCapsuleAdoptionNudge,
+  },
 ];
 
 export function migrateDatabase(sqlite: Database.Database): void {
@@ -460,6 +465,15 @@ function migrateSemanticExecutionObservability(
   sqlite.exec(`
     alter table execution_recovery_capsules
       add column recorded_event_sequence integer;
+  `);
+}
+
+function migrateRecoveryCapsuleAdoptionNudge(
+  sqlite: Database.Database,
+): void {
+  sqlite.exec(`
+    alter table execution_turn_horizons
+      add column capsule_nudge_emitted_at_ms integer;
   `);
 }
 

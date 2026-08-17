@@ -119,6 +119,13 @@ test("execution scope inspection joins durable audit with live workspace and pro
   assert.equal(scopes[0]?.workspaceCount, 1);
   assert.equal(scopes[0]?.runningProcessCount, 1);
   assert.equal(scopes[0]?.otherOrUnattributedRunningProcessCount, 1);
+  const listedObservation = scopes[0]?.observation as Record<string, unknown>;
+  assert.equal(listedObservation.observableExecutorState, "process_running");
+  assert.equal(listedObservation.blindIntervalActive, false);
+  assert.equal(listedObservation.modelProgressObservable, false);
+  assert.equal(listedObservation.providerGenerationObservable, false);
+  assert.equal(listedObservation.modelState, "not_observed");
+  assert.equal(listedObservation.hungDetermination, "unavailable");
 
   const status = manager.status(identity.scopeRef, undefined);
   const workspaces = status.workspaces as Array<Record<string, unknown>>;
@@ -203,7 +210,13 @@ test("unfinished observations recover as interrupted after a server restart", as
   const detail = events[0]?.detail as Record<string, unknown>;
   assert.deepEqual(detail.patchPaths, ["src/example.ts"]);
   const status = second.status(identity.scopeRef, undefined);
-  assert.equal((status.scope as Record<string, unknown>).activityState, "recent");
+  const statusScope = status.scope as Record<string, unknown>;
+  assert.equal(statusScope.activityState, "recent");
+  const observation = statusScope.observation as Record<string, unknown>;
+  assert.equal(observation.observableExecutorState, "no_running_tool_or_process");
+  assert.equal(observation.blindIntervalActive, true);
+  assert.equal(observation.modelProgressObservable, false);
+  assert.equal(observation.hungDetermination, "unavailable");
 });
 
 test("audit retention is bounded per scope and paginated with opaque cursors", async (t) => {

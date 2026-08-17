@@ -56,6 +56,12 @@ test("turn horizon is advisory-only, emits each threshold once, and explicit beg
     "no_explicit_recovery_capsule_for_scope",
   );
 
+  manager.observeToolFinish(identity, {}, "apply_patch", {}, true);
+  const adoption = manager.advisoryNotice(identity, {}, "apply_patch");
+  assert.match(adoption ?? "", /recovery capsule available/i);
+  assert.match(adoption ?? "", /Continue the current causal chain normally/i);
+  assert.equal(manager.advisoryNotice(identity, {}, "read"), undefined);
+
   now += 600;
   const awareness = manager.advisoryNotice(identity, {}, "read");
   assert.match(awareness ?? "", /checkpoint|recovery capsule/i);
@@ -67,6 +73,18 @@ test("turn horizon is advisory-only, emits each threshold once, and explicit beg
   assert.match(landing ?? "", /Tools remain fully available/i);
   assert.equal(manager.advisoryNotice(identity, {}, "read"), undefined);
 
+  await manager.recordCapsule(identity, { id: "ws_turn", root: stateDir }, {
+    idempotencyKey: "turn-one-capsule",
+    intent: "rolling",
+    currentFrontier: "preserve the current test frontier",
+    currentCausalSlice: "verify advisory and checkpoint behavior",
+    validationState: "partial",
+    worktreeState: "unknown",
+    effectState: "none",
+    retryPolicy: "normal",
+    exactNextAction: "continue the focused test",
+  });
+  now += 1;
   manager.observeToolFinish(identity, {}, "apply_patch", {}, true);
   const staleNotice = manager.advisoryNotice(identity, {}, "read");
   assert.match(staleNotice ?? "", /Potentially mutating work occurred/i);

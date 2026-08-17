@@ -454,7 +454,7 @@ function serverInstructions(config: ServerConfig): string {
   const codexSessionInstruction =
     " To inspect the allowlisted AOQ Codex executor adapter, use codex_session_status, codex_session_tail, or codex_session_audit. These tools report adapter transport health separately from the Codex thread lifecycle and never represent DevSpace, VPS, workspace, or ZES product health. To inspect the exact live AOQ worktree, use codex_workspace_git_status, codex_workspace_tree, codex_workspace_read, codex_workspace_search, or codex_workspace_diff. These brokered commands are read-only and independent from the Codex thread lifecycle.";
   const executionScopeInstruction = config.executionObservability.enabled
-    ? " Use execution_scope_list to discover recent DevSpace execution scopes, execution_scope_status to inspect another WebChat/host scope's linked workspaces, live processes, and latest explicitly recorded semantic recovery capsule when available, and execution_scope_audit for bounded metadata-only tool lifecycle. Semantic status is never inferred from filenames or tool events; absent capsule means unknown mission. Cross-scope authority freshness remains unverified and the recorded exact action is historical until current canonical/runtime/writer/effect owners are rehydrated. These views never replace Git, canonical product state, runtime/effect readback, or writer/lease reconciliation, and they do not contain transcripts, prompts, private reasoning, tool outputs, patches, credentials, or raw commands."
+    ? " Use execution_scope_list to discover recent DevSpace execution scopes. When a target explicitly recorded a recovery capsule, the list includes a compact capsule-derived semantic label/frontier hint; it is not a host chat title and absent capsule means unknown mission. Use execution_scope_status for linked workspaces, live processes, explicit semantic recovery state, and the observation gap since the last MCP/tool event. A no-tool interval does not reveal whether the model is reasoning, queued, generating, or hung; model progress and provider generation remain unobservable between MCP calls. Use execution_scope_audit for bounded metadata-only tool lifecycle. Semantic state is never inferred from filenames or tool events, cross-scope authority freshness remains unverified, and the recorded exact action is historical until current canonical/runtime/writer/effect owners are rehydrated. These views never replace Git, canonical product state, runtime/effect readback, or writer/lease reconciliation, and they do not contain transcripts, prompts, private reasoning, tool outputs, patches, credentials, or raw commands."
     : "";
   const executionMailboxInstruction = config.executionMailbox.enabled
     ? " Use execution_scope_message_send to leave a durable message for another known scope, reusing one idempotencyKey for retries. Acceptance means stored, not observed. When a tool result reports pending mail, call execution_scope_message_inbox before opening a new major frontier, then record acknowledged or acted state with execution_scope_message_receipt. Use execution_scope_message_status to inspect a message you sent or received. The mailbox is executor-local coordination, not task, decision, effect, writer, or canonical-memory authority, and it cannot wake or inject text directly into an inactive WebChat transcript."
@@ -858,7 +858,7 @@ function registerExecutionScopeTools(
     {
       title: "List DevSpace execution scopes",
       description:
-        "List recent provider-neutral DevSpace execution scopes with activity, workspace, and process summaries. This is read-only executor observability, not a transcript, task store, writer lease, checkpoint, memory, or product authority.",
+        "List recent provider-neutral DevSpace execution scopes with activity, workspace, process, and explicit capsule-derived semantic hints when available. A displayLabel is derived from the capsule mission/frontier and is not a host chat title. No semantic state is inferred from filenames or tool events. Observation gaps expose that model progress and provider generation are unobservable between MCP calls; they do not classify a model as reasoning or hung. This is read-only executor observability, not a transcript, task store, writer lease, checkpoint, memory, or product authority.",
       inputSchema: {
         limit: z
           .number()
@@ -872,9 +872,43 @@ function registerExecutionScopeTools(
       ...toolWidgetDescriptorMeta(config, "read"),
       annotations: CODEX_SESSION_TOOL_ANNOTATIONS,
     },
-    async ({ limit }, { _meta }) => jsonToolResponse(
-      executionScopes.list(executionScopeIdentity(_meta), limit),
-    ),
+    async ({ limit }, { _meta }) => {
+      const listed = executionScopes.list(executionScopeIdentity(_meta), limit);
+      if (!Array.isArray(listed.scopes)) return jsonToolResponse(listed);
+      const scopes = listed.scopes.filter(isRecord);
+      return jsonToolResponse({
+        ...listed,
+        scopes: scopes.map((scope) => {
+          const scopeRef = typeof scope.scopeRef === "string"
+            ? scope.scopeRef
+            : undefined;
+          const totalEventCount = typeof scope.totalEventCount === "number"
+            ? scope.totalEventCount
+            : undefined;
+          const semanticHint = scopeRef
+            ? turnContinuity.semanticListHintForScope(
+                scopeRef,
+                { observedScopeTotalEventCount: totalEventCount },
+              )
+            : undefined;
+          const displayLabel = semanticHint?.available === true
+            && typeof semanticHint.displayLabel === "string"
+              ? semanticHint.displayLabel
+              : undefined;
+          return {
+            ...scope,
+            ...(displayLabel
+              ? {
+                  displayLabel,
+                  displayLabelSource: semanticHint?.displayLabelSource,
+                  displayLabelIsHostChatTitle: false,
+                }
+              : {}),
+            ...(semanticHint === undefined ? {} : { semanticHint }),
+          };
+        }),
+      });
+    },
   );
 
   registerAppTool(
@@ -883,7 +917,7 @@ function registerExecutionScopeTools(
     {
       title: "Inspect DevSpace execution scope",
       description:
-        "Read one DevSpace execution scope by opaque scopeRef, including linked workspaces, live process sessions, and—when the target explicitly recorded one—the latest bounded semantic recovery capsule joined with local workspace freshness and later activity. Omit scopeRef for the current host scope. Semantic state is never inferred from filenames or tool events. Raw host session IDs, prompts, private reasoning, credentials, tool outputs, patches, and raw commands are never returned; capsule state remains executor-local observation rather than task, decision, writer, effect, or publication authority.",
+        "Read one DevSpace execution scope by opaque scopeRef, including linked workspaces, live process sessions, the observation gap since the last MCP/tool event, and—when the target explicitly recorded one—the latest bounded semantic recovery capsule joined with local workspace freshness and later activity. Omit scopeRef for the current host scope. Model progress and provider generation are not observable between MCP calls, so status never claims that a silent interval is normal reasoning or a hang. Semantic state is never inferred from filenames or tool events. Raw host session IDs, prompts, private reasoning, credentials, tool outputs, patches, and raw commands are never returned; capsule state remains executor-local observation rather than task, decision, writer, effect, or publication authority.",
       inputSchema: {
         scopeRef: scopeRefSchema.optional(),
       },

@@ -33,6 +33,8 @@ mandatory `AGENTS.md`; it does not replace it.
 - **Semantic execution status** — a read-only join of one scope's latest
   explicit recovery capsule with live workspace/process/tool observations. It
   does not infer hidden model state or create a second semantic store.
+- **Observation gap** — elapsed time since the last observed MCP/tool event.
+  It is not evidence that the model is idle, reasoning, generating, or hung.
 - **Local-agent turn** — one queued provider prompt serialized by a worker
   lease. It is not canonical work or effect authority.
 - **Worker lease** — an executor-local single-worker claim. Expiry after

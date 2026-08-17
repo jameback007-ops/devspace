@@ -832,6 +832,12 @@ export class ExecutionScopeManager {
       : idleForMs <= this.config.idleAfterMs
         ? "recent"
         : "idle";
+    const observableExecutorState = scope.runningToolCount > 0
+      ? "tool_running"
+      : runningProcessCount > 0
+        ? "process_running"
+        : "no_running_tool_or_process";
+    const blindIntervalActive = observableExecutorState === "no_running_tool_or_process";
 
     return {
       scopeRef: scope.scopeRef,
@@ -849,6 +855,18 @@ export class ExecutionScopeManager {
         processProjection.otherOrUnattributedRunningProcessCount,
       workspaceCount: scope.workspaceCount,
       totalEventCount: scope.totalEventCount,
+      observation: {
+        boundary: "mcp_tool_and_process_observation_only",
+        observableExecutorState,
+        lastObservedMcpActivityAt: iso(scope.lastActivityAtMs),
+        observationGapMs: idleForMs,
+        blindIntervalActive,
+        blindIntervalMs: blindIntervalActive ? idleForMs : 0,
+        modelProgressObservable: false,
+        providerGenerationObservable: false,
+        modelState: "not_observed",
+        hungDetermination: "unavailable",
+      },
     };
   }
 
@@ -880,6 +898,10 @@ export class ExecutionScopeManager {
       privateReasoningCaptured: false,
       toolOutputsCaptured: false,
       rawCommandsCaptured: false,
+      activityStateRepresents: "executor_tool_process_observation_only",
+      modelStateObservableBetweenMcpCalls: false,
+      providerGenerationObservableBetweenMcpCalls: false,
+      hungDeterminationAvailable: false,
       retentionMs: this.config.retentionMs,
       maxEventsPerScope: this.config.maxEventsPerScope,
     };

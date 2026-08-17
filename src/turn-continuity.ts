@@ -112,6 +112,7 @@ interface HorizonRow {
   awareness_emitted_at_ms: number | null;
   landing_emitted_at_ms: number | null;
   stale_checkpoint_notice_emitted_at_ms: number | null;
+  capsule_nudge_emitted_at_ms: number | null;
 }
 
 interface CapsuleRow {
@@ -197,6 +198,14 @@ const POTENTIALLY_MUTATING_TOOLS = new Set([
   "exec_command",
   "download_artifact",
 ]);
+const CAPSULE_ADOPTION_NUDGE_TOOLS = new Set([
+  "apply_patch",
+  "write",
+  "write_file",
+  "edit",
+  "edit_file",
+  "download_artifact",
+]);
 
 function sha256(value: string | Buffer): string {
   return createHash("sha256").update(value).digest("hex");
@@ -271,6 +280,13 @@ function boundedList(
   return Array.from(new Set(normalized));
 }
 
+function compactHintText(value: string | undefined, maximum: number): string | undefined {
+  if (!value) return undefined;
+  return value.length <= maximum
+    ? value
+    : `${value.slice(0, Math.max(0, maximum - 3))}...`;
+}
+
 function splitNul(value: string): string[] {
   return value.split("\0").filter((entry) => entry.length > 0);
 }
@@ -312,6 +328,13 @@ function staleCheckpointNotice(): string {
   return [
     "[recovery capsule changed]",
     "Potentially mutating work occurred after the latest capsule during the landing window. Refresh the capsule at the next recoverable causal cut; continue normal work until that cut and do not manufacture task completion.",
+  ].join("\n");
+}
+
+function capsuleAdoptionNotice(): string {
+  return [
+    "[recovery capsule available]",
+    "This assistant turn has completed potentially mutating executor work without an explicit semantic recovery capsule for the current turn. Continue the current causal chain normally. At the next natural material transition, record a rolling capsule with the mission, frontier, current causal slice, validation/effect safety, exact next action, and do-not-repeat constraints. Do not interrupt the work, force a commit, reduce validation, or treat the capsule as canonical authority.",
   ].join("\n");
 }
 
@@ -469,6 +492,25 @@ export class TurnContinuityManager {
     if (!row) return undefined;
     const view = this.horizonView(row, nowMs);
     const advisory = view.advisory as HorizonAdvisory;
+    const latestCapsule = this.latestCapsuleForScope(identity.scopeRef);
+    const currentTurnHasCapsule = latestCapsule !== undefined
+      && latestCapsule.recorded_at_ms >= row.started_at_ms;
+
+    if (
+      CAPSULE_ADOPTION_NUDGE_TOOLS.has(toolName)
+      && row.last_mutation_at_ms !== null
+      && !currentTurnHasCapsule
+      && row.capsule_nudge_emitted_at_ms === null
+    ) {
+      this.database.sqlite
+        .prepare(`
+          update execution_turn_horizons
+             set capsule_nudge_emitted_at_ms = ?
+           where scope_ref = ?
+        `)
+        .run(nowMs, identity.scopeRef);
+      return capsuleAdoptionNotice();
+    }
 
     if (advisory === "landing_opportunity" && row.landing_emitted_at_ms === null) {
       this.database.sqlite
@@ -499,6 +541,7 @@ export class TurnContinuityManager {
     if (
       advisory === "landing_opportunity"
       && row.landing_emitted_at_ms !== null
+      && currentTurnHasCapsule
       && row.last_mutation_at_ms !== null
       && (
         row.last_checkpoint_at_ms === null
@@ -666,7 +709,19 @@ export class TurnContinuityManager {
       };
     }
     const recordedFingerprint = parseFingerprint(row.fingerprint_json);
-    const semantic = parseSemantic(row.semantic_json);
+    let semantic: RecoverySemanticState;
+    try {
+      semantic = parseSemantic(row.semantic_json);
+    } catch {
+      return {
+        schemaVersion: 1,
+        available: false,
+        workspaceId: workspace.id,
+        currentFingerprint: current,
+        reason: "stored_recovery_capsule_invalid",
+        policy: this.capsulePolicy(),
+      };
+    }
     const workspaceComparison = compareFingerprint(recordedFingerprint, current);
     const authorityComparison = compareAuthorityStateRefs(
       semantic.authorityStateRefs,
@@ -716,6 +771,63 @@ export class TurnContinuityManager {
         semantic.exactNextAction,
       ),
       policy: this.capsulePolicy(),
+    };
+  }
+
+  semanticListHintForScope(
+    scopeRef: string,
+    options: { observedScopeTotalEventCount?: number } = {},
+  ): Record<string, unknown> {
+    if (!this.config.enabled) {
+      return {
+        available: false,
+        reason: "turn_continuity_disabled",
+      };
+    }
+    if (!/^[a-f0-9]{16}$/.test(scopeRef)) {
+      throw new Error(`Invalid execution scope reference: ${scopeRef}`);
+    }
+    const row = this.latestCapsuleForScope(scopeRef);
+    if (!row) {
+      return {
+        available: false,
+        reason: "no_explicit_recovery_capsule_for_scope",
+      };
+    }
+    let semantic: RecoverySemanticState;
+    try {
+      semantic = parseSemantic(row.semantic_json);
+    } catch {
+      return {
+        available: false,
+        reason: "stored_recovery_capsule_invalid",
+      };
+    }
+    const displayLabelSource = semantic.missionRef
+      ? "recovery_capsule_mission_ref"
+      : "recovery_capsule_current_frontier";
+    const observedActivityAfterCapsule = row.recorded_event_sequence !== null
+      && options.observedScopeTotalEventCount !== undefined
+      ? options.observedScopeTotalEventCount > row.recorded_event_sequence
+      : undefined;
+    return {
+      available: true,
+      source: "latest_explicit_recovery_capsule_for_scope",
+      displayLabel: compactHintText(
+        semantic.missionRef ?? semantic.currentFrontier,
+        160,
+      ),
+      displayLabelSource,
+      labelIsHostChatTitle: false,
+      missionRef: compactHintText(semantic.missionRef, 240),
+      currentFrontier: compactHintText(semantic.currentFrontier, 360),
+      currentCausalSlice: compactHintText(semantic.currentCausalSlice, 360),
+      capsuleId: row.id,
+      generation: row.generation,
+      recordedAt: iso(row.recorded_at_ms),
+      observedActivityAfterCapsule,
+      authorityFreshness: "unverified",
+      exactActionReliance: "requires_current_authority_reconciliation",
     };
   }
 
@@ -947,7 +1059,8 @@ export class TurnContinuityManager {
           last_checkpoint_id = excluded.last_checkpoint_id,
           awareness_emitted_at_ms = null,
           landing_emitted_at_ms = null,
-          stale_checkpoint_notice_emitted_at_ms = null
+          stale_checkpoint_notice_emitted_at_ms = null,
+          capsule_nudge_emitted_at_ms = null
       `)
       .run(
         scopeRef,
@@ -1158,6 +1271,7 @@ export class TurnContinuityManager {
       estimatedTurnMs: this.config.estimatedTurnMs,
       awarenessAfterMs: this.config.awarenessAfterMs,
       landingAfterMs: this.config.landingAfterMs,
+      capsuleAdoptionNoticeOncePerTurn: true,
     };
   }
 
