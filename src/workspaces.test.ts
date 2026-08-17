@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { mkdtemp, mkdir, rm, stat, symlink, writeFile } from "node:fs/promises";
-import { platform, tmpdir } from "node:os";
+import { homedir, platform, tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 import { promisify } from "node:util";
 import { loadConfig, type ServerConfig } from "./config.js";
 import { GitWorktreeError } from "./git-worktrees.js";
+import { formatPathForPrompt } from "./skills.js";
 import { SqliteWorkspaceStore } from "./workspace-store.js";
 import { WorkspaceRegistry } from "./workspaces.js";
 
@@ -71,6 +72,30 @@ test("opening a missing checkout creates its workspace root", async (t) => {
   const opened = await context.registry.openWorkspace(missingRoot);
   assert.equal(opened.workspace.root, missingRoot);
   assert.equal((await stat(missingRoot)).isDirectory(), true);
+});
+
+test("advertised home-relative skill paths resolve before workspace-relative files", async (t) => {
+  const context = await fixture(t);
+  const opened = await context.registry.openWorkspace(context.root);
+  const baseDir = join(homedir(), ".devspace-skill-path-test");
+  const filePath = join(baseDir, "SKILL.md");
+  opened.workspace.skills.push({
+    name: "home-relative-skill",
+    description: "Test home-relative skill path resolution.",
+    filePath,
+    baseDir,
+    sourceInfo: {} as never,
+    disableModelInvocation: false,
+    exposure: "on-demand",
+    workspaceMarkers: [],
+    autoAdvertised: false,
+  });
+
+  const promptPath = formatPathForPrompt(filePath);
+  assert.match(promptPath, /^~\//);
+  const resolved = context.registry.resolveReadPath(opened.workspace, promptPath);
+  assert.equal(resolved.absolutePath, filePath);
+  assert.equal(resolved.skillRead?.isSkillFile, true);
 });
 
 test("worktree opens require Git and create an isolated managed workspace", async (t) => {
