@@ -762,6 +762,22 @@ test("execution-scope mailbox delivers at the target's next MCP boundary with re
   assert.match(String(sendDetail.bodyDigestSha256), /^[a-f0-9]{64}$/);
   assert.equal(sendDetail.targetScopeRef, targetScopeRef);
 
+  const structuredOutputCall = await context.client.callTool({
+    name: "exec_command",
+    arguments: {
+      workspaceId,
+      cmd: `${JSON.stringify(process.execPath)} -e "process.stdout.write('structured-output\\n')"`,
+      yieldTimeMs: 2_000,
+    },
+    _meta: { "openai/session": workerSession },
+  } as Parameters<Client["callTool"]>[0]);
+  const structuredOutput = structuredOutputCall.structuredContent as Record<string, unknown>;
+  assert.equal(structuredOutput.output, "structured-output\n");
+  assert.equal(structuredOutput.outputDeltaBytes, Buffer.byteLength("structured-output\n"));
+  assert.match(String(structuredOutput.outputDeltaDigestSha256), /^[a-f0-9]{64}$/);
+  assert.equal(structuredOutput.outputTotalBytes, Buffer.byteLength("structured-output\n"));
+  assert.equal(structuredOutput.outputComplete, true);
+
   const processStart = await context.client.callTool({
     name: "exec_command",
     arguments: {

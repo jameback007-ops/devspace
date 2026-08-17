@@ -810,6 +810,7 @@ function processResult(snapshot: ProcessSnapshot): string {
 
 function processOutputSchema(): z.ZodRawShape {
   return resultOutputSchema({
+    output: z.string(),
     sessionId: z.number().optional(),
     running: z.boolean(),
     exitCode: z.number().int().optional(),
@@ -849,6 +850,7 @@ function processToolResponse(
     },
     structuredContent: {
       result,
+      output: snapshot.output,
       sessionId: snapshot.sessionId,
       running: snapshot.running,
       exitCode: snapshot.exitCode,
