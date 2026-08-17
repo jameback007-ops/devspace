@@ -211,11 +211,16 @@ Cursor and Copilot ACP adapters are not advertised as resumable provider
 sessions in this version. DevSpace rejects follow-up continuation rather than
 silently starting a new unrelated session.
 
-## Executor-Turn Boundary
+## No Synthetic Executor-Turn Enforcement
 
-Conversation identity is not a safe clock for one assistant turn. Hard
-executor-window enforcement is enabled only when the host supplies an exact
-`devspace/executor-turn` value that changes between turns. Without that host
-boundary, explicit and automatic windows are advisory and roll over instead of
-blocking a later conversation turn. This avoids converting an interruption
-warning into a persistent denial of mutation.
+Conversation identity is not a safe clock for one assistant turn, and DevSpace
+does not infer a platform cutoff from elapsed conversation time. The retired
+executor-window mechanism is not a security boundary and no longer blocks
+mutation or command execution. Recovery and duplicate-effect prevention remain
+the responsibility of the actual workspace, process, provider, product writer,
+and effect/lease contracts.
+
+An optional Codex session adapter is also not an executor-plane boundary. Its
+transport or thread may be degraded while DevSpace filesystem, process, and VPS
+execution remain healthy. Status responses therefore keep adapter transport,
+thread lifecycle, direct-input capability, and persistence freshness separate.

@@ -24,6 +24,23 @@ interface SessionReaderEnvelope {
   data?: unknown;
 }
 
+type CodexSessionObservationKind = "status" | "tail" | "audit";
+type ObservationHealth = "healthy" | "degraded" | "unavailable";
+type CapabilityState = "available" | "unavailable" | "unknown" | "not_observed";
+
+export interface CodexSessionAdapterStatus {
+  adapterKind: "codex_app_server";
+  observationKind: CodexSessionObservationKind;
+  overallHealth: ObservationHealth;
+  readerTransport: "healthy" | "unavailable";
+  appServerTransport: "healthy" | "unavailable" | "not_observed";
+  threadLifecycle: string | "unknown" | "not_observed";
+  directInput: CapabilityState;
+  persistence: "fresh" | "stale" | "unknown";
+  devspaceExecutorPlaneImpact: "none";
+  interpretation: string;
+}
+
 function resultOutputSchema(): z.ZodRawShape {
   return {
     result: z.string(),
@@ -81,6 +98,148 @@ async function requestCodexSessionReader(
   });
 }
 
+function record(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
+function sessionFromObservation(data: unknown): Record<string, unknown> | undefined {
+  return record(record(data)?.session);
+}
+
+export function codexSessionAdapterStatus(
+  data: unknown,
+  observationKind: CodexSessionObservationKind,
+): CodexSessionAdapterStatus {
+  if (observationKind !== "status") {
+    return {
+      adapterKind: "codex_app_server",
+      observationKind,
+      overallHealth: "healthy",
+      readerTransport: "healthy",
+      appServerTransport: "not_observed",
+      threadLifecycle: "not_observed",
+      directInput: "not_observed",
+      persistence: "unknown",
+      devspaceExecutorPlaneImpact: "none",
+      interpretation:
+        "The persisted Codex activity reader succeeded. This observation does not test the live App Server or the DevSpace executor plane.",
+    };
+  }
+
+  const session = sessionFromObservation(data);
+  const statusSource = session?.statusSource;
+  const appServerTransport = statusSource === "app-server"
+    ? "healthy"
+    : "unavailable";
+  const status = record(session?.status);
+  const lifecycle = typeof status?.type === "string" ? status.type : "unknown";
+  const directInput = session?.canAcceptDirectInput === true
+    ? "available"
+    : session?.canAcceptDirectInput === false
+      ? "unavailable"
+      : "unknown";
+  const persistence = session?.recentlyPersisting === true
+    ? "fresh"
+    : session?.recentlyPersisting === false
+      ? "stale"
+      : "unknown";
+  const overallHealth: ObservationHealth = appServerTransport === "unavailable"
+    ? "degraded"
+    : lifecycle === "systemError" || lifecycle === "failed"
+      ? "degraded"
+      : "healthy";
+
+  return {
+    adapterKind: "codex_app_server",
+    observationKind,
+    overallHealth,
+    readerTransport: "healthy",
+    appServerTransport,
+    threadLifecycle: lifecycle,
+    directInput,
+    persistence,
+    devspaceExecutorPlaneImpact: "none",
+    interpretation: appServerTransport === "unavailable"
+      ? "The read-only session reader is healthy, but it could not observe the live Codex App Server. DevSpace workspace and VPS execution remain independent."
+      : lifecycle === "systemError" && directInput === "available"
+        ? "The Codex App Server transport is healthy. The observed thread lifecycle reports systemError, while the same thread still accepts direct input; this is a thread state, not a DevSpace or VPS outage."
+        : "The Codex App Server transport and read-only adapter are healthy. Thread lifecycle and persistence are reported independently.",
+  };
+}
+
+export function unavailableCodexSessionAdapterObservation(
+  observationKind: CodexSessionObservationKind,
+  message: string,
+): Record<string, unknown> {
+  return {
+    schemaVersion: 1,
+    scope: "optional-codex-executor-adapter",
+    adapterStatus: {
+      adapterKind: "codex_app_server",
+      observationKind,
+      overallHealth: "unavailable",
+      readerTransport: "unavailable",
+      appServerTransport: "not_observed",
+      threadLifecycle: "not_observed",
+      directInput: "not_observed",
+      persistence: "unknown",
+      devspaceExecutorPlaneImpact: "none",
+      interpretation:
+        "The optional Codex session adapter could not be observed. DevSpace workspace and VPS execution remain independent.",
+    } satisfies CodexSessionAdapterStatus,
+    adapterError: {
+      kind: "codex_session_adapter_unavailable",
+      summary: message.slice(0, 500),
+    },
+  };
+}
+
+function attachCodexSessionAdapterStatus(
+  data: unknown,
+  observationKind: CodexSessionObservationKind,
+): Record<string, unknown> {
+  const status = codexSessionAdapterStatus(data, observationKind);
+  const source = record(data);
+  return source
+    ? { ...source, adapterStatus: status }
+    : {
+        schemaVersion: 1,
+        scope: "optional-codex-executor-adapter",
+        observation: data,
+        adapterStatus: status,
+      };
+}
+
+async function invokeCodexSessionAdapter(
+  request: Record<string, unknown>,
+  observationKind: CodexSessionObservationKind,
+) {
+  try {
+    const data = attachCodexSessionAdapterStatus(
+      await requestCodexSessionReader(request),
+      observationKind,
+    );
+    const result = JSON.stringify(data, null, 2);
+    return {
+      content: [{ type: "text" as const, text: result }],
+      structuredContent: { result, data },
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const data = unavailableCodexSessionAdapterObservation(
+      observationKind,
+      message,
+    );
+    const result = JSON.stringify(data, null, 2);
+    return {
+      content: [{ type: "text" as const, text: result }],
+      structuredContent: { result, data },
+    };
+  }
+}
+
 async function invokeCodexSessionReader(
   request: Record<string, unknown>,
 ) {
@@ -130,7 +289,7 @@ export function registerZesCodexInspectionTools(
     {
       title: "Codex AOQ session status",
       description:
-        "Read the current status and persisted activity timestamp of the allowlisted AOQ-01 Codex task on this VPS. This is read-only and accepts no arbitrary thread ID or filesystem path.",
+        "Read the optional Codex AOQ executor adapter. The result separates reader transport, live App Server transport, thread lifecycle, direct-input capability, and persistence freshness. A degraded Codex thread or adapter does not imply that DevSpace, the VPS, or workspace execution is degraded. This is read-only and accepts no arbitrary thread ID or filesystem path.",
       inputSchema: {},
       outputSchema: resultOutputSchema(),
       ...toolMeta(config),
@@ -138,8 +297,11 @@ export function registerZesCodexInspectionTools(
     },
     async () => {
       const startedAt = performance.now();
-      const response = await invokeCodexSessionReader({ command: "status" });
-      logInspection(config, "codex_session_status", !response.isError, startedAt);
+      const response = await invokeCodexSessionAdapter(
+        { command: "status" },
+        "status",
+      );
+      logInspection(config, "codex_session_status", true, startedAt);
       return response;
     },
   );
@@ -150,7 +312,7 @@ export function registerZesCodexInspectionTools(
     {
       title: "Read recent Codex AOQ session activity",
       description:
-        "Read a bounded, newest-first view of the allowlisted AOQ-01 Codex task. Use view=messages for transcript text, combined for transcript plus lifecycle/tool metadata, or audit for redacted observable tool inputs/results. Internal reasoning and detected secrets remain excluded.",
+        "Read a bounded, newest-first view from the persisted allowlisted Codex AOQ rollout. This path does not test or control the live App Server and has no effect on DevSpace workspace execution. Use view=messages for transcript text, combined for transcript plus lifecycle/tool metadata, or audit for redacted observable tool inputs/results. Internal reasoning and detected secrets remain excluded.",
       inputSchema: {
         limit: z.number().int().min(1).max(100).optional(),
         cursor: z.string().max(24).optional(),
@@ -162,13 +324,16 @@ export function registerZesCodexInspectionTools(
     },
     async ({ limit, cursor, view }) => {
       const startedAt = performance.now();
-      const response = await invokeCodexSessionReader({
-        command: "tail",
-        limit: limit ?? 20,
-        view: view ?? "combined",
-        ...(cursor ? { cursor } : {}),
-      });
-      logInspection(config, "codex_session_tail", !response.isError, startedAt);
+      const response = await invokeCodexSessionAdapter(
+        {
+          command: "tail",
+          limit: limit ?? 20,
+          view: view ?? "combined",
+          ...(cursor ? { cursor } : {}),
+        },
+        "tail",
+      );
+      logInspection(config, "codex_session_tail", true, startedAt);
       return response;
     },
   );
@@ -179,7 +344,7 @@ export function registerZesCodexInspectionTools(
     {
       title: "Audit the live Codex AOQ session",
       description:
-        "Read a deep, paginated, newest-first audit view of the allowlisted AOQ Codex task, including visible transcript, redacted commands/tool results, file-change events, web/MCP results, lifecycle events, and errors. This action cannot mutate the task. Internal reasoning and detected secrets remain excluded.",
+        "Read a deep, paginated, newest-first audit view from the persisted allowlisted Codex AOQ rollout, including visible transcript, redacted commands/tool results, file-change events, web/MCP results, lifecycle events, and errors. This path does not test or control the live App Server and cannot affect DevSpace workspace execution. Internal reasoning and detected secrets remain excluded.",
       inputSchema: {
         limit: z.number().int().min(1).max(100).optional(),
         cursor: z.string().max(24).optional(),
@@ -190,13 +355,16 @@ export function registerZesCodexInspectionTools(
     },
     async ({ limit, cursor }) => {
       const startedAt = performance.now();
-      const response = await invokeCodexSessionReader({
-        command: "tail",
-        limit: limit ?? 20,
-        view: "audit",
-        ...(cursor ? { cursor } : {}),
-      });
-      logInspection(config, "codex_session_audit", !response.isError, startedAt);
+      const response = await invokeCodexSessionAdapter(
+        {
+          command: "tail",
+          limit: limit ?? 20,
+          view: "audit",
+          ...(cursor ? { cursor } : {}),
+        },
+        "audit",
+      );
+      logInspection(config, "codex_session_audit", true, startedAt);
       return response;
     },
   );

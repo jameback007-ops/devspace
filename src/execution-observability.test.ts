@@ -4,7 +4,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { openDatabase } from "./db/client.js";
-import { ExecutorWindowRegistry } from "./executor-window.js";
 import {
   ExecutionScopeManager,
   summarizeExecutionToolInput,
@@ -21,7 +20,7 @@ const config: ExecutionObservabilityConfig = {
   idleAfterMs: 5 * 60 * 1_000,
 };
 
-test("execution scope inspection joins durable audit with live workspace, process, and window state", async (t) => {
+test("execution scope inspection joins durable audit with live workspace and process state", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "devspace-execution-observability-"));
   const stateDir = join(root, ".state");
   const project = join(root, "project");
@@ -32,20 +31,10 @@ test("execution scope inspection joins durable audit with live workspace, proces
   const workspaceStore = new SqliteWorkspaceStore(stateDir);
   workspaceStore.createSession({ id: "ws_test", root: project });
   const processes = new ProcessSessionManager();
-  const windows = new ExecutorWindowRegistry(
-    {
-      enabled: true,
-      drainAfterMs: 90 * 60 * 1_000,
-      yieldAfterMs: 100 * 60 * 1_000,
-      retentionMs: 24 * 60 * 60 * 1_000,
-    },
-    { now: () => now },
-  );
   const manager = new ExecutionScopeManager(
     config,
     stateDir,
     processes,
-    windows,
     { now: () => now },
   );
   t.after(() => {
@@ -56,7 +45,6 @@ test("execution scope inspection joins durable audit with live workspace, proces
 
   const identity = executionScopeIdentity({ "openai/session": "private-chat-session" });
   assert.ok(identity);
-  windows.begin(identity.scopeId, "new_turn");
 
   const command = "printf secret-value-from-command && sleep 10";
   const process = await processes.start({
@@ -97,7 +85,6 @@ test("execution scope inspection joins durable audit with live workspace, proces
         outputTruncated: false,
       },
     },
-    windowStatus: windows.status(identity.scopeId),
   });
 
   const inspectionDatabase = openDatabase(stateDir);
@@ -177,21 +164,14 @@ test("unfinished observations recover as interrupted after a server restart", as
   let now = Date.parse("2026-08-17T01:00:00Z");
 
   const firstProcesses = new ProcessSessionManager();
-  const firstWindows = new ExecutorWindowRegistry({
-    enabled: true,
-    drainAfterMs: 90 * 60 * 1_000,
-    yieldAfterMs: 100 * 60 * 1_000,
-    retentionMs: 24 * 60 * 60 * 1_000,
-  });
   const first = new ExecutionScopeManager(
     config,
     stateDir,
     firstProcesses,
-    firstWindows,
     { now: () => now },
   );
   const identity = executionScopeIdentity({
-    "devspace/executor-window-scope": "generic-private-scope",
+    "devspace/execution-scope": "generic-private-scope",
   });
   assert.ok(identity);
   first.beginTool(identity, "apply_patch", {
@@ -203,17 +183,10 @@ test("unfinished observations recover as interrupted after a server restart", as
 
   now += 5_000;
   const secondProcesses = new ProcessSessionManager();
-  const secondWindows = new ExecutorWindowRegistry({
-    enabled: true,
-    drainAfterMs: 90 * 60 * 1_000,
-    yieldAfterMs: 100 * 60 * 1_000,
-    retentionMs: 24 * 60 * 60 * 1_000,
-  });
   const second = new ExecutionScopeManager(
     config,
     stateDir,
     secondProcesses,
-    secondWindows,
     { now: () => now },
   );
   t.after(() => {
@@ -239,17 +212,10 @@ test("audit retention is bounded per scope and paginated with opaque cursors", a
   t.after(() => rm(root, { recursive: true, force: true }));
   let now = Date.parse("2026-08-17T02:00:00Z");
   const processes = new ProcessSessionManager();
-  const windows = new ExecutorWindowRegistry({
-    enabled: false,
-    drainAfterMs: 90 * 60 * 1_000,
-    yieldAfterMs: 100 * 60 * 1_000,
-    retentionMs: 24 * 60 * 60 * 1_000,
-  });
   const manager = new ExecutionScopeManager(
     { ...config, maxEventsPerScope: 3 },
     stateDir,
     processes,
-    windows,
     { now: () => now },
   );
   t.after(() => {
@@ -308,17 +274,10 @@ test("global retention prunes inactive scopes during later activity", async (t) 
   t.after(() => rm(root, { recursive: true, force: true }));
   let now = Date.parse("2026-08-17T03:00:00Z");
   const processes = new ProcessSessionManager();
-  const windows = new ExecutorWindowRegistry({
-    enabled: false,
-    drainAfterMs: 90 * 60 * 1_000,
-    yieldAfterMs: 100 * 60 * 1_000,
-    retentionMs: 24 * 60 * 60 * 1_000,
-  });
   const manager = new ExecutionScopeManager(
     { ...config, retentionMs: 1_000 },
     stateDir,
     processes,
-    windows,
     { now: () => now },
   );
   t.after(() => {
@@ -363,13 +322,7 @@ test("arbitrary exception messages never enter cross-scope audit", async (t) => 
   const stateDir = join(root, ".state");
   t.after(() => rm(root, { recursive: true, force: true }));
   const processes = new ProcessSessionManager();
-  const windows = new ExecutorWindowRegistry({
-    enabled: false,
-    drainAfterMs: 90 * 60 * 1_000,
-    yieldAfterMs: 100 * 60 * 1_000,
-    retentionMs: 24 * 60 * 60 * 1_000,
-  });
-  const manager = new ExecutionScopeManager(config, stateDir, processes, windows);
+  const manager = new ExecutionScopeManager(config, stateDir, processes);
   t.after(() => {
     processes.shutdown();
     manager.close();

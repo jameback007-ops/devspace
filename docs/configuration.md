@@ -39,53 +39,20 @@ npx @waishnav/devspace config set publicBaseUrl https://devspace.example.com
 | `DEVSPACE_WORKTREE_ROOT` | Directory for managed Git worktrees. Defaults to `~/.devspace/worktrees`. |
 | `DEVSPACE_STATE_DIR` | Directory for SQLite state. Defaults to `~/.local/share/devspace`. |
 
-## Executor Turn Window
+## Executor Turn Window Retirement
 
-The executor window is an optional interruption-safety guard for MCP hosts whose
-model turns may end at an unknown platform cutoff. It does **not** divide or time
-limit the underlying task. A task may continue across any number of turns.
+The synthetic executor-turn timer has been removed. DevSpace no longer infers a
+host cutoff, appends timer status to every tool result, or blocks tools after an
+elapsed-time threshold. The former `executor_window_begin`,
+`executor_window_status`, and `executor_window_yield` tools are not registered.
+Legacy `DEVSPACE_EXECUTOR_WINDOW*` environment variables are ignored.
 
-```bash
-DEVSPACE_EXECUTOR_WINDOW=1 \
-DEVSPACE_EXECUTOR_WINDOW_DRAIN_MINUTES=90 \
-DEVSPACE_EXECUTOR_WINDOW_YIELD_MINUTES=100 \
-npx @waishnav/devspace serve
-```
-
-Conversation identity and assistant-turn identity are separate. A host that can
-identify one assistant turn should send the same `devspace/executor-turn`
-metadata value on every tool call in that turn and a different value in the
-next turn. Only those exact host-bound windows may enforce a hard landing.
-
-When a host does not expose turn identity, call
-`executor_window_begin(reason=new_turn)` exactly once as the first tool call of
-every assistant turn. That explicit call resets the clock even if the previous
-conversation window remains active or draining. Because DevSpace cannot prove
-where the host ended a turn, explicit and automatic fallback windows remain
-advisory: after the drain threshold they warn and roll into a fresh advisory
-window instead of blocking a later turn. Conversation age is never treated as
-turn age.
-
-Normal tool results include a compact window status. For an exact host-bound
-window, the model should finish its current local causal chain at DRAIN, persist
-a recoverable checkpoint or handoff, and avoid opening a new major frontier. At
-YIELD_REQUIRED, DevSpace blocks new mutation and command execution while still
-allowing read/reconciliation tools, bounded mailbox send/inbox/receipt
-operations, and polling or interrupting an existing process.
-`executor_window_yield` records a
-bounded advisory handoff before the assistant turn ends.
-
-The window is runtime scheduling metadata only. It is not task, checkpoint,
-memory, release, writer, or effect authority. The advisory handoff does not
-replace Git, a canonical database, runtime/effect readback, or a product-native
-continuation contract.
-
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `DEVSPACE_EXECUTOR_WINDOW` | `0` | Enable the executor-turn guard. |
-| `DEVSPACE_EXECUTOR_WINDOW_DRAIN_MINUTES` | `90` | Enter DRAIN and stop opening major new work. |
-| `DEVSPACE_EXECUTOR_WINDOW_YIELD_MINUTES` | `100` | Require a safe yield and block new mutation/commands. Must exceed DRAIN. |
-| `DEVSPACE_EXECUTOR_WINDOW_RETENTION_HOURS` | `24` | Retain in-memory yielded handoff state for later turns while the server remains running. |
+Long work should close at a coherent boundary selected from the actual task and
+persist recovery state in the rightful owner: Git, product-native work and
+decision state, durable execution/effect records, or a provider-neutral
+continuation contract. A future host-supplied real deadline may support a small
+deadline-aware warning, but DevSpace does not manufacture one from conversation
+age.
 
 ## Execution-Scope Observability
 

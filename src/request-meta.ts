@@ -17,11 +17,6 @@ export function openAiConversationScopeId(
 
 export type ExecutionScopeAdapter = "devspace" | "openai";
 
-export interface ExecutorTurnIdentity {
-  turnId: string;
-  turnRef: string;
-}
-
 export interface ExecutionScopeIdentity {
   /** Raw opaque host scope. Execution observability must not persist this value. */
   scopeId: string;
@@ -40,24 +35,6 @@ export function executionScopeRef(scopeId: string): string {
   return executionScopeDigestSha256(scopeId).slice(0, 16);
 }
 
-export function executorTurnRef(turnId: string): string {
-  return createHash("sha256").update(turnId).digest("hex").slice(0, 16);
-}
-
-/**
- * Optional provider-neutral assistant-turn identity. Hosts that can expose a
- * stable value for all tool calls in one assistant turn should send this key.
- * Conversation identity must never be reused as a turn identity.
- */
-export function executorTurnIdentity(
-  meta: unknown,
-): ExecutorTurnIdentity | undefined {
-  const turnId = metadataString(meta, "devspace/executor-turn");
-  return turnId
-    ? { turnId, turnRef: executorTurnRef(turnId) }
-    : undefined;
-}
-
 /**
  * Normalize provider-specific conversation metadata at the MCP adapter edge.
  * The core execution-observability model only consumes this identity and does
@@ -66,7 +43,8 @@ export function executorTurnIdentity(
 export function executionScopeIdentity(
   meta: unknown,
 ): ExecutionScopeIdentity | undefined {
-  const genericScope = metadataString(meta, "devspace/executor-window-scope");
+  const genericScope = metadataString(meta, "devspace/execution-scope")
+    ?? metadataString(meta, "devspace/executor-window-scope");
   if (genericScope) {
     const scopeDigestSha256 = executionScopeDigestSha256(genericScope);
     return {
@@ -86,15 +64,4 @@ export function executionScopeIdentity(
     scopeRef: scopeDigestSha256.slice(0, 16),
     adapter: "openai",
   };
-}
-
-/**
- * Resolve a provider-neutral executor-window scope at the MCP adapter edge.
- * Hosts may supply the generic key directly; ChatGPT currently maps its
- * conversation scope into the same runtime contract.
- */
-export function executorWindowScopeId(
-  meta: unknown,
-): string | undefined {
-  return executionScopeIdentity(meta)?.scopeId;
 }

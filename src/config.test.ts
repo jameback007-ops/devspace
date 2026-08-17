@@ -28,12 +28,7 @@ assert.equal(loadConfig(baseEnv).devspaceAgentsDir, join(emptyConfigDir, "agents
 assert.equal(loadConfig(baseEnv).subagents, false);
 assert.equal(loadConfig(baseEnv).artifactsEnabled, false);
 assert.equal(loadConfig(baseEnv).artifactMaxFileBytes, 100 * 1024 * 1024);
-assert.deepEqual(loadConfig(baseEnv).executorWindow, {
-  enabled: false,
-  drainAfterMs: 90 * 60 * 1000,
-  yieldAfterMs: 100 * 60 * 1000,
-  retentionMs: 24 * 60 * 60 * 1000,
-});
+assert.equal("executorWindow" in loadConfig(baseEnv), false);
 assert.deepEqual(loadConfig(baseEnv).executionObservability, {
   enabled: true,
   retentionMs: 7 * 24 * 60 * 60 * 1000,
@@ -119,20 +114,15 @@ assert.deepEqual(
     idleAfterMs: 15 * 60 * 1000,
   },
 );
-assert.deepEqual(
-  loadConfig({
+assert.equal(
+  "executorWindow" in loadConfig({
     ...baseEnv,
     DEVSPACE_EXECUTOR_WINDOW: "1",
     DEVSPACE_EXECUTOR_WINDOW_DRAIN_MINUTES: "45",
     DEVSPACE_EXECUTOR_WINDOW_YIELD_MINUTES: "60",
     DEVSPACE_EXECUTOR_WINDOW_RETENTION_HOURS: "12",
-  }).executorWindow,
-  {
-    enabled: true,
-    drainAfterMs: 45 * 60 * 1000,
-    yieldAfterMs: 60 * 60 * 1000,
-    retentionMs: 12 * 60 * 60 * 1000,
-  },
+  }),
+  false,
 );
 assert.equal(loadConfig({ ...baseEnv, DEVSPACE_ARTIFACTS: "1" }).artifactsEnabled, true);
 assert.equal(
@@ -265,14 +255,6 @@ assert.throws(
 assert.throws(
   () => loadConfig({
     ...baseEnv,
-    DEVSPACE_EXECUTOR_WINDOW_DRAIN_MINUTES: "100",
-    DEVSPACE_EXECUTOR_WINDOW_YIELD_MINUTES: "100",
-  }),
-  /YIELD_MINUTES must be greater/,
-);
-assert.throws(
-  () => loadConfig({
-    ...baseEnv,
     DEVSPACE_EXECUTION_OBSERVABILITY_MAX_EVENTS_PER_SCOPE: "0",
   }),
   /Invalid DEVSPACE_EXECUTION_OBSERVABILITY_MAX_EVENTS_PER_SCOPE: 0/,
@@ -293,16 +275,6 @@ assert.throws(
   }),
   /HEARTBEAT_SECONDS must be less than/,
 );
-assert.throws(
-  () => loadConfig({
-    ...baseEnv,
-    DEVSPACE_EXECUTOR_WINDOW_DRAIN_MINUTES: "90",
-    DEVSPACE_EXECUTOR_WINDOW_YIELD_MINUTES: "100",
-    DEVSPACE_EXECUTOR_WINDOW_RETENTION_HOURS: "1",
-  }),
-  /RETENTION_HOURS must retain/,
-);
-
 assert.equal(loadConfig(baseEnv).publicBaseUrl, "http://127.0.0.1:7676");
 assert.deepEqual(loadConfig(baseEnv).allowedHosts, ["localhost", "127.0.0.1", "::1"]);
 

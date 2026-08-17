@@ -1,12 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  executorTurnIdentity,
-  executorTurnRef,
   executionScopeDigestSha256,
   executionScopeIdentity,
   executionScopeRef,
-  executorWindowScopeId,
   openAiConversationScopeId,
 } from "./request-meta.js";
 
@@ -45,23 +42,6 @@ test("unrelated metadata fields do not alter the selected conversation scope", (
   );
 });
 
-test("executor window accepts the generic provider-neutral scope key", () => {
-  assert.equal(
-    executorWindowScopeId({
-      "devspace/executor-window-scope": "generic-turn-scope",
-      "openai/session": "chat-session-opaque-value",
-    }),
-    "generic-turn-scope",
-  );
-});
-
-test("executor window maps OpenAI conversation metadata at the adapter edge", () => {
-  assert.equal(
-    executorWindowScopeId({ "openai/session": "chat-session-opaque-value" }),
-    "chat-session-opaque-value",
-  );
-});
-
 test("execution scopes expose only a stable hashed reference", () => {
   const identity = executionScopeIdentity({
     "openai/session": "chat-session-opaque-value",
@@ -79,7 +59,7 @@ test("execution scopes expose only a stable hashed reference", () => {
 test("generic execution scope metadata wins at the provider adapter edge", () => {
   assert.deepEqual(
     executionScopeIdentity({
-      "devspace/executor-window-scope": "generic-scope",
+      "devspace/execution-scope": "generic-scope",
       "openai/session": "openai-scope",
     }),
     {
@@ -91,19 +71,17 @@ test("generic execution scope metadata wins at the provider adapter edge", () =>
   );
 });
 
-test("executor turn identity is separate from the conversation scope", () => {
-  assert.equal(
-    executorTurnIdentity({ "openai/session": "conversation-1" }),
-    undefined,
-  );
+test("legacy executor-window scope metadata remains a compatibility alias", () => {
   assert.deepEqual(
-    executorTurnIdentity({
-      "openai/session": "conversation-1",
-      "devspace/executor-turn": "assistant-turn-7",
+    executionScopeIdentity({
+      "devspace/executor-window-scope": "legacy-generic-scope",
+      "openai/session": "openai-scope",
     }),
     {
-      turnId: "assistant-turn-7",
-      turnRef: executorTurnRef("assistant-turn-7"),
+      scopeId: "legacy-generic-scope",
+      scopeDigestSha256: executionScopeDigestSha256("legacy-generic-scope"),
+      scopeRef: executionScopeRef("legacy-generic-scope"),
+      adapter: "devspace",
     },
   );
 });

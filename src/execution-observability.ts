@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import type { ExecutorWindowRegistry, ExecutorWindowStatus } from "./executor-window.js";
 import { openDatabase, type DatabaseHandle } from "./db/client.js";
 import type {
   ProcessSessionInspection,
@@ -78,7 +77,6 @@ interface StoredWorkspace {
 interface FinishObservationInput {
   response?: unknown;
   error?: unknown;
-  windowStatus?: ExecutorWindowStatus;
 }
 
 const NON_AUDITED_TOOL_NAMES = new Set([
@@ -342,7 +340,6 @@ export class ExecutionScopeManager {
     readonly config: ExecutionObservabilityConfig,
     stateDir: string,
     private readonly processSessions: ProcessSessionManager,
-    private readonly executorWindows: ExecutorWindowRegistry,
     options: ExecutionScopeManagerOptions = {},
   ) {
     this.database = openDatabase(stateDir);
@@ -421,14 +418,6 @@ export class ExecutionScopeManager {
     const responseDetail = summarizeExecutionToolResponse(input.response);
     const workspaceId = boundedString(responseDetail.workspaceId);
     const processSessionId = finiteInteger(responseDetail.sessionId);
-    const window = input.windowStatus;
-    if (window) {
-      responseDetail.executorWindow = {
-        phase: window.phase,
-        windowId: window.windowId,
-        generation: window.generation,
-      };
-    }
     const detailJson = boundedDetailJson(responseDetail);
     const observedError = input.error === undefined ? undefined : errorObservation(input.error);
 
@@ -513,7 +502,6 @@ export class ExecutionScopeManager {
     if (!scope) throw new Error(`Unknown execution scope: ${targetRef}`);
     const workspaces = this.listStoredWorkspaces(targetRef);
     const processProjection = this.processProjection(targetRef, workspaces);
-    const window = this.executorWindows.statusByScopeRef(scope.scopeRef);
 
     return {
       schemaVersion: 1,
@@ -523,10 +511,8 @@ export class ExecutionScopeManager {
         currentIdentity?.scopeRef,
         workspaces,
         processProjection.processes,
-        window,
         processProjection.otherOrUnattributedRunningProcessCount,
       ),
-      executorWindow: window,
       workspaces,
       processes: processProjection.processes,
       otherOrUnattributedRunningProcessCount:
@@ -828,7 +814,6 @@ export class ExecutionScopeManager {
     currentScopeRef: string | undefined,
     suppliedWorkspaces?: StoredWorkspace[],
     suppliedProcesses?: ProcessSessionInspection[],
-    suppliedWindow?: ExecutorWindowStatus,
     suppliedOtherOrUnattributedRunningProcessCount?: number,
   ): Record<string, unknown> {
     const workspaces = suppliedWorkspaces ?? this.listStoredWorkspaces(scope.scopeRef);
@@ -840,22 +825,13 @@ export class ExecutionScopeManager {
         }
       : this.processProjection(scope.scopeRef, workspaces);
     const processes = processProjection.processes;
-    const window = suppliedWindow ?? this.executorWindows.statusByScopeRef(scope.scopeRef);
     const runningProcessCount = processes.filter((process) => process.running).length;
     const idleForMs = Math.max(0, this.now() - scope.lastActivityAtMs);
-    const liveWindow =
-      window.phase === "active" ||
-      window.phase === "drain" ||
-      window.phase === "yield_required";
     const activityState = scope.runningToolCount > 0 || runningProcessCount > 0
       ? "running"
-      : window.phase === "yielded"
-        ? "yielded"
-        : liveWindow && idleForMs <= this.config.idleAfterMs
-          ? "active"
-          : idleForMs <= this.config.idleAfterMs
-            ? "recent"
-            : "idle";
+      : idleForMs <= this.config.idleAfterMs
+        ? "recent"
+        : "idle";
 
     return {
       scopeRef: scope.scopeRef,
@@ -873,9 +849,6 @@ export class ExecutionScopeManager {
         processProjection.otherOrUnattributedRunningProcessCount,
       workspaceCount: scope.workspaceCount,
       totalEventCount: scope.totalEventCount,
-      executorWindowPhase: window.phase,
-      executorWindowId: window.windowId,
-      executorWindowGeneration: window.generation,
     };
   }
 

@@ -8,7 +8,6 @@ import { promisify } from "node:util";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { loadConfig, type ServerConfig } from "./config.js";
-import { ExecutorWindowRegistry } from "./executor-window.js";
 import { ExecutionScopeManager } from "./execution-observability.js";
 import {
   LocalAgentCoordinator,
@@ -67,6 +66,12 @@ test("open_workspace keeps lifecycle flags out of model output and preserves com
 test("codex write_stdin exposes the output-aware long-poll contract", async (t) => {
   const context = await fixture(t, { toolMode: "codex" });
   const tools = await context.client.listTools();
+  assert.deepEqual(
+    tools.tools
+      .map((tool) => tool.name)
+      .filter((name) => name.startsWith("executor_window_")),
+    [],
+  );
   const writeTool = tools.tools.find((tool) => tool.name === "write_stdin");
   assert.ok(writeTool);
   assert.match(writeTool.description ?? "", /new output arrives or the process exits/i);
@@ -595,7 +600,7 @@ test("generic execution-scope metadata reuses checkout context without OpenAI co
   const params = {
     name: "open_workspace",
     arguments: { path: context.project },
-    _meta: { "devspace/executor-window-scope": "provider-neutral-scope" },
+    _meta: { "devspace/execution-scope": "provider-neutral-scope" },
   } as Parameters<Client["callTool"]>[0];
   const first = await context.client.callTool(params);
   const second = await context.client.callTool(params);
@@ -682,14 +687,10 @@ test("checkout reuse and context suppression survive a registry restart", async 
 
   const restoredStore = new SqliteWorkspaceStore(context.stateDir);
   const restoredProcessSessions = new ProcessSessionManager();
-  const restoredExecutorWindows = new ExecutorWindowRegistry(
-    context.config.executorWindow,
-  );
   const restoredExecutionScopes = new ExecutionScopeManager(
     context.config.executionObservability,
     context.stateDir,
     restoredProcessSessions,
-    restoredExecutorWindows,
   );
   const restoredServer = createMcpServer(
     context.config,
@@ -698,7 +699,6 @@ test("checkout reuse and context suppression survive a registry restart", async 
     restoredProcessSessions,
     [],
     [],
-    restoredExecutorWindows,
     restoredExecutionScopes,
   );
   const [restoredClientTransport, restoredServerTransport] = InMemoryTransport.createLinkedPair();
@@ -790,14 +790,12 @@ async function fixture(
   const store = new SqliteWorkspaceStore(stateDir);
   const workspaces = new WorkspaceRegistry(config, store);
   const processSessions = new ProcessSessionManager();
-  const executorWindows = new ExecutorWindowRegistry(config.executorWindow);
   const executionScopes = options.useDefaultExecutionScopes
     ? undefined
     : new ExecutionScopeManager(
         config.executionObservability,
         stateDir,
         processSessions,
-        executorWindows,
       );
   const localAgentCoordinator = options.subagents
     ? new LocalAgentCoordinator(config, options.localAgentCoordinatorOptions)
@@ -810,7 +808,6 @@ async function fixture(
         processSessions,
         [],
         [],
-        executorWindows,
         executionScopes,
         undefined,
         localAgentCoordinator,
@@ -822,7 +819,6 @@ async function fixture(
         processSessions,
         [],
         [],
-        executorWindows,
         undefined,
         undefined,
         localAgentCoordinator,

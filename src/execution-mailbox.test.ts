@@ -9,7 +9,6 @@ import {
   type ExecutionMailboxConfig,
 } from "./execution-mailbox.js";
 import { ExecutionScopeManager } from "./execution-observability.js";
-import { ExecutorWindowRegistry } from "./executor-window.js";
 import { ProcessSessionManager } from "./process-sessions.js";
 import { executionScopeIdentity, type ExecutionScopeIdentity } from "./request-meta.js";
 
@@ -40,12 +39,6 @@ async function fixture(
   const stateDir = join(root, ".state");
   let now = Date.parse("2026-08-17T04:00:00Z");
   const processes = new ProcessSessionManager();
-  const windows = new ExecutorWindowRegistry({
-    enabled: false,
-    drainAfterMs: 90 * 60 * 1_000,
-    yieldAfterMs: 100 * 60 * 1_000,
-    retentionMs: 24 * 60 * 60 * 1_000,
-  });
   const scopes = new ExecutionScopeManager(
     {
       enabled: true,
@@ -55,7 +48,6 @@ async function fixture(
     },
     stateDir,
     processes,
-    windows,
     { now: () => now },
   );
   const mailbox = new ExecutionMailboxManager(
@@ -64,13 +56,13 @@ async function fixture(
     { now: () => now },
   );
   const supervisor = executionScopeIdentity({
-    "devspace/executor-window-scope": "supervisor-scope",
+    "devspace/execution-scope": "supervisor-scope",
   });
   const worker = executionScopeIdentity({
-    "devspace/executor-window-scope": "worker-scope",
+    "devspace/execution-scope": "worker-scope",
   });
   const outsider = executionScopeIdentity({
-    "devspace/executor-window-scope": "outsider-scope",
+    "devspace/execution-scope": "outsider-scope",
   });
   assert.ok(supervisor);
   assert.ok(worker);

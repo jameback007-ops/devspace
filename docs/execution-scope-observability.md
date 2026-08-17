@@ -12,7 +12,8 @@ turning DevSpace into a transcript database.
 An **execution scope** is a stable, provider-neutral host conversation or task
 scope supplied through MCP request metadata. DevSpace currently accepts:
 
-- `devspace/executor-window-scope` as the generic contract;
+- `devspace/execution-scope` as the generic contract;
+- `devspace/executor-window-scope` as a temporary compatibility alias;
 - `openai/session` through the OpenAI adapter when the generic field is absent.
 
 The raw host value enters at the live MCP adapter edge, but the execution-scope
@@ -34,7 +35,7 @@ memory, or standing agent identity.
 
 Returns recent scopes ordered by activity. Each summary includes the opaque
 `scopeRef`, current-scope marker, adapter, activity state, last tool outcome,
-workspace and live-process counts, and executor-window phase.
+and workspace and live-process counts.
 
 ### `execution_scope_status`
 
@@ -42,7 +43,6 @@ Returns one scope's current projection:
 
 - linked checkout and worktree workspaces;
 - live or recently completed tracked DevSpace process sessions;
-- executor-window state and bounded handoff;
 - activity and audit counters.
 
 Omit `scopeRef` to inspect the current scope. Supply a `scopeRef` from
@@ -70,8 +70,7 @@ executor lane:
 - process IDs, state, timing, command length, and command digest;
 - bounded safe input metadata such as line limits or terminal dimensions;
 - file paths parsed from a Codex patch envelope, without patch content;
-- normalized error category and digest;
-- executor-window phase at tool completion.
+- normalized error category and digest.
 
 Running observations that survive an unclean server stop are marked
 `interrupted` on restart rather than remaining falsely active.
@@ -106,14 +105,9 @@ provider session identifier.
 
 Execution scopes, workspace links, and audit events live in the existing
 DevSpace SQLite database. They survive a registry or server restart. Live
-process handles and executor-window timers remain process-local and are joined
-at query time; they are observations, not reconstructed authority.
-
-Conversation scope and assistant-turn window are deliberately separate. The
-stable `scopeRef` identifies a conversation/executor lane; an optional
-`devspace/executor-turn` value identifies one exact host turn. Observability may
-show the current window projection, but it must not infer turn age from the age
-of the conversation scope.
+process handles remain process-local and are joined at query time; they are
+observations, not reconstructed authority. DevSpace does not infer assistant
+turn age or impose a synthetic execution deadline from the stable scope age.
 
 Defaults:
 

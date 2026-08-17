@@ -33,32 +33,36 @@ Separate host conversations remain separate execution scopes even when they
 open the same checkout. A supervisor conversation can use
 `execution_scope_list`, `execution_scope_status`, and `execution_scope_audit`
 to inspect another scope's bounded operational state—linked workspaces, live
-processes, executor-window phase, tool outcomes, and normalized error
-categories—without
+processes, tool outcomes, and normalized error categories—without
 sharing model context or reading a transcript. This does not grant writer
 authority; use an isolated worktree for parallel writers and reconcile the
 project's canonical state before takeover.
 
-## Start One Executor Window Per Assistant Turn
+## Close Work at Real Boundaries
 
-The executor window protects one assistant turn, not the whole conversation.
-When the host supplies `devspace/executor-turn`, DevSpace resets automatically
-when that value changes and can enforce the exact turn boundary. A host must use
-one stable value across all tool calls in the same assistant turn.
+DevSpace does not run a synthetic assistant-turn timer. Continue normal work
+until the current causal slice reaches a coherent checkpoint, then persist the
+recoverable frontier in Git or the product-native work, decision, execution, or
+effect owner. An unknown host cutoff is not converted into a guessed deadline
+that can block later tools.
 
-ChatGPT connectors that do not expose an exact turn ID should call:
+## Codex Is an Optional Executor Adapter
 
-```json
-{
-  "reason": "new_turn"
-}
-```
+The `codex_session_status`, `codex_session_tail`, and `codex_session_audit`
+tools observe one allowlisted Codex executor lane. They do not provide access to
+the VPS and do not determine whether DevSpace workspace execution is healthy.
 
-through `executor_window_begin` exactly once as the first DevSpace tool call of
-each assistant turn. This explicitly resets the advisory clock. DevSpace never
-uses the age of `openai/session` or another conversation identifier as the age
-of the current assistant turn. Fallback windows warn and roll over instead of
-blocking a later WebChat turn.
+`codex_session_status` reports reader transport, live App Server transport,
+thread lifecycle, direct-input capability, and persistence freshness as
+separate fields. A reachable App Server may legitimately report a thread in
+`systemError` while the same thread still accepts direct input. Conversely, an
+unavailable Codex adapter does not disable `open_workspace`, file operations,
+commands, Git, Docker, or other executor-plane capabilities.
+
+The `codex_workspace_*` read-only tools inspect the exact allowlisted AOQ
+worktree independently from the thread lifecycle. Product continuation should
+hydrate a new executor from canonical state rather than require one App Server
+process or provider-private thread to survive.
 
 ## Cross-Session Messages
 

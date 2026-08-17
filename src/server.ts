@@ -23,13 +23,6 @@ import {
   registerArtifactTools,
 } from "./artifact-tools.js";
 import { loadConfig, type ServerConfig, type WidgetMode } from "./config.js";
-import {
-  ExecutorWindowRegistry,
-  executorWindowBlockedText,
-  executorWindowFooter,
-  type ExecutorWindowHandoff,
-  type ExecutorWindowStatus,
-} from "./executor-window.js";
 import { ExecutionScopeManager } from "./execution-observability.js";
 import {
   ExecutionMailboxManager,
@@ -72,11 +65,7 @@ import {
   type ProcessSnapshot,
 } from "./process-sessions.js";
 import { createReviewCheckpointManager } from "./review-checkpoints.js";
-import {
-  executionScopeIdentity,
-  executorTurnIdentity,
-  executorWindowScopeId,
-} from "./request-meta.js";
+import { executionScopeIdentity } from "./request-meta.js";
 import { shutdownHttpServer } from "./server-shutdown.js";
 import { formatPathForPrompt } from "./skills.js";
 import { registerZesCodexInspectionTools } from "./zes-codex-inspection.js";
@@ -227,10 +216,9 @@ interface ToolLogFields {
   error?: string;
 }
 
-const executorWindowContexts = new WeakMap<
+const toolExecutionContexts = new WeakMap<
   object,
   {
-    registry: ExecutorWindowRegistry;
     executionScopes: ExecutionScopeManager;
     executionMailbox: ExecutionMailboxManager;
     config: ServerConfig;
@@ -239,36 +227,6 @@ const executorWindowContexts = new WeakMap<
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function appendExecutorWindowStatus(
-  response: unknown,
-  status: ExecutorWindowStatus,
-): unknown {
-  const footer = executorWindowFooter(status);
-  if (!footer || !isRecord(response)) return response;
-
-  const content = Array.isArray(response.content)
-    ? [...response.content, { type: "text", text: footer }]
-    : [{ type: "text", text: footer }];
-  const structuredContent = isRecord(response.structuredContent)
-    ? {
-        ...response.structuredContent,
-        ...(typeof response.structuredContent.result === "string"
-          ? { result: `${response.structuredContent.result}\n\n${footer}` }
-          : {}),
-      }
-    : response.structuredContent;
-  const metadata = isRecord(response._meta)
-    ? { ...response._meta, executorWindow: status }
-    : { executorWindow: status };
-
-  return {
-    ...response,
-    content,
-    _meta: metadata,
-    ...(structuredContent === undefined ? {} : { structuredContent }),
-  };
 }
 
 function appendExecutionMailboxNotice(
@@ -304,8 +262,8 @@ const registerAppTool = ((
   toolConfig: Record<string, unknown>,
   callback: (input: unknown, extra: { _meta?: unknown }) => unknown,
 ) => {
-  const windowContext = executorWindowContexts.get(server as object);
-  if (!windowContext) {
+  const toolContext = toolExecutionContexts.get(server as object);
+  if (!toolContext) {
     return registerMcpAppTool(
       server,
       name,
@@ -320,13 +278,10 @@ const registerAppTool = ((
     toolConfig as never,
     (async (input: unknown, extra: { _meta?: unknown }) => {
       const {
-        registry: executorWindows,
         executionScopes,
         executionMailbox,
         config,
-      } = windowContext;
-      const scopeId = executorWindowScopeId(extra?._meta);
-      const turnId = executorTurnIdentity(extra?._meta)?.turnId;
+      } = toolContext;
       const executionIdentity = executionScopeIdentity(extra?._meta);
       let observation: ReturnType<ExecutionScopeManager["beginTool"]>;
       try {
@@ -340,80 +295,13 @@ const registerAppTool = ((
           error: error instanceof Error ? error.message : String(error),
         });
       }
-      const readOnlyHint = isRecord(toolConfig.annotations)
-        && toolConfig.annotations.readOnlyHint === true;
-      const decision = executorWindows.beforeTool(
-        scopeId,
-        name,
-        input,
-        readOnlyHint,
-        turnId,
-      );
-      if (decision.transition) {
-        logEvent(config.logging, "info", "executor_window_auto_transition", {
-          tool: name,
-          transition: decision.transition,
-          scopeRef: decision.status.scopeRef,
-          windowId: decision.status.windowId,
-          generation: decision.status.generation,
-          phase: decision.status.phase,
-          drainAfterMs: decision.status.drainAfterMs,
-          yieldAfterMs: decision.status.yieldAfterMs,
-        });
-      }
-      if (!decision.allowed) {
-        logEvent(config.logging, "warn", "executor_window_tool_blocked", {
-          tool: name,
-          reason: decision.reason,
-          scopeRef: decision.status.scopeRef,
-          windowId: decision.status.windowId,
-          generation: decision.status.generation,
-          phase: decision.status.phase,
-          elapsedMs: decision.status.elapsedMs,
-          yieldInMs: decision.status.yieldInMs,
-        });
-        const response = {
-          isError: true,
-          content: [{ type: "text", text: executorWindowBlockedText(decision) }],
-          _meta: { executorWindow: decision.status },
-        };
-        try {
-          executionScopes.finishTool(observation, "blocked", {
-            response,
-            windowStatus: decision.status,
-          });
-        } catch (error) {
-          logEvent(config.logging, "warn", "execution_scope_observation_failed", {
-            stage: "finish_blocked",
-            tool: name,
-            scopeRef: executionIdentity?.scopeRef,
-            error: error instanceof Error ? error.message : String(error),
-          });
-        }
-        let notice: string | undefined;
-        if (!name.startsWith("execution_scope_message_")) {
-          try {
-            notice = executionMailbox.pendingNotice(executionIdentity);
-          } catch (error) {
-            logEvent(config.logging, "warn", "execution_mailbox_notice_failed", {
-              tool: name,
-              scopeRef: executionIdentity?.scopeRef,
-              error: error instanceof Error ? error.message : String(error),
-            });
-          }
-        }
-        return appendExecutionMailboxNotice(response, notice);
-      }
-
       try {
         const response = await callback(input, extra);
-        executorWindows.touch(scopeId, turnId);
-        const status = executorWindows.status(scopeId, turnId);
         try {
           executionScopes.finishTool(
             observation,
             executionScopes.outcomeForResponse(response),
-            { response, windowStatus: status },
+            { response },
           );
         } catch (error) {
           logEvent(config.logging, "warn", "execution_scope_observation_failed", {
@@ -439,24 +327,11 @@ const registerAppTool = ((
           response,
           mailboxNotice,
         );
-        if (name.startsWith("executor_window_")) return responseWithMailbox;
-        if (status.phase === "drain" || status.phase === "yield_required") {
-          logEvent(config.logging, "info", "executor_window_observation", {
-            tool: name,
-            scopeRef: status.scopeRef,
-            windowId: status.windowId,
-            generation: status.generation,
-            phase: status.phase,
-            elapsedMs: status.elapsedMs,
-            yieldInMs: status.yieldInMs,
-          });
-        }
-        return appendExecutorWindowStatus(responseWithMailbox, status);
+        return responseWithMailbox;
       } catch (error) {
         try {
           executionScopes.finishTool(observation, "error", {
             error,
-            windowStatus: executorWindows.status(scopeId, turnId),
           });
         } catch (observationError) {
           logEvent(config.logging, "warn", "execution_scope_observation_failed", {
@@ -477,12 +352,9 @@ const registerAppTool = ((
 
 function serverInstructions(config: ServerConfig): string {
   const codexSessionInstruction =
-    " To inspect the allowlisted live AOQ Codex task through the existing shell tool, run `zes-session status`, `zes-session tail --limit 20`, or `zes-session audit --limit 20`. To inspect its exact live worktree, run `zes-workspace status`, `zes-workspace tree`, `zes-workspace read <relative-path>`, `zes-workspace search <query>`, or `zes-workspace diff`. These brokered commands are read-only; they can inspect the complete worktree but cannot access paths outside it or mutate the active task.";
-  const executorWindowInstruction = config.executorWindow.enabled
-    ? " The executor window bounds one assistant turn, not the conversation or task. Hosts should supply one stable devspace/executor-turn value across all tool calls in that assistant turn; only that exact host boundary enables hard landing enforcement. When the host does not supply it, call executor_window_begin(reason=new_turn) exactly once as the first tool call of every assistant turn to reset the advisory clock. Explicit and automatic fallback windows remain advisory and roll over instead of blocking because conversation identity is not a valid turn boundary. A task may continue across arbitrarily many turns. When an exact host-bound window reports DRAIN, finish the current local causal chain, persist a recoverable ZES checkpoint or handoff, and do not open a new major frontier. When it reports YIELD_REQUIRED, use only read/reconciliation actions or poll/interrupt an existing process, persist the exact frontier, and end the assistant turn; call executor_window_yield when that tool is visible."
-    : "";
+    " To inspect the allowlisted AOQ Codex executor adapter, use codex_session_status, codex_session_tail, or codex_session_audit. These tools report adapter transport health separately from the Codex thread lifecycle and never represent DevSpace, VPS, workspace, or ZES product health. To inspect the exact live AOQ worktree, use codex_workspace_git_status, codex_workspace_tree, codex_workspace_read, codex_workspace_search, or codex_workspace_diff. These brokered commands are read-only and independent from the Codex thread lifecycle.";
   const executionScopeInstruction = config.executionObservability.enabled
-    ? " Use execution_scope_list to discover recent DevSpace execution scopes, execution_scope_status to inspect another WebChat/host scope's linked workspaces, live processes, and executor-window state, and execution_scope_audit for bounded metadata-only tool lifecycle. These views never replace Git, canonical product state, runtime/effect readback, or writer/lease reconciliation, and they do not contain transcripts, prompts, private reasoning, tool outputs, patches, credentials, or raw commands."
+    ? " Use execution_scope_list to discover recent DevSpace execution scopes, execution_scope_status to inspect another WebChat/host scope's linked workspaces and live processes, and execution_scope_audit for bounded metadata-only tool lifecycle. These views never replace Git, canonical product state, runtime/effect readback, or writer/lease reconciliation, and they do not contain transcripts, prompts, private reasoning, tool outputs, patches, credentials, or raw commands."
     : "";
   const executionMailboxInstruction = config.executionMailbox.enabled
     ? " Use execution_scope_message_send to leave a durable message for another known scope, reusing one idempotencyKey for retries. Acceptance means stored, not observed. When a tool result reports pending mail, call execution_scope_message_inbox before opening a new major frontier, then record acknowledged or acted state with execution_scope_message_receipt. Use execution_scope_message_status to inspect a message you sent or received. The mailbox is executor-local coordination, not task, decision, effect, writer, or canonical-memory authority, and it cannot wake or inject text directly into an inactive WebChat transcript."
@@ -499,7 +371,7 @@ function serverInstructions(config: ServerConfig): string {
       : "";
 
   if (config.toolMode === "codex") {
-    return `Use DevSpace for coding work. Call ${toolNames.openWorkspace} once for each project folder or isolated worktree, then keep using its workspaceId. During continued work in the same project or worktree, do not call ${toolNames.openWorkspace} again. Open another workspace only when changing projects, switching checkout/worktree mode, creating another isolated worktree, or when the current workspaceId is rejected. Use ${toolNames.read} for direct file reads, apply_patch for all file modifications, exec_command for inspection, tests, builds, and other commands, and write_stdin to poll or interact with running processes. Follow instructions returned by ${toolNames.openWorkspace}; read applicable instruction and skill files before working in their scope.${artifactInstruction}${showChangesInstruction}${codexSessionInstruction}${executorWindowInstruction}${executionScopeInstruction}${executionMailboxInstruction}${localAgentInstruction}`;
+    return `Use DevSpace for coding work. Call ${toolNames.openWorkspace} once for each project folder or isolated worktree, then keep using its workspaceId. During continued work in the same project or worktree, do not call ${toolNames.openWorkspace} again. Open another workspace only when changing projects, switching checkout/worktree mode, creating another isolated worktree, or when the current workspaceId is rejected. Use ${toolNames.read} for direct file reads, apply_patch for all file modifications, exec_command for inspection, tests, builds, and other commands, and write_stdin to poll or interact with running processes. Follow instructions returned by ${toolNames.openWorkspace}; read applicable instruction and skill files before working in their scope.${artifactInstruction}${showChangesInstruction}${codexSessionInstruction}${executionScopeInstruction}${executionMailboxInstruction}${localAgentInstruction}`;
   }
 
   const inspection = config.toolMode !== "full"
@@ -512,7 +384,7 @@ function serverInstructions(config: ServerConfig): string {
 
   const agentsMd = `Follow instructions returned by ${toolNames.openWorkspace}. Before working under a path listed in availableAgentsFiles, use ${toolNames.read} to inspect that instruction file and follow it. `;
 
-  return `Use DevSpace for coding work. Call ${toolNames.openWorkspace} once for each project folder or isolated worktree, then keep using its workspaceId. During continued work in the same project or worktree, do not call ${toolNames.openWorkspace} again. Open another workspace only when changing projects, switching checkout/worktree mode, creating another isolated worktree, or when the current workspaceId is rejected. ${agentsMd}${skills}${inspection}Prefer ${toolNames.edit} for targeted modifications, ${toolNames.write} only for new files or complete rewrites, and ${toolNames.shell} for tests, builds, git inspection, package scripts, and commands that are better executed by the shell. Do not create or modify files with ${toolNames.shell}; avoid shell redirection, heredocs, tee, sed -i, perl -i, node/python/ruby scripts, or any command whose purpose is to write project files.${artifactInstruction}${showChangesInstruction}${codexSessionInstruction}${executorWindowInstruction}${executionScopeInstruction}${executionMailboxInstruction}${localAgentInstruction}`;
+  return `Use DevSpace for coding work. Call ${toolNames.openWorkspace} once for each project folder or isolated worktree, then keep using its workspaceId. During continued work in the same project or worktree, do not call ${toolNames.openWorkspace} again. Open another workspace only when changing projects, switching checkout/worktree mode, creating another isolated worktree, or when the current workspaceId is rejected. ${agentsMd}${skills}${inspection}Prefer ${toolNames.edit} for targeted modifications, ${toolNames.write} only for new files or complete rewrites, and ${toolNames.shell} for tests, builds, git inspection, package scripts, and commands that are better executed by the shell. Do not create or modify files with ${toolNames.shell}; avoid shell redirection, heredocs, tee, sed -i, perl -i, node/python/ruby scripts, or any command whose purpose is to write project files.${artifactInstruction}${showChangesInstruction}${codexSessionInstruction}${executionScopeInstruction}${executionMailboxInstruction}${localAgentInstruction}`;
 }
 
 function formatVisibleAgent(agent: {
@@ -864,160 +736,6 @@ function jsonToolResponse(data: unknown) {
   };
 }
 
-function registerExecutorWindowTools(
-  server: McpServer,
-  config: ServerConfig,
-  executorWindows: ExecutorWindowRegistry,
-): void {
-  const annotations = {
-    readOnlyHint: false,
-    destructiveHint: false,
-    idempotentHint: false,
-    openWorldHint: false,
-  };
-
-  registerAppTool(
-    server,
-    "executor_window_begin",
-    {
-      title: "Begin executor turn window",
-      description:
-        "Begin a fresh bounded window for the current assistant turn or recover after a cutoff. When the host does not supply devspace/executor-turn, call this exactly once as the first tool call of every assistant turn. It resets the per-turn clock but does not create, split, or complete the underlying task.",
-      inputSchema: {
-        reason: z
-          .enum(["new_turn", "recovery_after_cutoff", "manual_test"])
-          .describe(
-            "Why a new assistant-turn window is being opened. Use recovery_after_cutoff when the preceding turn ended abruptly.",
-          ),
-      },
-      outputSchema: resultOutputSchema({ data: z.unknown() }),
-      ...toolWidgetDescriptorMeta(config, "read"),
-      annotations,
-    },
-    async ({ reason }, { _meta }) => {
-      const turnId = executorTurnIdentity(_meta)?.turnId;
-      const result = executorWindows.begin(
-        executorWindowScopeId(_meta),
-        reason,
-        {
-          turnId,
-          boundarySource: turnId ? "host_turn" : "explicit",
-        },
-      );
-      logEvent(config.logging, "info", "executor_window_begun", {
-        reason,
-        started: result.started,
-        previousWindowId: result.previousWindowId,
-        scopeRef: result.status.scopeRef,
-        windowId: result.status.windowId,
-        generation: result.status.generation,
-        phase: result.status.phase,
-        drainAfterMs: result.status.drainAfterMs,
-        yieldAfterMs: result.status.yieldAfterMs,
-      });
-      return jsonToolResponse(result);
-    },
-  );
-
-  registerAppTool(
-    server,
-    "executor_window_status",
-    {
-      title: "Read executor turn window",
-      description:
-        "Read the current ACTIVE, DRAIN, YIELD_REQUIRED, or YIELDED harness state for this assistant turn. This is runtime scheduling metadata, not task, checkpoint, memory, release, or effect authority.",
-      inputSchema: {},
-      outputSchema: resultOutputSchema({ data: z.unknown() }),
-      ...toolWidgetDescriptorMeta(config, "read"),
-      annotations: CODEX_SESSION_TOOL_ANNOTATIONS,
-    },
-    async (_input, { _meta }) => jsonToolResponse(
-      executorWindows.status(
-        executorWindowScopeId(_meta),
-        executorTurnIdentity(_meta)?.turnId,
-      ),
-    ),
-  );
-
-  registerAppTool(
-    server,
-    "executor_window_yield",
-    {
-      title: "Yield executor turn safely",
-      description:
-        "Mark this assistant turn yielded after recording a bounded advisory handoff. This handoff does not replace Git, PostgreSQL, runtime/effect readback, or product-native continuation. After this succeeds, end the assistant turn. A later host-bound turn resumes with a new devspace/executor-turn value; a host without turn identity must call executor_window_begin before resuming.",
-      inputSchema: {
-        summary: z
-          .string()
-          .min(1)
-          .max(4_000)
-          .describe("Current frontier and what this turn actually established."),
-        nextAction: z
-          .string()
-          .min(1)
-          .max(2_000)
-          .describe("The next exact causal action for a fresh qualified executor."),
-        worktreeState: z.enum([
-          "clean",
-          "intentional_dirty",
-          "not_applicable",
-          "unknown",
-        ]),
-        effectState: z.enum(["none", "terminal", "unknown"]),
-        checkpointRefs: z
-          .array(z.string().min(1).max(1_000))
-          .max(20)
-          .optional()
-          .describe("Existing Git, PG, runtime, or continuation references. Do not invent refs."),
-        unresolved: z
-          .array(z.string().min(1).max(1_000))
-          .max(30)
-          .optional(),
-      },
-      outputSchema: resultOutputSchema({ data: z.unknown() }),
-      ...toolWidgetDescriptorMeta(config, "read"),
-      annotations,
-    },
-    async (
-      {
-        summary,
-        nextAction,
-        worktreeState,
-        effectState,
-        checkpointRefs,
-        unresolved,
-      },
-      { _meta },
-    ) => {
-      const handoff: ExecutorWindowHandoff = {
-        summary,
-        nextAction,
-        worktreeState,
-        effectState,
-        checkpointRefs: checkpointRefs ?? [],
-        unresolved: unresolved ?? [],
-      };
-      const status = executorWindows.yield(
-        executorWindowScopeId(_meta),
-        handoff,
-        executorTurnIdentity(_meta)?.turnId,
-      );
-      logEvent(config.logging, "info", "executor_window_yielded", {
-        scopeRef: status.scopeRef,
-        windowId: status.windowId,
-        generation: status.generation,
-        phase: status.phase,
-        elapsedMs: status.elapsedMs,
-        worktreeState,
-        effectState,
-        checkpointRefCount: handoff.checkpointRefs.length,
-        unresolvedCount: handoff.unresolved.length,
-      });
-      return jsonToolResponse(status);
-    },
-  );
-}
-
 function registerExecutionScopeTools(
   server: McpServer,
   config: ServerConfig,
@@ -1036,7 +754,7 @@ function registerExecutionScopeTools(
     {
       title: "List DevSpace execution scopes",
       description:
-        "List recent provider-neutral DevSpace execution scopes with activity, workspace, process, and executor-window summaries. This is read-only executor observability, not a transcript, task store, writer lease, checkpoint, memory, or product authority.",
+        "List recent provider-neutral DevSpace execution scopes with activity, workspace, and process summaries. This is read-only executor observability, not a transcript, task store, writer lease, checkpoint, memory, or product authority.",
       inputSchema: {
         limit: z
           .number()
@@ -1061,7 +779,7 @@ function registerExecutionScopeTools(
     {
       title: "Inspect DevSpace execution scope",
       description:
-        "Read one DevSpace execution scope by opaque scopeRef, including linked workspaces, live process sessions, and its executor-window state. Omit scopeRef for the current host scope. Raw host session IDs, prompts, private reasoning, tool outputs, and raw commands are never returned.",
+        "Read one DevSpace execution scope by opaque scopeRef, including linked workspaces and live process sessions. Omit scopeRef for the current host scope. Raw host session IDs, prompts, private reasoning, tool outputs, and raw commands are never returned.",
       inputSchema: {
         scopeRef: scopeRefSchema.optional(),
       },
@@ -1687,7 +1405,6 @@ export function createMcpServer(
   processSessions: ProcessSessionManager,
   localAgentProviders: LocalAgentProviderAvailability[],
   incomingArtifactAdapters: readonly IncomingArtifactAdapter[],
-  executorWindows = new ExecutorWindowRegistry(config.executorWindow),
   executionScopes?: ExecutionScopeManager,
   executionMailbox?: ExecutionMailboxManager,
   localAgentCoordinator?: LocalAgentCoordinator,
@@ -1699,7 +1416,6 @@ export function createMcpServer(
     config.executionObservability,
     config.stateDir,
     processSessions,
-    executorWindows,
   );
   const activeExecutionMailbox = executionMailbox ?? new ExecutionMailboxManager(
     config.executionMailbox,
@@ -1720,15 +1436,14 @@ export function createMcpServer(
       title: "DevSpace",
       version: "0.7.0-zes.1",
       description:
-        "Coding tools for project workspaces, per-turn executor safety, execution-scope observability and messaging, serialized local-agent provider continuation, and broad read-only inspection of the exact live AOQ Codex task and worktree.",
+        "Coding tools for project workspaces, execution-scope observability and messaging, serialized local-agent provider continuation, and optional read-only inspection of the exact live AOQ Codex adapter and worktree.",
     },
     {
       instructions: serverInstructions(config),
     },
   );
 
-  executorWindowContexts.set(server, {
-    registry: executorWindows,
+  toolExecutionContexts.set(server, {
     executionScopes: activeExecutionScopes,
     executionMailbox: activeExecutionMailbox,
     config,
@@ -1765,7 +1480,6 @@ export function createMcpServer(
     },
   );
 
-  registerExecutorWindowTools(server, config, executorWindows);
   registerExecutionScopeTools(server, config, activeExecutionScopes);
   registerExecutionMailboxTools(server, config, activeExecutionMailbox);
   if (activeLocalAgentCoordinator) {
@@ -2739,12 +2453,10 @@ export function createServer(
   const workspaces = new WorkspaceRegistry(config, workspaceStore);
   const reviewCheckpoints = createReviewCheckpointManager();
   const processSessions = new ProcessSessionManager();
-  const executorWindows = new ExecutorWindowRegistry(config.executorWindow);
   const executionScopes = new ExecutionScopeManager(
     config.executionObservability,
     config.stateDir,
     processSessions,
-    executorWindows,
   );
   const executionMailbox = new ExecutionMailboxManager(
     config.executionMailbox,
@@ -2897,7 +2609,7 @@ export function createServer(
         // ChatGPT separates tool discovery from execution and its execution
         // workers may not preserve an MCP session. Keep each OpenAI POST
         // self-contained while sharing process-level workspace, process, and
-        // executor-window, execution-scope, and mailbox registries.
+        // execution-scope and mailbox registries.
         transport = new StreamableHTTPServerTransport({
           sessionIdGenerator: undefined,
           enableJsonResponse: true,
@@ -2909,7 +2621,6 @@ export function createServer(
           processSessions,
           localAgentProviders,
           incomingArtifactAdapters,
-          executorWindows,
           executionScopes,
           executionMailbox,
           localAgentCoordinator,
@@ -2955,7 +2666,6 @@ export function createServer(
           processSessions,
           localAgentProviders,
           incomingArtifactAdapters,
-          executorWindows,
           executionScopes,
           executionMailbox,
           localAgentCoordinator,
@@ -2975,7 +2685,6 @@ export function createServer(
           processSessions,
           localAgentProviders,
           incomingArtifactAdapters,
-          executorWindows,
           executionScopes,
           executionMailbox,
           localAgentCoordinator,
@@ -3044,11 +2753,6 @@ if (await isMainModule()) {
     console.log(`request logging: ${config.logging.requests ? "enabled" : "disabled"}`);
     console.log(`asset logging: ${config.logging.assets ? "enabled" : "disabled"}`);
     console.log(`trust proxy: ${config.logging.trustProxy ? "enabled" : "disabled"}`);
-    console.log(
-      config.executorWindow.enabled
-        ? `executor window: enabled (drain ${Math.round(config.executorWindow.drainAfterMs / 60_000)}m, yield ${Math.round(config.executorWindow.yieldAfterMs / 60_000)}m)`
-        : "executor window: disabled",
-    );
     const artifactDownloadStatus = !config.artifactsEnabled
       ? "disabled"
       : isArtifactDownloadSupportedPlatform()
