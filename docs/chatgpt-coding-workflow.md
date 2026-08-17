@@ -33,10 +33,13 @@ Separate host conversations remain separate execution scopes even when they
 open the same checkout. A supervisor conversation can use
 `execution_scope_list`, `execution_scope_status`, and `execution_scope_audit`
 to inspect another scope's bounded operational state—linked workspaces, live
-processes, tool outcomes, and normalized error categories—without
-sharing model context or reading a transcript. This does not grant writer
-authority; use an isolated worktree for parallel writers and reconcile the
-project's canonical state before takeover.
+processes, tool outcomes, and normalized error categories—without sharing model
+context or reading a transcript. When the target explicitly recorded a recovery
+capsule, status also projects its bounded semantic mission/frontier and safety
+state; it never invents those fields from tool events. Cross-scope authority
+freshness remains unverified, so reconcile the project's current canonical,
+writer, runtime, and effect state before takeover. This does not grant writer
+authority; use an isolated worktree for parallel writers.
 
 ## Close Work at Real Boundaries
 

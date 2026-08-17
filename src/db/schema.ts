@@ -224,6 +224,7 @@ export const executionRecoveryCapsules = sqliteTable(
     semanticDigestSha256: text("semantic_digest_sha256").notNull(),
     fingerprintJson: text("fingerprint_json").notNull(),
     stateDigestSha256: text("state_digest_sha256").notNull(),
+    recordedEventSequence: integer("recorded_event_sequence"),
     recordedAtMs: integer("recorded_at_ms").notNull(),
   },
   (table) => [

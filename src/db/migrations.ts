@@ -47,6 +47,11 @@ const migrations: Migration[] = [
     name: "turn-continuity-and-recovery-capsules",
     up: migrateTurnContinuityAndRecoveryCapsules,
   },
+  {
+    version: 9,
+    name: "semantic-execution-observability",
+    up: migrateSemanticExecutionObservability,
+  },
 ];
 
 export function migrateDatabase(sqlite: Database.Database): void {
@@ -446,6 +451,15 @@ function migrateTurnContinuityAndRecoveryCapsules(
 
     create index if not exists execution_recovery_capsules_scope_time_idx
       on execution_recovery_capsules(scope_ref, recorded_at_ms desc);
+  `);
+}
+
+function migrateSemanticExecutionObservability(
+  sqlite: Database.Database,
+): void {
+  sqlite.exec(`
+    alter table execution_recovery_capsules
+      add column recorded_event_sequence integer;
   `);
 }
 

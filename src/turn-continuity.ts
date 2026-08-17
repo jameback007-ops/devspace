@@ -126,6 +126,7 @@ interface CapsuleRow {
   semantic_digest_sha256: string;
   fingerprint_json: string;
   state_digest_sha256: string;
+  recorded_event_sequence: number | null;
   recorded_at_ms: number;
 }
 
@@ -580,6 +581,14 @@ export class TurnContinuityManager {
     const id = `rcp_${randomUUID().replaceAll("-", "")}`;
 
     const transaction = this.database.sqlite.transaction(() => {
+      const eventRow = this.database.sqlite
+        .prepare(`
+          select max(sequence) as sequence
+            from execution_scope_events
+           where scope_ref = ? and tool_name = 'recovery_capsule_record'
+             and outcome = 'running'
+        `)
+        .get(scope.scopeRef) as { sequence: number | null };
       const generationRow = this.database.sqlite
         .prepare(`
           select coalesce(max(generation), 0) + 1 as generation
@@ -593,8 +602,9 @@ export class TurnContinuityManager {
             id, scope_ref, workspace_session_id, workspace_root_digest_sha256,
             generation, idempotency_key_digest_sha256, intent,
             semantic_json, semantic_digest_sha256,
-            fingerprint_json, state_digest_sha256, recorded_at_ms
-          ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            fingerprint_json, state_digest_sha256, recorded_event_sequence,
+            recorded_at_ms
+          ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `)
         .run(
           id,
@@ -608,6 +618,7 @@ export class TurnContinuityManager {
           sha256(semanticJson),
           fingerprintJson,
           fingerprint.stateDigestSha256,
+          eventRow.sequence,
           nowMs,
         );
       this.pruneWorkspaceCapsules(fingerprint.workspaceRootDigestSha256, nowMs);
@@ -705,6 +716,155 @@ export class TurnContinuityManager {
         semantic.exactNextAction,
       ),
       policy: this.capsulePolicy(),
+    };
+  }
+
+  async semanticProjectionForScope(
+    scopeRef: string,
+    options: {
+      observedScopeLastActivityAtMs?: number;
+      observedScopeTotalEventCount?: number;
+    } = {},
+  ): Promise<Record<string, unknown>> {
+    if (!this.config.enabled) {
+      return {
+        available: false,
+        reason: "turn_continuity_disabled",
+        policy: this.semanticProjectionPolicy(),
+      };
+    }
+    if (!/^[a-f0-9]{16}$/.test(scopeRef)) {
+      throw new Error(`Invalid execution scope reference: ${scopeRef}`);
+    }
+    const row = this.latestCapsuleForScope(scopeRef);
+    if (!row) {
+      return {
+        available: false,
+        reason: "no_explicit_recovery_capsule_for_scope",
+        instruction:
+          "Operational activity is available, but this scope has not explicitly recorded a bounded semantic recovery capsule. Do not infer mission or next action from filenames or tool events alone.",
+        policy: this.semanticProjectionPolicy(),
+      };
+    }
+
+    const semantic = parseSemantic(row.semantic_json);
+    const recordedFingerprint = parseFingerprint(row.fingerprint_json);
+    const workspace = this.database.sqlite
+      .prepare("select id, root from workspace_sessions where id = ?")
+      .get(row.workspace_session_id) as { id: string; root: string } | undefined;
+    let currentFingerprint: WorkspaceFingerprint | undefined;
+    let workspaceComparison: ReturnType<typeof compareFingerprint> = {
+      freshness: "unknown",
+      reasons: ["recorded_workspace_session_unavailable"],
+    };
+    if (workspace) {
+      try {
+        currentFingerprint = await workspaceFingerprint({
+          id: workspace.id,
+          root: workspace.root,
+        });
+        workspaceComparison = compareFingerprint(
+          recordedFingerprint,
+          currentFingerprint,
+        );
+      } catch {
+        workspaceComparison = {
+          freshness: "unknown",
+          reasons: ["current_workspace_fingerprint_unavailable"],
+        };
+      }
+    }
+
+    const horizon = this.getHorizon(scopeRef);
+    const observedActivityAtMs = options.observedScopeLastActivityAtMs
+      ?? horizon?.last_activity_at_ms;
+    const activityAfterCapsule = row.recorded_event_sequence !== null
+      && options.observedScopeTotalEventCount !== undefined
+      ? options.observedScopeTotalEventCount > row.recorded_event_sequence
+      : observedActivityAtMs !== undefined
+        && observedActivityAtMs > row.recorded_at_ms;
+    const potentialMutationAfterCapsule = horizon?.last_mutation_at_ms !== null
+      && horizon?.last_mutation_at_ms !== undefined
+      && horizon.last_mutation_at_ms > row.recorded_at_ms;
+    const authorityComparison = compareAuthorityStateRefs(
+      semantic.authorityStateRefs,
+      [],
+    );
+    const exactActionReliance = exactActionRelianceDisposition(
+      workspaceComparison.freshness,
+      authorityComparison.freshness,
+    );
+    const nowMs = this.now();
+
+    return {
+      available: true,
+      source: "latest_explicit_recovery_capsule_for_scope",
+      capsule: {
+        capsuleId: row.id,
+        generation: row.generation,
+        intent: row.intent,
+        sourceWorkspaceId: row.workspace_session_id,
+        recordedAt: iso(row.recorded_at_ms),
+        ageMs: Math.max(0, nowMs - row.recorded_at_ms),
+        semanticDigestSha256: row.semantic_digest_sha256,
+        recordedWorkspaceStateDigestSha256: row.state_digest_sha256,
+        recordedEventSequence: row.recorded_event_sequence ?? undefined,
+      },
+      missionRef: semantic.missionRef,
+      currentFrontier: semantic.currentFrontier,
+      currentCausalSlice: semantic.currentCausalSlice,
+      established: semantic.established,
+      validation: {
+        state: semantic.validationState,
+        refs: semantic.validationRefs,
+      },
+      worktree: {
+        declaredState: semantic.worktreeState,
+        workspaceFreshness: workspaceComparison.freshness,
+        staleReasons: workspaceComparison.reasons,
+        currentWorkspaceStateDigestSha256:
+          currentFingerprint?.stateDigestSha256,
+      },
+      authority: {
+        ownerRefs: semantic.authorityOwnerRefs,
+        recordedStateRefs: semantic.authorityStateRefs,
+        freshness: authorityComparison.freshness,
+        reason: authorityComparison.reason,
+        currentReadbackSupplied: false,
+      },
+      writer: {
+        state: semantic.writerState,
+        refs: semantic.writerRefs,
+      },
+      effect: {
+        state: semantic.effectState,
+        keys: semantic.effectKeys,
+        retryPolicy: semantic.retryPolicy,
+      },
+      safety: {
+        safeToMutate: semantic.safeToMutate,
+        safeToPublish: semantic.safeToPublish,
+      },
+      exactNextActionCandidate: semantic.exactNextAction,
+      exactActionReliance,
+      exactActionCandidateAvailable:
+        exactActionReliance === "candidate_available_after_supplied_authority_match",
+      doNotRepeat: semantic.doNotRepeat,
+      unresolved: semantic.unresolved,
+      checkpointRefs: semantic.checkpointRefs,
+      activitySinceCapsule: {
+        observedActivityAfterCapsule: activityAfterCapsule,
+        latestObservedActivityAt: iso(observedActivityAtMs),
+        potentialMutationAfterCapsule,
+        latestPotentialMutationAt: iso(horizon?.last_mutation_at_ms),
+      },
+      classification: semanticProjectionClassification(
+        workspaceComparison.freshness,
+        activityAfterCapsule,
+      ),
+      instruction:
+        "This is explicit executor-local semantic recovery state joined to current workspace and execution observations. Authority freshness is unverified in cross-scope status; rehydrate rightful owners before relying on the exact action.",
+      policy: this.semanticProjectionPolicy(),
     };
   }
 
@@ -1019,6 +1179,28 @@ export class TurnContinuityManager {
       maxCapsulesPerWorkspace: this.config.maxCapsulesPerWorkspace,
     };
   }
+
+  private semanticProjectionPolicy(): Record<string, unknown> {
+    return {
+      authority: "executor_local_semantic_observation_only",
+      sourceOfSemanticState: "explicit_recovery_capsule",
+      inferredFromToolEventsOrFilenames: false,
+      transcriptCaptured: false,
+      promptsCaptured: false,
+      privateReasoningCaptured: false,
+      toolOutputsCaptured: false,
+      rawCommandsCaptured: false,
+      patchesCaptured: false,
+      credentialsPermitted: false,
+      canonicalTaskOrDecisionAuthority: false,
+      writerLeaseAuthority: false,
+      effectOutcomeAuthority: false,
+      publicationAuthority: false,
+      localWorkspaceFreshnessDoesNotImplyCanonicalFreshness: true,
+      currentAuthorityReadbackRequiredBeforeExactActionReliance: true,
+      capsuleAgeIsNotValidityEvidence: true,
+    };
+  }
 }
 
 async function workspaceFingerprint(
@@ -1264,4 +1446,20 @@ function recommendedRecoveryAction(
     return "The local workspace matches the capsule. Rehydrate and reconcile current canonical Git/main, task, decision, writer, runtime, and effect state, then call recovery_capsule_status with exact currentAuthorityStateRefs before relying on the recorded action.";
   }
   return `${exactNextAction} This remains a conditional executor action candidate; perform any required live writer/effect/control preflight before mutation or publication.`;
+}
+
+function semanticProjectionClassification(
+  workspaceFreshness: "fresh" | "stale" | "unknown",
+  activityAfterCapsule: boolean,
+): string {
+  if (workspaceFreshness === "stale") {
+    return "historical_capsule_workspace_changed_reconciliation_required";
+  }
+  if (workspaceFreshness === "unknown") {
+    return "historical_capsule_workspace_freshness_unknown";
+  }
+  if (activityAfterCapsule) {
+    return "workspace_matches_capsule_but_later_scope_activity_observed_authority_unverified";
+  }
+  return "workspace_matches_latest_capsule_authority_unverified";
 }

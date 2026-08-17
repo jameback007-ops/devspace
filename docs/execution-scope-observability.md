@@ -44,9 +44,25 @@ Returns one scope's current projection:
 - linked checkout and worktree workspaces;
 - live or recently completed tracked DevSpace process sessions;
 - activity and audit counters.
+- when explicitly recorded by the target scope, a bounded recovery-capsule
+  projection with mission, frontier, current causal slice, established state,
+  validation/worktree/writer/effect safety, next-action candidate,
+  do-not-repeat constraints, unresolved items, and checkpoint refs.
 
 Omit `scopeRef` to inspect the current scope. Supply a `scopeRef` from
 `execution_scope_list` to inspect another scope.
+
+This semantic projection comes only from the latest explicit recovery capsule.
+It is joined with current workspace fingerprinting and later execution
+activity; DevSpace does not reconstruct it from filenames or command history.
+When no capsule exists, status reports semantic state as unavailable instead of
+guessing.
+
+Cross-scope status has no fresh canonical-owner readback. It therefore reports
+authority freshness as unverified and does not make the recorded next action
+available for reliance. Local workspace freshness is separate: another
+executor may advance Git/main, PostgreSQL, writer, runtime, or effect state
+without changing the recorded workspace.
 
 ### `execution_scope_audit`
 
@@ -71,6 +87,12 @@ executor lane:
 - bounded safe input metadata such as line limits or terminal dimensions;
 - file paths parsed from a Codex patch envelope, without patch content;
 - normalized error category and digest.
+
+When turn continuity is enabled, status may also return semantic fields that
+the target explicitly admitted into a recovery capsule. Those fields are stored
+once by the capsule owner and projected by status; observability does not create
+a second semantic store. Free-form capsule notes are not included in this
+cross-scope projection.
 
 Running observations that survive an unclean server stop are marked
 `interrupted` on restart rather than remaining falsely active.
@@ -137,6 +159,11 @@ either one writer ownership. A supervisor must still reconcile Git state,
 canonical product work, runtime/effect outcomes, and the actual writer or lease
 contract before authorizing takeover or mutation. Use isolated worktrees for
 parallel writers.
+
+Semantic status is historical recovery evidence rather than current product
+truth. Capsule age is informational, not validity evidence. A supervisor must
+rehydrate the rightful owners and compare exact current state refs before using
+the recorded next action, even when the local workspace still matches.
 
 The projection is deliberately fail-open for ordinary coding tools: a failure
 to record observability is logged but does not block the underlying tool call.

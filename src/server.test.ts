@@ -266,7 +266,7 @@ test("skill search is absent when skills are disabled", async (t) => {
 });
 
 test("one host scope can inspect another through bounded execution-scope tools", async (t) => {
-  const context = await fixture(t, { toolMode: "codex" });
+  const context = await fixture(t, { toolMode: "codex", git: true });
   const workerSession = "worker-private-session-id";
   const supervisorSession = "supervisor-private-session-id";
   const opened = await callOpen(context.client, context.project, workerSession);
@@ -274,6 +274,35 @@ test("one host scope can inspect another through bounded execution-scope tools",
   await context.client.callTool({
     name: "read",
     arguments: { workspaceId, path: "AGENTS.md" },
+    _meta: { "openai/session": workerSession },
+  } as Parameters<Client["callTool"]>[0]);
+  await context.client.callTool({
+    name: "recovery_capsule_record",
+    arguments: {
+      workspaceId,
+      idempotencyKey: "semantic-observability-capsule-1",
+      intent: "rolling",
+      missionRef: "DEVSPACE-SEMANTIC-OBSERVABILITY",
+      authorityOwnerRefs: ["owner:git-main", "owner:runtime"],
+      authorityStateRefs: ["git-main:test-head", "runtime:g1"],
+      currentFrontier: "Expose safe semantic session status",
+      currentCausalSlice: "Join the latest explicit recovery capsule to live execution metadata",
+      established: ["Operational scope status already exposes workspaces and processes"],
+      validationState: "partial",
+      validationRefs: ["test:execution-scope-status"],
+      worktreeState: "clean",
+      effectState: "none",
+      writerState: "held",
+      writerRefs: ["writer:isolated-test-worktree"],
+      retryPolicy: "normal",
+      safeToMutate: true,
+      safeToPublish: false,
+      exactNextAction: "Run the focused semantic observability test",
+      doNotRepeat: ["Do not infer private reasoning from tool events"],
+      unresolved: ["Full regression remains"],
+      checkpointRefs: ["capsule:test"],
+      notes: "PRIVATE-NOTE-SHOULD-NOT-PROJECT",
+    },
     _meta: { "openai/session": workerSession },
   } as Parameters<Client["callTool"]>[0]);
 
@@ -312,6 +341,59 @@ test("one host scope can inspect another through bounded execution-scope tools",
   assert.equal(workspaces[0]?.workspaceId, workspaceId);
   assert.equal(workspaces[0]?.root, context.project);
   assert.equal((statusData.policy as Record<string, unknown>).transcriptCaptured, false);
+  const semanticRecovery = statusData.semanticRecovery as Record<string, unknown>;
+  assert.equal(semanticRecovery.available, true);
+  assert.equal(semanticRecovery.missionRef, "DEVSPACE-SEMANTIC-OBSERVABILITY");
+  assert.equal(
+    semanticRecovery.currentFrontier,
+    "Expose safe semantic session status",
+  );
+  assert.equal(
+    semanticRecovery.currentCausalSlice,
+    "Join the latest explicit recovery capsule to live execution metadata",
+  );
+  assert.equal(
+    (semanticRecovery.worktree as Record<string, unknown>).workspaceFreshness,
+    "fresh",
+  );
+  assert.equal(
+    (semanticRecovery.authority as Record<string, unknown>).freshness,
+    "unverified",
+  );
+  assert.equal(semanticRecovery.exactActionCandidateAvailable, false);
+  assert.equal(
+    (semanticRecovery.activitySinceCapsule as Record<string, unknown>)
+      .observedActivityAfterCapsule,
+    false,
+  );
+  const semanticPolicy = semanticRecovery.policy as Record<string, unknown>;
+  assert.equal(semanticPolicy.privateReasoningCaptured, false);
+  assert.equal(semanticPolicy.inferredFromToolEventsOrFilenames, false);
+  assert.equal(JSON.stringify(semanticRecovery).includes("PRIVATE-NOTE-SHOULD-NOT-PROJECT"), false);
+
+  await context.client.callTool({
+    name: "read",
+    arguments: { workspaceId, path: "AGENTS.md" },
+    _meta: { "openai/session": workerSession },
+  } as Parameters<Client["callTool"]>[0]);
+  const laterStatus = await context.client.callTool({
+    name: "execution_scope_status",
+    arguments: { scopeRef },
+    _meta: { "openai/session": supervisorSession },
+  } as Parameters<Client["callTool"]>[0]);
+  const laterSemantic = structuredData(laterStatus).semanticRecovery as Record<
+    string,
+    unknown
+  >;
+  assert.equal(
+    (laterSemantic.activitySinceCapsule as Record<string, unknown>)
+      .observedActivityAfterCapsule,
+    true,
+  );
+  assert.equal(
+    (laterSemantic.worktree as Record<string, unknown>).workspaceFreshness,
+    "fresh",
+  );
 
   const audit = await context.client.callTool({
     name: "execution_scope_audit",
@@ -322,11 +404,14 @@ test("one host scope can inspect another through bounded execution-scope tools",
   const events = auditData.events as Array<Record<string, unknown>>;
   assert.deepEqual(
     events.map((event) => event.tool),
-    ["read", "open_workspace"],
+    ["read", "recovery_capsule_record", "read", "open_workspace"],
   );
   const serializedAudit = JSON.stringify(auditData);
   assert.equal(serializedAudit.includes(workerSession), false);
   assert.equal(serializedAudit.includes("project instructions"), false);
+  assert.equal(serializedAudit.includes("Expose safe semantic session status"), false);
+  assert.equal(serializedAudit.includes("Run the focused semantic observability test"), false);
+  assert.equal(serializedAudit.includes("PRIVATE-NOTE-SHOULD-NOT-PROJECT"), false);
 });
 
 test("execution-scope mailbox delivers at the target's next MCP boundary with receipts", async (t) => {

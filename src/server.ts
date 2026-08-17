@@ -454,7 +454,7 @@ function serverInstructions(config: ServerConfig): string {
   const codexSessionInstruction =
     " To inspect the allowlisted AOQ Codex executor adapter, use codex_session_status, codex_session_tail, or codex_session_audit. These tools report adapter transport health separately from the Codex thread lifecycle and never represent DevSpace, VPS, workspace, or ZES product health. To inspect the exact live AOQ worktree, use codex_workspace_git_status, codex_workspace_tree, codex_workspace_read, codex_workspace_search, or codex_workspace_diff. These brokered commands are read-only and independent from the Codex thread lifecycle.";
   const executionScopeInstruction = config.executionObservability.enabled
-    ? " Use execution_scope_list to discover recent DevSpace execution scopes, execution_scope_status to inspect another WebChat/host scope's linked workspaces and live processes, and execution_scope_audit for bounded metadata-only tool lifecycle. These views never replace Git, canonical product state, runtime/effect readback, or writer/lease reconciliation, and they do not contain transcripts, prompts, private reasoning, tool outputs, patches, credentials, or raw commands."
+    ? " Use execution_scope_list to discover recent DevSpace execution scopes, execution_scope_status to inspect another WebChat/host scope's linked workspaces, live processes, and latest explicitly recorded semantic recovery capsule when available, and execution_scope_audit for bounded metadata-only tool lifecycle. Semantic status is never inferred from filenames or tool events; absent capsule means unknown mission. Cross-scope authority freshness remains unverified and the recorded exact action is historical until current canonical/runtime/writer/effect owners are rehydrated. These views never replace Git, canonical product state, runtime/effect readback, or writer/lease reconciliation, and they do not contain transcripts, prompts, private reasoning, tool outputs, patches, credentials, or raw commands."
     : "";
   const executionMailboxInstruction = config.executionMailbox.enabled
     ? " Use execution_scope_message_send to leave a durable message for another known scope, reusing one idempotencyKey for retries. Acceptance means stored, not observed. When a tool result reports pending mail, call execution_scope_message_inbox before opening a new major frontier, then record acknowledged or acted state with execution_scope_message_receipt. Use execution_scope_message_status to inspect a message you sent or received. The mailbox is executor-local coordination, not task, decision, effect, writer, or canonical-memory authority, and it cannot wake or inject text directly into an inactive WebChat transcript."
@@ -843,6 +843,7 @@ function registerExecutionScopeTools(
   server: McpServer,
   config: ServerConfig,
   executionScopes: ExecutionScopeManager,
+  turnContinuity: TurnContinuityManager,
 ): void {
   const scopeRefSchema = z
     .string()
@@ -882,7 +883,7 @@ function registerExecutionScopeTools(
     {
       title: "Inspect DevSpace execution scope",
       description:
-        "Read one DevSpace execution scope by opaque scopeRef, including linked workspaces and live process sessions. Omit scopeRef for the current host scope. Raw host session IDs, prompts, private reasoning, tool outputs, and raw commands are never returned.",
+        "Read one DevSpace execution scope by opaque scopeRef, including linked workspaces, live process sessions, and—when the target explicitly recorded one—the latest bounded semantic recovery capsule joined with local workspace freshness and later activity. Omit scopeRef for the current host scope. Semantic state is never inferred from filenames or tool events. Raw host session IDs, prompts, private reasoning, credentials, tool outputs, patches, and raw commands are never returned; capsule state remains executor-local observation rather than task, decision, writer, effect, or publication authority.",
       inputSchema: {
         scopeRef: scopeRefSchema.optional(),
       },
@@ -890,9 +891,35 @@ function registerExecutionScopeTools(
       ...toolWidgetDescriptorMeta(config, "read"),
       annotations: CODEX_SESSION_TOOL_ANNOTATIONS,
     },
-    async ({ scopeRef }, { _meta }) => jsonToolResponse(
-      executionScopes.status(scopeRef, executionScopeIdentity(_meta)),
-    ),
+    async ({ scopeRef }, { _meta }) => {
+      const status = executionScopes.status(
+        scopeRef,
+        executionScopeIdentity(_meta),
+      );
+      const scope = isRecord(status.scope) ? status.scope : undefined;
+      const targetScopeRef = typeof scope?.scopeRef === "string"
+        ? scope.scopeRef
+        : undefined;
+      const lastActivityAtMs = typeof scope?.lastActivityAt === "string"
+        ? Date.parse(scope.lastActivityAt)
+        : undefined;
+      const totalEventCount = typeof scope?.totalEventCount === "number"
+        ? scope.totalEventCount
+        : undefined;
+      const semanticRecovery = targetScopeRef
+        ? await turnContinuity.semanticProjectionForScope(targetScopeRef, {
+            observedScopeLastActivityAtMs:
+              lastActivityAtMs !== undefined && Number.isFinite(lastActivityAtMs)
+                ? lastActivityAtMs
+                : undefined,
+            observedScopeTotalEventCount: totalEventCount,
+          })
+        : undefined;
+      return jsonToolResponse({
+        ...status,
+        ...(semanticRecovery === undefined ? {} : { semanticRecovery }),
+      });
+    },
   );
 
   registerAppTool(
@@ -1797,7 +1824,12 @@ export function createMcpServer(
     },
   );
 
-  registerExecutionScopeTools(server, config, activeExecutionScopes);
+  registerExecutionScopeTools(
+    server,
+    config,
+    activeExecutionScopes,
+    activeTurnContinuity,
+  );
   registerExecutionMailboxTools(server, config, activeExecutionMailbox);
   registerTurnContinuityTools(
     server,

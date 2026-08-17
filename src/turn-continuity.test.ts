@@ -47,6 +47,14 @@ test("turn horizon is advisory-only, emits each threshold once, and explicit beg
   assert.equal(firstStatus.advisory, "normal");
   assert.equal(firstStatus.toolsBlocked, false);
   assert.equal(firstStatus.taskCompletionRequired, false);
+  const semanticUnavailable = await manager.semanticProjectionForScope(
+    identity.scopeRef,
+  );
+  assert.equal(semanticUnavailable.available, false);
+  assert.equal(
+    semanticUnavailable.reason,
+    "no_explicit_recovery_capsule_for_scope",
+  );
 
   now += 600;
   const awareness = manager.advisoryNotice(identity, {}, "read");
