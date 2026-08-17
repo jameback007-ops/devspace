@@ -25,6 +25,11 @@ mandatory `AGENTS.md`; it does not replace it.
 - **Execution scope** — a stable provider-neutral host conversation/task scope
   joining workspace, process, mailbox, and bounded audit observations. It is
   not a transcript or product authority.
+- **Turn horizon** — advisory assistant-turn timing derived from exact host
+  metadata or one explicit begin call. It never blocks tools or limits a task.
+- **Recovery capsule** — a bounded semantic executor handoff bound to current
+  Git state. It is not canonical task, decision, writer, effect, publication,
+  or memory authority.
 - **Local-agent turn** — one queued provider prompt serialized by a worker
   lease. It is not canonical work or effect authority.
 - **Worker lease** — an executor-local single-worker claim. Expiry after
@@ -73,6 +78,7 @@ Check the surfaces the change actually reaches:
 - process lifecycle and pure polling;
 - subagent provider availability, queues, leases, cancellation, and recovery;
 - execution-scope observability and messaging;
+- advisory turn continuity and recovery-capsule persistence/freshness;
 - widgets, artifacts, and review checkpoints;
 - SQLite schema, migration, retention, and restart recovery;
 - package entry points, documentation, examples, and generated assets;

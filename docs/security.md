@@ -211,7 +211,7 @@ Cursor and Copilot ACP adapters are not advertised as resumable provider
 sessions in this version. DevSpace rejects follow-up continuation rather than
 silently starting a new unrelated session.
 
-## No Synthetic Executor-Turn Enforcement
+## Advisory Turn Continuity and Recovery Capsules
 
 Conversation identity is not a safe clock for one assistant turn, and DevSpace
 does not infer a platform cutoff from elapsed conversation time. The retired
@@ -219,6 +219,24 @@ executor-window mechanism is not a security boundary and no longer blocks
 mutation or command execution. Recovery and duplicate-effect prevention remain
 the responsibility of the actual workspace, process, provider, product writer,
 and effect/lease contracts.
+
+The replacement turn horizon is advisory only. Exact turn and deadline metadata
+is accepted only at the MCP adapter edge; raw turn identity is not persisted.
+Without exact metadata, the model explicitly begins one advisory epoch. A notice
+cannot disable a tool, force a commit, authorize a retry, or lower validation.
+
+Recovery capsules intentionally persist bounded semantic handoff text in the
+owner-only SQLite database. Do not include credentials, signed URLs,
+transcripts, private reasoning, or unrestricted tool output. Idempotency keys
+are stored only as digests. The capsule is bound to hashed Git state and can be
+read across retained execution scopes only after the caller opens the exact
+allowed workspace root. It never grants writer, task, effect, publication, or
+canonical-memory authority. Local Git freshness is not canonical freshness:
+another worktree or executor may advance Git/main, PostgreSQL, writer, runtime,
+or effect state while the recorded workspace remains unchanged. Exact action
+reliance therefore requires freshly rehydrated authority-state refs to match the
+recorded baseline. Time or TTL alone is neither freshness nor invalidation
+evidence; live owner readback remains required.
 
 An optional Codex session adapter is also not an executor-plane boundary. Its
 transport or thread may be degraded while DevSpace filesystem, process, and VPS

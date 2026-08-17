@@ -4,6 +4,10 @@ import {
   executionScopeDigestSha256,
   executionScopeIdentity,
   executionScopeRef,
+  executorDeadlineAtMs,
+  executorTurnIdentity,
+  executorTurnMetadata,
+  executorTurnRef,
   openAiConversationScopeId,
 } from "./request-meta.js";
 
@@ -82,6 +86,60 @@ test("legacy executor-window scope metadata remains a compatibility alias", () =
       scopeDigestSha256: executionScopeDigestSha256("legacy-generic-scope"),
       scopeRef: executionScopeRef("legacy-generic-scope"),
       adapter: "devspace",
+    },
+  );
+});
+
+test("executor turn identity is provider-neutral and never inferred from conversation scope", () => {
+  assert.equal(
+    executorTurnIdentity({ "openai/session": "conversation-only" }),
+    undefined,
+  );
+  assert.deepEqual(
+    executorTurnIdentity({
+      "devspace/executor-turn": "opaque-turn-value",
+      "openai/session": "conversation-only",
+    }),
+    {
+      turnId: "opaque-turn-value",
+      turnRef: executorTurnRef("opaque-turn-value"),
+    },
+  );
+});
+
+test("executor deadline accepts exact epoch or ISO metadata and rejects malformed values", () => {
+  assert.equal(
+    executorDeadlineAtMs({ "devspace/executor-deadline-ms": 1_900_000_000_000 }),
+    1_900_000_000_000,
+  );
+  assert.equal(
+    executorDeadlineAtMs({
+      "devspace/executor-deadline-at": "2030-03-04T05:06:07.000Z",
+    }),
+    Date.parse("2030-03-04T05:06:07.000Z"),
+  );
+  assert.equal(
+    executorDeadlineAtMs({ "devspace/executor-deadline-ms": "not-a-number" }),
+    undefined,
+  );
+  assert.equal(
+    executorDeadlineAtMs({ "devspace/executor-deadline-at": "not-a-date" }),
+    undefined,
+  );
+});
+
+test("executor turn metadata keeps identity and deadline independent", () => {
+  assert.deepEqual(
+    executorTurnMetadata({
+      "devspace/executor-turn": "turn-1",
+      "devspace/executor-deadline-ms": "1900000000000",
+    }),
+    {
+      identity: {
+        turnId: "turn-1",
+        turnRef: executorTurnRef("turn-1"),
+      },
+      deadlineAtMs: 1_900_000_000_000,
     },
   );
 });

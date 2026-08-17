@@ -39,20 +39,55 @@ npx @waishnav/devspace config set publicBaseUrl https://devspace.example.com
 | `DEVSPACE_WORKTREE_ROOT` | Directory for managed Git worktrees. Defaults to `~/.devspace/worktrees`. |
 | `DEVSPACE_STATE_DIR` | Directory for SQLite state. Defaults to `~/.local/share/devspace`. |
 
-## Executor Turn Window Retirement
+## Advisory Turn Continuity and Recovery Capsules
 
-The synthetic executor-turn timer has been removed. DevSpace no longer infers a
-host cutoff, appends timer status to every tool result, or blocks tools after an
-elapsed-time threshold. The former `executor_window_begin`,
-`executor_window_status`, and `executor_window_yield` tools are not registered.
-Legacy `DEVSPACE_EXECUTOR_WINDOW*` environment variables are ignored.
+DevSpace provides a soft assistant-turn horizon and Git-bound executor recovery
+capsules. This replaces the retired executor-window mechanism without restoring
+its blocking behavior. The horizon never disables tools, requires task
+completion, forces a commit, suppresses dynamic replanning, or authorizes weaker
+validation.
 
-Long work should close at a coherent boundary selected from the actual task and
-persist recovery state in the rightful owner: Git, product-native work and
-decision state, durable execution/effect records, or a provider-neutral
-continuation contract. A future host-supplied real deadline may support a small
-deadline-aware warning, but DevSpace does not manufacture one from conversation
-age.
+When a host supplies `devspace/executor-turn`, DevSpace begins a fresh advisory
+epoch for that exact assistant turn. A host may also supply an exact absolute
+deadline through `devspace/executor-deadline-ms` or
+`devspace/executor-deadline-at`. When neither is available, the model calls
+`turn_horizon_begin` once near the first tool call of the turn with a unique
+idempotency key. Conversation age is never substituted for turn age.
+
+The fallback estimate defaults to 120 minutes. At 95 minutes DevSpace emits one
+checkpoint-awareness notice. At 110 minutes it emits one landing-opportunity
+notice. Both are advisory: continue the current causal slice until a genuinely
+recoverable cut, then end only the assistant turn. A task may continue across
+any number of turns.
+
+`recovery_capsule_record` stores bounded semantic recovery state together with a
+digest of the exact Git HEAD, branch, tracked diff, status, and bounded
+untracked content. Intentional dirty state is valid. Record exact immutable
+authority-state refs from current canonical/runtime/writer/effect owner
+readback when available. `recovery_capsule_status` recomputes local workspace
+freshness separately from authority freshness; pass freshly rehydrated
+`currentAuthorityStateRefs` for comparison. A locally unchanged worktree never
+proves that another executor did not advance canonical Git/main, PostgreSQL,
+runtime, writer, or effect state. Capsules are executor-local recovery
+projections, not task, decision, writer, effect, publication, or
+canonical-memory authority. Time or TTL alone does not determine semantic
+validity.
+
+Legacy `DEVSPACE_EXECUTOR_WINDOW*` variables remain ignored. The current
+configuration is:
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `DEVSPACE_TURN_CONTINUITY` | `1` | Enable advisory horizon and recovery capsule tools. |
+| `DEVSPACE_TURN_HORIZON_MINUTES` | `120` | Fallback estimated host turn duration. |
+| `DEVSPACE_TURN_HORIZON_AWARENESS_MINUTES` | `95` | Emit one early checkpoint-awareness notice. |
+| `DEVSPACE_TURN_HORIZON_LANDING_MINUTES` | `110` | Emit one nearest-recoverable-cut notice. |
+| `DEVSPACE_RECOVERY_CAPSULE_RETENTION_HOURS` | `720` | Retain capsules for 30 days. |
+| `DEVSPACE_RECOVERY_CAPSULE_MAX_PER_WORKSPACE` | `50` | Bound retained capsules per exact workspace root. |
+| `DEVSPACE_RECOVERY_CAPSULE_MAX_CHARACTERS` | `64000` | Bound one capsule's semantic payload. |
+
+See [Turn Continuity and Recovery Capsules](turn-continuity.md) for the complete
+behavior and authority boundaries.
 
 ## Execution-Scope Observability
 

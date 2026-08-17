@@ -5,6 +5,7 @@ import type { LoggingConfig, LogFormat, LogLevel } from "./logger.js";
 import type { OAuthConfig } from "./oauth-provider.js";
 import type { ExecutionObservabilityConfig } from "./execution-observability.js";
 import type { ExecutionMailboxConfig } from "./execution-mailbox.js";
+import type { TurnContinuityConfig } from "./turn-continuity.js";
 import {
   parseLocalAgentBillingMode,
   type LocalAgentBillingConfig,
@@ -25,6 +26,12 @@ const DEFAULT_EXECUTION_MAILBOX_MAX_TTL_HOURS = 30 * 24;
 const DEFAULT_EXECUTION_MAILBOX_TERMINAL_RETENTION_HOURS = 7 * 24;
 const DEFAULT_EXECUTION_MAILBOX_MAX_PENDING_PER_SCOPE = 500;
 const DEFAULT_EXECUTION_MAILBOX_MAX_BODY_CHARACTERS = 12_000;
+const DEFAULT_TURN_HORIZON_MINUTES = 120;
+const DEFAULT_TURN_HORIZON_AWARENESS_MINUTES = 95;
+const DEFAULT_TURN_HORIZON_LANDING_MINUTES = 110;
+const DEFAULT_RECOVERY_CAPSULE_RETENTION_HOURS = 30 * 24;
+const DEFAULT_RECOVERY_CAPSULE_MAX_PER_WORKSPACE = 50;
+const DEFAULT_RECOVERY_CAPSULE_MAX_CHARACTERS = 64_000;
 const DEFAULT_LOCAL_AGENT_MAX_PENDING = 200;
 const DEFAULT_LOCAL_AGENT_MAX_BODY_CHARACTERS = 24_000;
 const DEFAULT_LOCAL_AGENT_MAX_RESPONSE_CHARACTERS = 200_000;
@@ -53,6 +60,7 @@ export interface ServerConfig {
   agentDir: string;
   executionObservability: ExecutionObservabilityConfig;
   executionMailbox: ExecutionMailboxConfig;
+  turnContinuity: TurnContinuityConfig;
   localAgentBilling: LocalAgentBillingConfig;
   localAgentQueue: LocalAgentQueueConfig;
   logging: LoggingConfig;
@@ -260,6 +268,66 @@ function parseExecutionMailboxConfig(
   };
 }
 
+function parseTurnContinuityConfig(
+  env: NodeJS.ProcessEnv,
+): TurnContinuityConfig {
+  const estimatedMinutes = parsePositiveInteger(
+    env.DEVSPACE_TURN_HORIZON_MINUTES,
+    DEFAULT_TURN_HORIZON_MINUTES,
+    "DEVSPACE_TURN_HORIZON_MINUTES",
+    24 * 60,
+  );
+  const awarenessMinutes = parsePositiveInteger(
+    env.DEVSPACE_TURN_HORIZON_AWARENESS_MINUTES,
+    DEFAULT_TURN_HORIZON_AWARENESS_MINUTES,
+    "DEVSPACE_TURN_HORIZON_AWARENESS_MINUTES",
+    24 * 60,
+  );
+  const landingMinutes = parsePositiveInteger(
+    env.DEVSPACE_TURN_HORIZON_LANDING_MINUTES,
+    DEFAULT_TURN_HORIZON_LANDING_MINUTES,
+    "DEVSPACE_TURN_HORIZON_LANDING_MINUTES",
+    24 * 60,
+  );
+  if (awarenessMinutes >= landingMinutes) {
+    throw new Error(
+      "DEVSPACE_TURN_HORIZON_AWARENESS_MINUTES must be less than DEVSPACE_TURN_HORIZON_LANDING_MINUTES",
+    );
+  }
+  if (landingMinutes >= estimatedMinutes) {
+    throw new Error(
+      "DEVSPACE_TURN_HORIZON_LANDING_MINUTES must be less than DEVSPACE_TURN_HORIZON_MINUTES",
+    );
+  }
+  return {
+    enabled:
+      env.DEVSPACE_TURN_CONTINUITY === undefined
+        ? true
+        : parseBoolean(env.DEVSPACE_TURN_CONTINUITY),
+    estimatedTurnMs: estimatedMinutes * 60 * 1_000,
+    awarenessAfterMs: awarenessMinutes * 60 * 1_000,
+    landingAfterMs: landingMinutes * 60 * 1_000,
+    capsuleRetentionMs: parsePositiveInteger(
+      env.DEVSPACE_RECOVERY_CAPSULE_RETENTION_HOURS,
+      DEFAULT_RECOVERY_CAPSULE_RETENTION_HOURS,
+      "DEVSPACE_RECOVERY_CAPSULE_RETENTION_HOURS",
+      24 * 365,
+    ) * 60 * 60 * 1_000,
+    maxCapsulesPerWorkspace: parsePositiveInteger(
+      env.DEVSPACE_RECOVERY_CAPSULE_MAX_PER_WORKSPACE,
+      DEFAULT_RECOVERY_CAPSULE_MAX_PER_WORKSPACE,
+      "DEVSPACE_RECOVERY_CAPSULE_MAX_PER_WORKSPACE",
+      10_000,
+    ),
+    maxCapsuleCharacters: parsePositiveInteger(
+      env.DEVSPACE_RECOVERY_CAPSULE_MAX_CHARACTERS,
+      DEFAULT_RECOVERY_CAPSULE_MAX_CHARACTERS,
+      "DEVSPACE_RECOVERY_CAPSULE_MAX_CHARACTERS",
+      1_000_000,
+    ),
+  };
+}
+
 function parseLocalAgentQueueConfig(env: NodeJS.ProcessEnv): LocalAgentQueueConfig {
   const leaseSeconds = parsePositiveInteger(
     env.DEVSPACE_LOCAL_AGENT_LEASE_SECONDS,
@@ -407,6 +475,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     agentDir: resolve(expandHomePath(env.DEVSPACE_AGENT_DIR ?? files.config.agentDir ?? defaultAgentDir())),
     executionObservability: parseExecutionObservabilityConfig(env),
     executionMailbox: parseExecutionMailboxConfig(env),
+    turnContinuity: parseTurnContinuityConfig(env),
     localAgentBilling: {
       mode: parseLocalAgentBillingMode(env.DEVSPACE_LOCAL_AGENT_BILLING_MODE),
     },

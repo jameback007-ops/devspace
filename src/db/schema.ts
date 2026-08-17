@@ -186,6 +186,66 @@ export const executionScopeMessageReceipts = sqliteTable(
   ],
 );
 
+export const executionTurnHorizons = sqliteTable(
+  "execution_turn_horizons",
+  {
+    scopeRef: text("scope_ref").primaryKey(),
+    epochId: text("epoch_id").notNull(),
+    source: text("source").notNull(),
+    turnRef: text("turn_ref"),
+    explicitKeyDigestSha256: text("explicit_key_digest_sha256"),
+    startedAtMs: integer("started_at_ms").notNull(),
+    deadlineAtMs: integer("deadline_at_ms"),
+    lastActivityAtMs: integer("last_activity_at_ms").notNull(),
+    lastMutationAtMs: integer("last_mutation_at_ms"),
+    lastCheckpointAtMs: integer("last_checkpoint_at_ms"),
+    lastCheckpointId: text("last_checkpoint_id"),
+    awarenessEmittedAtMs: integer("awareness_emitted_at_ms"),
+    landingEmittedAtMs: integer("landing_emitted_at_ms"),
+    staleCheckpointNoticeEmittedAtMs: integer("stale_checkpoint_notice_emitted_at_ms"),
+  },
+  (table) => [
+    index("execution_turn_horizons_activity_idx").on(table.lastActivityAtMs),
+    uniqueIndex("execution_turn_horizons_epoch_idx").on(table.epochId),
+  ],
+);
+
+export const executionRecoveryCapsules = sqliteTable(
+  "execution_recovery_capsules",
+  {
+    id: text("id").primaryKey(),
+    scopeRef: text("scope_ref").notNull(),
+    workspaceSessionId: text("workspace_session_id").notNull(),
+    workspaceRootDigestSha256: text("workspace_root_digest_sha256").notNull(),
+    generation: integer("generation").notNull(),
+    idempotencyKeyDigestSha256: text("idempotency_key_digest_sha256").notNull(),
+    intent: text("intent").notNull(),
+    semanticJson: text("semantic_json").notNull(),
+    semanticDigestSha256: text("semantic_digest_sha256").notNull(),
+    fingerprintJson: text("fingerprint_json").notNull(),
+    stateDigestSha256: text("state_digest_sha256").notNull(),
+    recordedAtMs: integer("recorded_at_ms").notNull(),
+  },
+  (table) => [
+    uniqueIndex("execution_recovery_capsules_generation_idx").on(
+      table.workspaceRootDigestSha256,
+      table.generation,
+    ),
+    uniqueIndex("execution_recovery_capsules_idempotency_idx").on(
+      table.scopeRef,
+      table.idempotencyKeyDigestSha256,
+    ),
+    index("execution_recovery_capsules_root_time_idx").on(
+      table.workspaceRootDigestSha256,
+      table.recordedAtMs,
+    ),
+    index("execution_recovery_capsules_scope_time_idx").on(
+      table.scopeRef,
+      table.recordedAtMs,
+    ),
+  ],
+);
+
 export const oauthClients = sqliteTable(
   "oauth_clients",
   {
@@ -339,6 +399,10 @@ export type ExecutionScopeMessageRow = typeof executionScopeMessages.$inferSelec
 export type NewExecutionScopeMessageRow = typeof executionScopeMessages.$inferInsert;
 export type ExecutionScopeMessageReceiptRow = typeof executionScopeMessageReceipts.$inferSelect;
 export type NewExecutionScopeMessageReceiptRow = typeof executionScopeMessageReceipts.$inferInsert;
+export type ExecutionTurnHorizonRow = typeof executionTurnHorizons.$inferSelect;
+export type NewExecutionTurnHorizonRow = typeof executionTurnHorizons.$inferInsert;
+export type ExecutionRecoveryCapsuleRow = typeof executionRecoveryCapsules.$inferSelect;
+export type NewExecutionRecoveryCapsuleRow = typeof executionRecoveryCapsules.$inferInsert;
 export type LocalAgentSessionRow = typeof localAgentSessions.$inferSelect;
 export type NewLocalAgentSessionRow = typeof localAgentSessions.$inferInsert;
 export type LocalAgentTurnRow = typeof localAgentTurns.$inferSelect;

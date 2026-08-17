@@ -40,11 +40,27 @@ project's canonical state before takeover.
 
 ## Close Work at Real Boundaries
 
-DevSpace does not run a synthetic assistant-turn timer. Continue normal work
-until the current causal slice reaches a coherent checkpoint, then persist the
-recoverable frontier in Git or the product-native work, decision, execution, or
-effect owner. An unknown host cutoff is not converted into a guessed deadline
-that can block later tools.
+DevSpace does not run a blocking assistant-turn timer. When the host supplies no
+exact turn identity, call `turn_horizon_begin` once near the first tool call of
+the assistant turn. The fallback horizon emits sparse advisory notices only;
+tools remain fully available before and after the estimate.
+
+Continue normal dynamic work until the current causal slice reaches a coherent
+recovery cut. Do not hurry the task, reduce validation, force a commit, or avoid
+a justified prerequisite merely because a notice appeared. Record the frontier
+with `recovery_capsule_record`; an intentional dirty worktree is valid when its
+state, validation ceiling, effect safety, do-not-repeat constraints, and exact
+next action are explicit.
+
+At the next turn, open the exact workspace and call
+`recovery_capsule_status`. First rehydrate current canonical Git/main,
+product-native work and decisions, writer ownership, runtime, and effect state,
+then pass their exact immutable refs as `currentAuthorityStateRefs`. The tool
+reports local workspace freshness separately from authority freshness. An
+unchanged worktree can still be semantically obsolete after another executor
+advanced the project. Exact-action reliance remains blocked when authority is
+unverified or changed. Time alone does not make a capsule stale or current. See
+[Turn Continuity and Recovery Capsules](turn-continuity.md).
 
 ## Codex Is an Optional Executor Adapter
 
@@ -233,6 +249,16 @@ DevSpace exposes these tool names:
 - `write`
 - `edit`
 - `bash`
+
+When turn continuity is enabled, every tool mode also exposes:
+
+- `turn_horizon_begin`
+- `turn_horizon_status`
+- `recovery_capsule_record`
+- `recovery_capsule_status`
+
+Execution-scope observability and messaging tools remain available according to
+their own feature flags.
 
 By default, DevSpace also runs in `DEVSPACE_TOOL_MODE=minimal`, so dedicated
 `grep`, `glob`, and `ls` tools are hidden. Use `bash` with command-line tools

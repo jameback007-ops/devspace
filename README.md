@@ -137,6 +137,7 @@ DevSpace gives ChatGPT tools to:
 - search code and inspect directories
 - run shell commands for tests, builds, git, and package scripts
 - use isolated Git worktrees for parallel coding sessions
+- receive advisory long-turn notices and persist Git-bound recovery capsules without blocking tools or forcing task completion
 - inspect independent host execution scopes without merging their conversations
 - send durable target-bound messages between execution scopes with receipts
 - keep local subagents on fail-closed subscription auth unless PAYG is explicitly enabled

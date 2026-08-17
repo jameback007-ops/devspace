@@ -85,6 +85,115 @@ test("codex write_stdin exposes the output-aware long-poll contract", async (t) 
   assert.match(String(yieldTimeMs?.description), /bounded to 30000/i);
 });
 
+test("turn continuity is advisory-only and recovery capsules detect later workspace changes", async (t) => {
+  const context = await fixture(t, { toolMode: "codex", git: true });
+  const session = "turn-continuity-session";
+  const opened = await callOpen(context.client, context.project, session);
+  const workspaceId = String(structuredContent(opened).workspaceId);
+  const tools = await context.client.listTools();
+
+  for (const name of [
+    "turn_horizon_begin",
+    "turn_horizon_status",
+    "recovery_capsule_record",
+    "recovery_capsule_status",
+  ]) {
+    assert.ok(tools.tools.find((tool) => tool.name === name), `${name} should be registered`);
+  }
+  assert.equal(
+    tools.tools.some((tool) => tool.name.startsWith("executor_window_")),
+    false,
+  );
+  assert.match(
+    tools.tools.find((tool) => tool.name === "turn_horizon_begin")?.description ?? "",
+    /never blocks tools/i,
+  );
+
+  const begun = await context.client.callTool({
+    name: "turn_horizon_begin",
+    arguments: {
+      idempotencyKey: "server-turn-1",
+      reason: "new_turn",
+    },
+    _meta: { "openai/session": session },
+  } as Parameters<Client["callTool"]>[0]);
+  const begunStatus = structuredData(begun).status as Record<string, unknown>;
+  assert.equal(begunStatus.toolsBlocked, false);
+  assert.equal(begunStatus.taskCompletionRequired, false);
+
+  const recorded = await context.client.callTool({
+    name: "recovery_capsule_record",
+    arguments: {
+      workspaceId,
+      idempotencyKey: "server-capsule-1",
+      intent: "rolling",
+      missionRef: "TEST-MISSION",
+      authorityOwnerRefs: ["owner:git-main"],
+      authorityStateRefs: ["git-main:initial"],
+      currentFrontier: "preserve current work",
+      currentCausalSlice: "record the clean initial checkpoint",
+      established: ["initial commit exists"],
+      validationState: "passed",
+      validationRefs: ["git:HEAD"],
+      worktreeState: "clean",
+      effectState: "none",
+      writerState: "none",
+      retryPolicy: "normal",
+      safeToMutate: true,
+      safeToPublish: false,
+      exactNextAction: "edit README.md",
+      doNotRepeat: [],
+      unresolved: [],
+      checkpointRefs: ["git:HEAD"],
+    },
+    _meta: { "openai/session": session },
+  } as Parameters<Client["callTool"]>[0]);
+  assert.equal(structuredData(recorded).recorded, true);
+
+  const fresh = await context.client.callTool({
+    name: "recovery_capsule_status",
+    arguments: {
+      workspaceId,
+      currentAuthorityStateRefs: ["git-main:initial"],
+    },
+    _meta: { "openai/session": session },
+  } as Parameters<Client["callTool"]>[0]);
+  assert.equal(structuredData(fresh).workspaceFreshness, "fresh");
+  assert.equal(
+    structuredData(fresh).authorityFreshness,
+    "matched_supplied_refs",
+  );
+  assert.equal(structuredData(fresh).exactActionCandidateAvailable, true);
+
+  await context.client.callTool({
+    name: "apply_patch",
+    arguments: {
+      workspaceId,
+      patch: [
+        "*** Begin Patch",
+        "*** Update File: README.md",
+        "@@",
+        "-hello",
+        "+hello changed",
+        "*** End Patch",
+      ].join("\n"),
+    },
+    _meta: { "openai/session": session },
+  } as Parameters<Client["callTool"]>[0]);
+
+  const stale = await context.client.callTool({
+    name: "recovery_capsule_status",
+    arguments: { workspaceId },
+    _meta: { "openai/session": session },
+  } as Parameters<Client["callTool"]>[0]);
+  const staleData = structuredData(stale);
+  assert.equal(staleData.workspaceFreshness, "stale");
+  assert.equal(staleData.exactActionCandidateAvailable, false);
+  assert.ok(
+    (staleData.workspaceStaleReasons as string[]).includes("tracked_content_changed"),
+  );
+});
+
 test("workspace skills are contextual by default and host skills stay searchable", async (t) => {
   const context = await fixture(t, {
     toolMode: "codex",

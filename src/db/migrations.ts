@@ -42,6 +42,11 @@ const migrations: Migration[] = [
     name: "local-agent-turn-queue",
     up: migrateLocalAgentTurnQueue,
   },
+  {
+    version: 8,
+    name: "turn-continuity-and-recovery-capsules",
+    up: migrateTurnContinuityAndRecoveryCapsules,
+  },
 ];
 
 export function migrateDatabase(sqlite: Database.Database): void {
@@ -389,6 +394,58 @@ function migrateLocalAgentTurnQueue(sqlite: Database.Database): void {
 
     create index if not exists local_agent_worker_leases_expiry_idx
       on local_agent_worker_leases(expires_at_ms);
+  `);
+}
+
+function migrateTurnContinuityAndRecoveryCapsules(
+  sqlite: Database.Database,
+): void {
+  sqlite.exec(`
+    create table if not exists execution_turn_horizons (
+      scope_ref text primary key,
+      epoch_id text not null unique,
+      source text not null,
+      turn_ref text,
+      explicit_key_digest_sha256 text,
+      started_at_ms integer not null,
+      deadline_at_ms integer,
+      last_activity_at_ms integer not null,
+      last_mutation_at_ms integer,
+      last_checkpoint_at_ms integer,
+      last_checkpoint_id text,
+      awareness_emitted_at_ms integer,
+      landing_emitted_at_ms integer,
+      stale_checkpoint_notice_emitted_at_ms integer
+    );
+
+    create index if not exists execution_turn_horizons_activity_idx
+      on execution_turn_horizons(last_activity_at_ms desc);
+
+    create table if not exists execution_recovery_capsules (
+      id text primary key,
+      scope_ref text not null,
+      workspace_session_id text not null,
+      workspace_root_digest_sha256 text not null,
+      generation integer not null,
+      idempotency_key_digest_sha256 text not null,
+      intent text not null,
+      semantic_json text not null,
+      semantic_digest_sha256 text not null,
+      fingerprint_json text not null,
+      state_digest_sha256 text not null,
+      recorded_at_ms integer not null,
+      unique (workspace_root_digest_sha256, generation),
+      unique (scope_ref, idempotency_key_digest_sha256)
+    );
+
+    create index if not exists execution_recovery_capsules_root_time_idx
+      on execution_recovery_capsules(
+        workspace_root_digest_sha256,
+        recorded_at_ms desc
+      );
+
+    create index if not exists execution_recovery_capsules_scope_time_idx
+      on execution_recovery_capsules(scope_ref, recorded_at_ms desc);
   `);
 }
 

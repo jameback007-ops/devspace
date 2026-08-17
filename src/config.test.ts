@@ -43,6 +43,15 @@ assert.deepEqual(loadConfig(baseEnv).executionMailbox, {
   maxPendingPerScope: 500,
   maxBodyCharacters: 12_000,
 });
+assert.deepEqual(loadConfig(baseEnv).turnContinuity, {
+  enabled: true,
+  estimatedTurnMs: 120 * 60 * 1_000,
+  awarenessAfterMs: 95 * 60 * 1_000,
+  landingAfterMs: 110 * 60 * 1_000,
+  capsuleRetentionMs: 30 * 24 * 60 * 60 * 1_000,
+  maxCapsulesPerWorkspace: 50,
+  maxCapsuleCharacters: 64_000,
+});
 assert.deepEqual(loadConfig(baseEnv).localAgentBilling, {
   mode: "subscription_only",
 });
@@ -78,6 +87,27 @@ assert.deepEqual(
     leaseMs: 60 * 1_000,
     heartbeatMs: 5 * 1_000,
     terminalRetentionMs: 48 * 60 * 60 * 1_000,
+  },
+);
+assert.deepEqual(
+  loadConfig({
+    ...baseEnv,
+    DEVSPACE_TURN_CONTINUITY: "0",
+    DEVSPACE_TURN_HORIZON_MINUTES: "150",
+    DEVSPACE_TURN_HORIZON_AWARENESS_MINUTES: "115",
+    DEVSPACE_TURN_HORIZON_LANDING_MINUTES: "135",
+    DEVSPACE_RECOVERY_CAPSULE_RETENTION_HOURS: "168",
+    DEVSPACE_RECOVERY_CAPSULE_MAX_PER_WORKSPACE: "25",
+    DEVSPACE_RECOVERY_CAPSULE_MAX_CHARACTERS: "32000",
+  }).turnContinuity,
+  {
+    enabled: false,
+    estimatedTurnMs: 150 * 60 * 1_000,
+    awarenessAfterMs: 115 * 60 * 1_000,
+    landingAfterMs: 135 * 60 * 1_000,
+    capsuleRetentionMs: 168 * 60 * 60 * 1_000,
+    maxCapsulesPerWorkspace: 25,
+    maxCapsuleCharacters: 32_000,
   },
 );
 assert.deepEqual(
@@ -123,6 +153,22 @@ assert.equal(
     DEVSPACE_EXECUTOR_WINDOW_RETENTION_HOURS: "12",
   }),
   false,
+);
+assert.throws(
+  () => loadConfig({
+    ...baseEnv,
+    DEVSPACE_TURN_HORIZON_AWARENESS_MINUTES: "110",
+    DEVSPACE_TURN_HORIZON_LANDING_MINUTES: "110",
+  }),
+  /AWARENESS_MINUTES must be less than DEVSPACE_TURN_HORIZON_LANDING_MINUTES/,
+);
+assert.throws(
+  () => loadConfig({
+    ...baseEnv,
+    DEVSPACE_TURN_HORIZON_MINUTES: "120",
+    DEVSPACE_TURN_HORIZON_LANDING_MINUTES: "120",
+  }),
+  /LANDING_MINUTES must be less than DEVSPACE_TURN_HORIZON_MINUTES/,
 );
 assert.equal(loadConfig({ ...baseEnv, DEVSPACE_ARTIFACTS: "1" }).artifactsEnabled, true);
 assert.equal(

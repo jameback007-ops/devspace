@@ -65,7 +65,10 @@ import {
   type ProcessSnapshot,
 } from "./process-sessions.js";
 import { createReviewCheckpointManager } from "./review-checkpoints.js";
-import { executionScopeIdentity } from "./request-meta.js";
+import {
+  executionScopeIdentity,
+  executorTurnMetadata,
+} from "./request-meta.js";
 import { shutdownHttpServer } from "./server-shutdown.js";
 import { formatPathForPrompt } from "./skills.js";
 import { registerZesCodexInspectionTools } from "./zes-codex-inspection.js";
@@ -81,6 +84,17 @@ import {
   LocalAgentCoordinator,
   launchDetachedLocalAgentWorker,
 } from "./local-agent-coordinator.js";
+import {
+  TurnContinuityManager,
+  type RecoveryCapsuleInput,
+  type RecoveryCapsuleIntent,
+  type RecoveryEffectState,
+  type RecoveryRetryPolicy,
+  type RecoveryValidationState,
+  type RecoveryWorktreeState,
+  type RecoveryWriterState,
+  type TurnHorizonBeginReason,
+} from "./turn-continuity.js";
 
 type Transport = StreamableHTTPServerTransport;
 // MCP clients can reconnect without closing the previous transport. Bound stale
@@ -222,6 +236,7 @@ const toolExecutionContexts = new WeakMap<
   {
     executionScopes: ExecutionScopeManager;
     executionMailbox: ExecutionMailboxManager;
+    turnContinuity: TurnContinuityManager;
     config: ServerConfig;
   }
 >();
@@ -230,9 +245,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function appendExecutionMailboxNotice(
+function appendToolNotice(
   response: unknown,
   notice: string | undefined,
+  metadataKey: string,
 ): unknown {
   if (!notice || !isRecord(response)) return response;
   const content = Array.isArray(response.content)
@@ -247,14 +263,28 @@ function appendExecutionMailboxNotice(
       }
     : response.structuredContent;
   const metadata = isRecord(response._meta)
-    ? { ...response._meta, executionMailboxNotice: notice }
-    : { executionMailboxNotice: notice };
+    ? { ...response._meta, [metadataKey]: notice }
+    : { [metadataKey]: notice };
   return {
     ...response,
     content,
     _meta: metadata,
     ...(structuredContent === undefined ? {} : { structuredContent }),
   };
+}
+
+function appendExecutionMailboxNotice(
+  response: unknown,
+  notice: string | undefined,
+): unknown {
+  return appendToolNotice(response, notice, "executionMailboxNotice");
+}
+
+function appendTurnContinuityNotice(
+  response: unknown,
+  notice: string | undefined,
+): unknown {
+  return appendToolNotice(response, notice, "turnContinuityNotice");
 }
 
 const registerAppTool = ((
@@ -281,9 +311,11 @@ const registerAppTool = ((
       const {
         executionScopes,
         executionMailbox,
+        turnContinuity,
         config,
       } = toolContext;
       const executionIdentity = executionScopeIdentity(extra?._meta);
+      const turnMetadata = executorTurnMetadata(extra?._meta);
       let observation: ReturnType<ExecutionScopeManager["beginTool"]>;
       try {
         observation = executionScopes.beginTool(executionIdentity, name, input);
@@ -297,7 +329,22 @@ const registerAppTool = ((
         });
       }
       try {
+        turnContinuity.observeToolStart(
+          executionIdentity,
+          turnMetadata,
+          name,
+        );
+      } catch (error) {
+        logEvent(config.logging, "warn", "turn_continuity_observation_failed", {
+          stage: "begin",
+          tool: name,
+          scopeRef: executionIdentity?.scopeRef,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+      try {
         const response = await callback(input, extra);
+        const succeeded = !(isRecord(response) && response.isError === true);
         try {
           executionScopes.finishTool(
             observation,
@@ -306,6 +353,22 @@ const registerAppTool = ((
           );
         } catch (error) {
           logEvent(config.logging, "warn", "execution_scope_observation_failed", {
+            stage: "finish",
+            tool: name,
+            scopeRef: executionIdentity?.scopeRef,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+        try {
+          turnContinuity.observeToolFinish(
+            executionIdentity,
+            turnMetadata,
+            name,
+            input,
+            succeeded,
+          );
+        } catch (error) {
+          logEvent(config.logging, "warn", "turn_continuity_observation_failed", {
             stage: "finish",
             tool: name,
             scopeRef: executionIdentity?.scopeRef,
@@ -324,11 +387,28 @@ const registerAppTool = ((
             });
           }
         }
+        let continuityNotice: string | undefined;
+        try {
+          continuityNotice = turnContinuity.advisoryNotice(
+            executionIdentity,
+            turnMetadata,
+            name,
+          );
+        } catch (error) {
+          logEvent(config.logging, "warn", "turn_continuity_notice_failed", {
+            tool: name,
+            scopeRef: executionIdentity?.scopeRef,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
         const responseWithMailbox = appendExecutionMailboxNotice(
           response,
           mailboxNotice,
         );
-        return responseWithMailbox;
+        return appendTurnContinuityNotice(
+          responseWithMailbox,
+          continuityNotice,
+        );
       } catch (error) {
         try {
           executionScopes.finishTool(observation, "error", {
@@ -343,6 +423,25 @@ const registerAppTool = ((
               observationError instanceof Error
                 ? observationError.message
                 : String(observationError),
+          });
+        }
+        try {
+          turnContinuity.observeToolFinish(
+            executionIdentity,
+            turnMetadata,
+            name,
+            input,
+            false,
+          );
+        } catch (continuityError) {
+          logEvent(config.logging, "warn", "turn_continuity_observation_failed", {
+            stage: "finish_error",
+            tool: name,
+            scopeRef: executionIdentity?.scopeRef,
+            error:
+              continuityError instanceof Error
+                ? continuityError.message
+                : String(continuityError),
           });
         }
         throw error;
@@ -360,6 +459,9 @@ function serverInstructions(config: ServerConfig): string {
   const executionMailboxInstruction = config.executionMailbox.enabled
     ? " Use execution_scope_message_send to leave a durable message for another known scope, reusing one idempotencyKey for retries. Acceptance means stored, not observed. When a tool result reports pending mail, call execution_scope_message_inbox before opening a new major frontier, then record acknowledged or acted state with execution_scope_message_receipt. Use execution_scope_message_status to inspect a message you sent or received. The mailbox is executor-local coordination, not task, decision, effect, writer, or canonical-memory authority, and it cannot wake or inject text directly into an inactive WebChat transcript."
     : "";
+  const turnContinuityInstruction = config.turnContinuity.enabled
+    ? " When the host supplies no exact assistant-turn identity, call turn_horizon_begin once near the first tool call of each assistant turn with a new idempotencyKey. The horizon is advisory only: never rush task completion, reduce validation, force a commit, abandon dynamic replanning, or stop because of elapsed time. At material transitions and before ending a long turn, use recovery_capsule_record to persist the current causal frontier, exact next action, validation/effect safety, do-not-repeat constraints, and exact authorityStateRefs from current rightful-owner readback, then read it back with recovery_capsule_status before ending the turn. A capsule may describe an intentional dirty worktree and never claims task completion or canonical authority. On resumption, local workspace freshness is insufficient: rehydrate current canonical Git/main, task, decision, writer, runtime, and effect owners, then pass exact currentAuthorityStateRefs to recovery_capsule_status. Stale Git or changed authority state requires reconciliation and replanning, not blind replay."
+    : "";
   const localAgentInstruction = config.subagents
     ? " Use local_agent_session_list and local_agent_session_status to discover DevSpace-managed provider sessions. Provider availability is constrained by the configured billing policy; do not bypass an unavailable provider by supplying API credentials unless the Owner explicitly enabled payg_allowed. local_agent_message_send enqueues one idempotent turn for an existing qualified provider session; one worker lease serializes provider turns and acceptance means queued, not completed. Inspect local_agent_turn_status for the result. local_agent_turn_cancel is best-effort for running providers. An ordinary provider failure pauses later queued turns; use local_agent_session_resume after inspecting the failure. Never retry an indeterminate turn without explicit evidence-backed reconciliation through local_agent_turn_resolve because the prior provider effect may be unknown. Local-agent sessions and queues are executor-local coordination, not standing ZES identity, task, decision, writer, effect, or canonical-memory authority."
     : "";
@@ -372,7 +474,7 @@ function serverInstructions(config: ServerConfig): string {
       : "";
 
   if (config.toolMode === "codex") {
-    return `Use DevSpace for coding work. Call ${toolNames.openWorkspace} once for each project folder or isolated worktree, then keep using its workspaceId. During continued work in the same project or worktree, do not call ${toolNames.openWorkspace} again. Open another workspace only when changing projects, switching checkout/worktree mode, creating another isolated worktree, or when the current workspaceId is rejected. Use ${toolNames.read} for direct file reads, apply_patch for all file modifications, exec_command for inspection, tests, builds, and other commands, and write_stdin to poll or interact with running processes. Follow instructions returned by ${toolNames.openWorkspace}; read applicable instruction and skill files before working in their scope.${artifactInstruction}${showChangesInstruction}${codexSessionInstruction}${executionScopeInstruction}${executionMailboxInstruction}${localAgentInstruction}`;
+    return `Use DevSpace for coding work. Call ${toolNames.openWorkspace} once for each project folder or isolated worktree, then keep using its workspaceId. During continued work in the same project or worktree, do not call ${toolNames.openWorkspace} again. Open another workspace only when changing projects, switching checkout/worktree mode, creating another isolated worktree, or when the current workspaceId is rejected. Use ${toolNames.read} for direct file reads, apply_patch for all file modifications, exec_command for inspection, tests, builds, and other commands, and write_stdin to poll or interact with running processes. Follow instructions returned by ${toolNames.openWorkspace}; read applicable instruction and skill files before working in their scope.${artifactInstruction}${showChangesInstruction}${codexSessionInstruction}${executionScopeInstruction}${executionMailboxInstruction}${turnContinuityInstruction}${localAgentInstruction}`;
   }
 
   const inspection = config.toolMode !== "full"
@@ -385,7 +487,7 @@ function serverInstructions(config: ServerConfig): string {
 
   const agentsMd = `Follow instructions returned by ${toolNames.openWorkspace}. Before working under a path listed in availableAgentsFiles, use ${toolNames.read} to inspect that instruction file and follow it. `;
 
-  return `Use DevSpace for coding work. Call ${toolNames.openWorkspace} once for each project folder or isolated worktree, then keep using its workspaceId. During continued work in the same project or worktree, do not call ${toolNames.openWorkspace} again. Open another workspace only when changing projects, switching checkout/worktree mode, creating another isolated worktree, or when the current workspaceId is rejected. ${agentsMd}${skills}${inspection}Prefer ${toolNames.edit} for targeted modifications, ${toolNames.write} only for new files or complete rewrites, and ${toolNames.shell} for tests, builds, git inspection, package scripts, and commands that are better executed by the shell. Do not create or modify files with ${toolNames.shell}; avoid shell redirection, heredocs, tee, sed -i, perl -i, node/python/ruby scripts, or any command whose purpose is to write project files.${artifactInstruction}${showChangesInstruction}${codexSessionInstruction}${executionScopeInstruction}${executionMailboxInstruction}${localAgentInstruction}`;
+  return `Use DevSpace for coding work. Call ${toolNames.openWorkspace} once for each project folder or isolated worktree, then keep using its workspaceId. During continued work in the same project or worktree, do not call ${toolNames.openWorkspace} again. Open another workspace only when changing projects, switching checkout/worktree mode, creating another isolated worktree, or when the current workspaceId is rejected. ${agentsMd}${skills}${inspection}Prefer ${toolNames.edit} for targeted modifications, ${toolNames.write} only for new files or complete rewrites, and ${toolNames.shell} for tests, builds, git inspection, package scripts, and commands that are better executed by the shell. Do not create or modify files with ${toolNames.shell}; avoid shell redirection, heredocs, tee, sed -i, perl -i, node/python/ruby scripts, or any command whose purpose is to write project files.${artifactInstruction}${showChangesInstruction}${codexSessionInstruction}${executionScopeInstruction}${executionMailboxInstruction}${turnContinuityInstruction}${localAgentInstruction}`;
 }
 
 function formatVisibleAgent(agent: {
@@ -984,6 +1086,213 @@ function registerExecutionMailboxTools(
   );
 }
 
+function registerTurnContinuityTools(
+  server: McpServer,
+  config: ServerConfig,
+  turnContinuity: TurnContinuityManager,
+  workspaces: WorkspaceRegistry,
+): void {
+  if (!config.turnContinuity.enabled) return;
+  const advisoryWriteAnnotations = {
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: false,
+  };
+  const listSchema = z
+    .array(z.string().min(1).max(2_000))
+    .max(50)
+    .optional();
+
+  registerAppTool(
+    server,
+    "turn_horizon_begin",
+    {
+      title: "Begin advisory turn horizon",
+      description:
+        "Begin or recover one advisory assistant-turn horizon when the MCP host supplies no exact turn identity. This never creates, limits, completes, or schedules a task; it never blocks tools. Reuse the exact idempotencyKey only when retrying the same begin call.",
+      inputSchema: {
+        idempotencyKey: z
+          .string()
+          .min(1)
+          .max(200)
+          .describe("Stable retry key for this exact assistant-turn begin call."),
+        reason: z.enum(["new_turn", "recovery_after_cutoff", "manual_test"]),
+      },
+      outputSchema: resultOutputSchema({ data: z.unknown() }),
+      ...toolWidgetDescriptorMeta(config, "read"),
+      annotations: advisoryWriteAnnotations,
+    },
+    async ({ idempotencyKey, reason }, { _meta }) => jsonToolResponse(
+      turnContinuity.begin(
+        executionScopeIdentity(_meta),
+        executorTurnMetadata(_meta),
+        {
+          idempotencyKey,
+          reason: reason as TurnHorizonBeginReason,
+        },
+      ),
+    ),
+  );
+
+  registerAppTool(
+    server,
+    "turn_horizon_status",
+    {
+      title: "Read advisory turn horizon",
+      description:
+        "Read the current advisory horizon, estimated or exact remaining time, and whether observed mutations occurred after the latest capsule. This is scheduling guidance only: tools remain available and no task completion, commit, yield, or quality reduction is required.",
+      inputSchema: {},
+      outputSchema: resultOutputSchema({ data: z.unknown() }),
+      ...toolWidgetDescriptorMeta(config, "read"),
+      annotations: CODEX_SESSION_TOOL_ANNOTATIONS,
+    },
+    async (_input, { _meta }) => jsonToolResponse(
+      turnContinuity.status(
+        executionScopeIdentity(_meta),
+        executorTurnMetadata(_meta),
+      ),
+    ),
+  );
+
+  registerAppTool(
+    server,
+    "recovery_capsule_record",
+    {
+      title: "Record executor recovery capsule",
+      description:
+        "Persist one Git-bound executor-local recovery capsule for the exact opened workspace. It records a recoverable causal frontier, not task completion or canonical truth. Include exact authorityStateRefs from current rightful-owner readback when available; local Git freshness alone never proves canonical freshness. Intentional dirty state is valid. Do not include credentials, transcripts, or private model reasoning; reuse the exact idempotencyKey only for the same semantic payload and workspace state.",
+      inputSchema: {
+        workspaceId: z.string().describe(workspaceIdDescription),
+        idempotencyKey: z
+          .string()
+          .min(1)
+          .max(200)
+          .describe("Stable retry key for this exact capsule payload and workspace state."),
+        intent: z.enum(["rolling", "turn_boundary", "before_effect", "after_effect"]),
+        missionRef: z.string().min(1).max(1_000).optional(),
+        authorityOwnerRefs: listSchema.describe(
+          "Rightful canonical/runtime/writer/effect owners consulted for this frontier.",
+        ),
+        authorityStateRefs: listSchema.describe(
+          "Exact immutable generation, decision, Git-main, writer, runtime, or effect refs observed from those owners at record time.",
+        ),
+        currentFrontier: z.string().min(1).max(4_000),
+        currentCausalSlice: z.string().min(1).max(4_000),
+        established: listSchema,
+        validationState: z.enum(["unknown", "not_run", "partial", "failed", "passed"]),
+        validationRefs: listSchema,
+        worktreeState: z.enum(["clean", "intentional_dirty", "unknown"]),
+        effectState: z.enum(["none", "in_flight", "terminal", "unknown"]),
+        effectKeys: listSchema,
+        writerState: z.enum(["none", "held", "released", "unknown"]).optional(),
+        writerRefs: listSchema,
+        retryPolicy: z.enum([
+          "normal",
+          "forbidden",
+          "reconcile_before_retry",
+          "owner_authorization_required",
+        ]),
+        safeToMutate: z.boolean().optional(),
+        safeToPublish: z.boolean().optional(),
+        exactNextAction: z.string().min(1).max(4_000),
+        doNotRepeat: listSchema,
+        unresolved: listSchema,
+        checkpointRefs: listSchema,
+        notes: z.string().min(1).max(4_000).optional(),
+      },
+      outputSchema: resultOutputSchema({ data: z.unknown() }),
+      ...toolWidgetDescriptorMeta(config, "read"),
+      annotations: advisoryWriteAnnotations,
+    },
+    async (
+      {
+        workspaceId,
+        idempotencyKey,
+        intent,
+        missionRef,
+        authorityOwnerRefs,
+        authorityStateRefs,
+        currentFrontier,
+        currentCausalSlice,
+        established,
+        validationState,
+        validationRefs,
+        worktreeState,
+        effectState,
+        effectKeys,
+        writerState,
+        writerRefs,
+        retryPolicy,
+        safeToMutate,
+        safeToPublish,
+        exactNextAction,
+        doNotRepeat,
+        unresolved,
+        checkpointRefs,
+        notes,
+      },
+      { _meta },
+    ) => jsonToolResponse(
+      await turnContinuity.recordCapsule(
+        executionScopeIdentity(_meta),
+        workspaces.getWorkspace(workspaceId),
+        {
+          idempotencyKey,
+          intent: intent as RecoveryCapsuleIntent,
+          missionRef,
+          authorityOwnerRefs,
+          authorityStateRefs,
+          currentFrontier,
+          currentCausalSlice,
+          established,
+          validationState: validationState as RecoveryValidationState,
+          validationRefs,
+          worktreeState: worktreeState as RecoveryWorktreeState,
+          effectState: effectState as RecoveryEffectState,
+          effectKeys,
+          writerState: writerState as RecoveryWriterState | undefined,
+          writerRefs,
+          retryPolicy: retryPolicy as RecoveryRetryPolicy,
+          safeToMutate,
+          safeToPublish,
+          exactNextAction,
+          doNotRepeat,
+          unresolved,
+          checkpointRefs,
+          notes,
+        } satisfies RecoveryCapsuleInput,
+      ),
+    ),
+  );
+
+  registerAppTool(
+    server,
+    "recovery_capsule_status",
+    {
+      title: "Read executor recovery capsule",
+      description:
+        "Read the latest capsule for the exact opened workspace root across retained execution scopes and compare it with current Git-bound state. Optionally supply exact currentAuthorityStateRefs obtained from fresh rightful-owner readback; without them, canonical freshness remains unverified even when the local workspace matches. A stale capsule is returned for reconciliation but cannot authorize blind replay, mutation, effect retry, or publication.",
+      inputSchema: {
+        workspaceId: z.string().describe(workspaceIdDescription),
+        currentAuthorityStateRefs: listSchema.describe(
+          "Exact current canonical/runtime/writer/effect refs from fresh external owner readback. Time or TTL is not a substitute.",
+        ),
+      },
+      outputSchema: resultOutputSchema({ data: z.unknown() }),
+      ...toolWidgetDescriptorMeta(config, "read"),
+      annotations: CODEX_SESSION_TOOL_ANNOTATIONS,
+    },
+    async ({ workspaceId, currentAuthorityStateRefs }, { _meta }) => jsonToolResponse(
+      await turnContinuity.capsuleStatus(
+        executionScopeIdentity(_meta),
+        workspaces.getWorkspace(workspaceId),
+        { currentAuthorityStateRefs },
+      ),
+    ),
+  );
+}
+
 function registerLocalAgentTools(
   server: McpServer,
   config: ServerConfig,
@@ -1409,10 +1718,12 @@ export function createMcpServer(
   executionScopes?: ExecutionScopeManager,
   executionMailbox?: ExecutionMailboxManager,
   localAgentCoordinator?: LocalAgentCoordinator,
+  turnContinuity?: TurnContinuityManager,
 ): McpServer {
   const ownsExecutionScopes = executionScopes === undefined;
   const ownsExecutionMailbox = executionMailbox === undefined;
   const ownsLocalAgentCoordinator = config.subagents && localAgentCoordinator === undefined;
+  const ownsTurnContinuity = turnContinuity === undefined;
   const activeExecutionScopes = executionScopes ?? new ExecutionScopeManager(
     config.executionObservability,
     config.stateDir,
@@ -1420,6 +1731,10 @@ export function createMcpServer(
   );
   const activeExecutionMailbox = executionMailbox ?? new ExecutionMailboxManager(
     config.executionMailbox,
+    config.stateDir,
+  );
+  const activeTurnContinuity = turnContinuity ?? new TurnContinuityManager(
+    config.turnContinuity,
     config.stateDir,
   );
   const activeLocalAgentCoordinator = config.subagents
@@ -1437,7 +1752,7 @@ export function createMcpServer(
       title: "DevSpace",
       version: "0.7.0-zes.1",
       description:
-        "Coding tools for project workspaces, execution-scope observability and messaging, serialized local-agent provider continuation, and optional read-only inspection of the exact live AOQ Codex adapter and worktree.",
+        "Coding tools for project workspaces, advisory turn continuity and Git-bound recovery capsules, execution-scope observability and messaging, serialized local-agent provider continuation, and optional read-only inspection of the exact live AOQ Codex adapter and worktree.",
     },
     {
       instructions: serverInstructions(config),
@@ -1447,6 +1762,7 @@ export function createMcpServer(
   toolExecutionContexts.set(server, {
     executionScopes: activeExecutionScopes,
     executionMailbox: activeExecutionMailbox,
+    turnContinuity: activeTurnContinuity,
     config,
   });
 
@@ -1483,6 +1799,12 @@ export function createMcpServer(
 
   registerExecutionScopeTools(server, config, activeExecutionScopes);
   registerExecutionMailboxTools(server, config, activeExecutionMailbox);
+  registerTurnContinuityTools(
+    server,
+    config,
+    activeTurnContinuity,
+    workspaces,
+  );
   if (activeLocalAgentCoordinator) {
     registerLocalAgentTools(server, config, activeLocalAgentCoordinator);
   }
@@ -2479,7 +2801,12 @@ export function createMcpServer(
     });
   }
 
-  if (ownsExecutionScopes || ownsExecutionMailbox || ownsLocalAgentCoordinator) {
+  if (
+    ownsExecutionScopes
+    || ownsExecutionMailbox
+    || ownsLocalAgentCoordinator
+    || ownsTurnContinuity
+  ) {
     const close = server.close.bind(server);
     let closing: Promise<void> | undefined;
     server.close = () => {
@@ -2489,6 +2816,7 @@ export function createMcpServer(
         } finally {
           if (ownsExecutionScopes) activeExecutionScopes.close();
           if (ownsExecutionMailbox) activeExecutionMailbox.close();
+          if (ownsTurnContinuity) activeTurnContinuity.close();
           if (ownsLocalAgentCoordinator) activeLocalAgentCoordinator?.close();
         }
       })();
@@ -2536,6 +2864,10 @@ export function createServer(
   );
   const executionMailbox = new ExecutionMailboxManager(
     config.executionMailbox,
+    config.stateDir,
+  );
+  const turnContinuity = new TurnContinuityManager(
+    config.turnContinuity,
     config.stateDir,
   );
   const localAgentCoordinator = config.subagents
@@ -2700,6 +3032,7 @@ export function createServer(
           executionScopes,
           executionMailbox,
           localAgentCoordinator,
+          turnContinuity,
         );
         await server.connect(transport);
         res.on("close", () => {
@@ -2745,6 +3078,7 @@ export function createServer(
           executionScopes,
           executionMailbox,
           localAgentCoordinator,
+          turnContinuity,
         );
         await server.connect(transport);
       } else if (req.method === "POST") {
@@ -2764,6 +3098,7 @@ export function createServer(
           executionScopes,
           executionMailbox,
           localAgentCoordinator,
+          turnContinuity,
         );
         await server.connect(transport);
         res.on("close", () => {
@@ -2799,6 +3134,7 @@ export function createServer(
         logSessionCloseResults("server_shutdown", results);
         processSessions.shutdown();
         localAgentCoordinator?.close();
+        turnContinuity.close();
         executionMailbox.close();
         executionScopes.close();
         oauthProvider.close();
