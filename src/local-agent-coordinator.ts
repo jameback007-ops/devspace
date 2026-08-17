@@ -122,7 +122,11 @@ export class LocalAgentCoordinator {
     this.runProvider = options.runProvider ?? runLocalAgentProvider;
     this.loadProfiles = options.loadProfiles ?? loadLocalAgentProfiles;
     this.assertProviderAvailable = options.assertProviderAvailable
-      ?? ((provider) => assertLocalAgentProviderAvailable(provider));
+      ?? ((provider) => assertLocalAgentProviderAvailable(
+        provider,
+        process.env,
+        config.localAgentBilling.mode,
+      ));
   }
 
   listSessions(
@@ -389,6 +393,7 @@ export class LocalAgentCoordinator {
             model: running.model,
             thinking: running.thinking,
             signal: currentAbortController.signal,
+            billingMode: this.config.localAgentBilling.mode,
           });
           if (leaseLost) {
             const indeterminate = this.queue.markIndeterminate(

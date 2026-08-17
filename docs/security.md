@@ -171,6 +171,14 @@ message, create a WebChat turn, or inject text into a host transcript.
 
 ## Local-Agent Provider Continuation
 
+Local-agent billing defaults to `subscription_only`. DevSpace blocks known
+API-key, custom-provider, cloud-provider, and BYOK overrides before provider
+execution. Codex and Claude additionally require subscription-auth attestation;
+OpenCode and Pi are unavailable until their adapters can pin and attest a
+subscription-backed provider. The only bypass is the explicit
+`DEVSPACE_LOCAL_AGENT_BILLING_MODE=payg_allowed` setting. Credential values are
+never placed in availability errors or execution-scope audit.
+
 Local-agent prompt bodies and final provider responses are intentionally
 persisted in the owner-only SQLite database because they are the durable input
 and output of provider-session continuation. Do not include credentials,

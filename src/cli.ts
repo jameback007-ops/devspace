@@ -404,7 +404,11 @@ async function runAgentsRun(args: string[]): Promise<void> {
           `Unknown subagent profile, provider, or id: ${parsed.target}. Available ${formatAvailableLocalAgentTargets(profiles)}`,
         );
       }
-      assertLocalAgentProviderAvailable(target.provider);
+      assertLocalAgentProviderAvailable(
+        target.provider,
+        process.env,
+        config.localAgentBilling.mode,
+      );
       record = coordinator.store.create({
         workspaceId: process.env.DEVSPACE_WORKSPACE_ID,
         workspaceRoot,

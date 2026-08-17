@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { delimiter } from "node:path";
 import {
   claudeCommandEnvironment,
+  codexOptionsForBilling,
   createLocalAgentAdapter,
   extractOpenCodeFinalResponse,
   extractPiFinalResponse,
@@ -28,6 +29,15 @@ for (const provider of providers) {
   assert.equal(adapter.provider, provider);
   assert.equal(typeof adapter.run, "function");
 }
+
+assert.deepEqual(codexOptionsForBilling("payg_allowed"), undefined);
+assert.deepEqual(codexOptionsForBilling("subscription_only"), {
+  config: {
+    model_provider: "openai",
+    openai_base_url: "https://chatgpt.com/backend-api/codex",
+    chatgpt_base_url: "https://chatgpt.com/backend-api/",
+  },
+});
 
 assert.deepEqual(
   resolveAcpModelConfigUpdate({

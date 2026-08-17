@@ -48,6 +48,16 @@ assert.deepEqual(loadConfig(baseEnv).executionMailbox, {
   maxPendingPerScope: 500,
   maxBodyCharacters: 12_000,
 });
+assert.deepEqual(loadConfig(baseEnv).localAgentBilling, {
+  mode: "subscription_only",
+});
+assert.deepEqual(
+  loadConfig({
+    ...baseEnv,
+    DEVSPACE_LOCAL_AGENT_BILLING_MODE: "payg_allowed",
+  }).localAgentBilling,
+  { mode: "payg_allowed" },
+);
 assert.deepEqual(loadConfig(baseEnv).localAgentQueue, {
   maxPendingPerAgent: 200,
   maxBodyCharacters: 24_000,
@@ -244,6 +254,13 @@ assert.throws(
 assert.throws(
   () => loadConfig({ ...baseEnv, DEVSPACE_ARTIFACT_MAX_FILE_BYTES: "0" }),
   /Invalid DEVSPACE_ARTIFACT_MAX_FILE_BYTES: 0/,
+);
+assert.throws(
+  () => loadConfig({
+    ...baseEnv,
+    DEVSPACE_LOCAL_AGENT_BILLING_MODE: "auto",
+  }),
+  /Invalid DEVSPACE_LOCAL_AGENT_BILLING_MODE: auto/,
 );
 assert.throws(
   () => loadConfig({

@@ -281,6 +281,15 @@ lease, cancellation, crash-recovery, and authority semantics.
 | `DEVSPACE_LOCAL_AGENT_LEASE_SECONDS` | `120` | Worker lease duration. A new worker may recover only after expiry. |
 | `DEVSPACE_LOCAL_AGENT_HEARTBEAT_SECONDS` | `15` | Lease renewal and running-cancellation poll interval. Must be less than the lease duration. |
 | `DEVSPACE_LOCAL_AGENT_TERMINAL_RETENTION_HOURS` | `168` | Retain succeeded, failed, and cancelled turns for seven days. |
+| `DEVSPACE_LOCAL_AGENT_BILLING_MODE` | `subscription_only` | Reject known API/BYOK routes and ambiguous auth. Set `payg_allowed` only to opt into usage-billed credentials. |
+
+`subscription_only` is deliberately fail-closed. Codex must attest a ChatGPT
+login and Claude must attest first-party subscription auth. Cursor and Copilot
+remain available only when their known API/BYOK environment overrides are not
+present. OpenCode and Pi are unavailable in this mode because the current
+DevSpace adapters do not pin them to one subscription-backed model provider.
+This guard prevents DevSpace from silently choosing a known PAYG route; it is
+not a spending cap on vendor-side subscription overage or extra usage.
 
 The MCP surface adds `local_agent_session_list`,
 `local_agent_session_status`, `local_agent_session_resume`, `local_agent_message_send`,

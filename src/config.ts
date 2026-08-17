@@ -6,6 +6,10 @@ import type { OAuthConfig } from "./oauth-provider.js";
 import type { ExecutorWindowConfig } from "./executor-window.js";
 import type { ExecutionObservabilityConfig } from "./execution-observability.js";
 import type { ExecutionMailboxConfig } from "./execution-mailbox.js";
+import {
+  parseLocalAgentBillingMode,
+  type LocalAgentBillingConfig,
+} from "./local-agent-billing.js";
 import type { LocalAgentQueueConfig } from "./local-agent-queue.js";
 import { devspaceAgentsDir, devspaceSkillsDir, loadDevspaceFiles } from "./user-config.js";
 
@@ -54,6 +58,7 @@ export interface ServerConfig {
   executorWindow: ExecutorWindowConfig;
   executionObservability: ExecutionObservabilityConfig;
   executionMailbox: ExecutionMailboxConfig;
+  localAgentBilling: LocalAgentBillingConfig;
   localAgentQueue: LocalAgentQueueConfig;
   logging: LoggingConfig;
 }
@@ -448,6 +453,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     executorWindow: parseExecutorWindowConfig(env),
     executionObservability: parseExecutionObservabilityConfig(env),
     executionMailbox: parseExecutionMailboxConfig(env),
+    localAgentBilling: {
+      mode: parseLocalAgentBillingMode(env.DEVSPACE_LOCAL_AGENT_BILLING_MODE),
+    },
     localAgentQueue: parseLocalAgentQueueConfig(env),
     logging: parseLoggingConfig(env),
   };

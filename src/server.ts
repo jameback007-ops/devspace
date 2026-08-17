@@ -488,7 +488,7 @@ function serverInstructions(config: ServerConfig): string {
     ? " Use execution_scope_message_send to leave a durable message for another known scope, reusing one idempotencyKey for retries. Acceptance means stored, not observed. When a tool result reports pending mail, call execution_scope_message_inbox before opening a new major frontier, then record acknowledged or acted state with execution_scope_message_receipt. Use execution_scope_message_status to inspect a message you sent or received. The mailbox is executor-local coordination, not task, decision, effect, writer, or canonical-memory authority, and it cannot wake or inject text directly into an inactive WebChat transcript."
     : "";
   const localAgentInstruction = config.subagents
-    ? " Use local_agent_session_list and local_agent_session_status to discover DevSpace-managed provider sessions. local_agent_message_send enqueues one idempotent turn for an existing Codex, Claude, OpenCode, or Pi session; one worker lease serializes provider turns and acceptance means queued, not completed. Inspect local_agent_turn_status for the result. local_agent_turn_cancel is best-effort for running providers. An ordinary provider failure pauses later queued turns; use local_agent_session_resume after inspecting the failure. Never retry an indeterminate turn without explicit evidence-backed reconciliation through local_agent_turn_resolve because the prior provider effect may be unknown. Local-agent sessions and queues are executor-local coordination, not standing ZES identity, task, decision, writer, effect, or canonical-memory authority."
+    ? " Use local_agent_session_list and local_agent_session_status to discover DevSpace-managed provider sessions. Provider availability is constrained by the configured billing policy; do not bypass an unavailable provider by supplying API credentials unless the Owner explicitly enabled payg_allowed. local_agent_message_send enqueues one idempotent turn for an existing qualified provider session; one worker lease serializes provider turns and acceptance means queued, not completed. Inspect local_agent_turn_status for the result. local_agent_turn_cancel is best-effort for running providers. An ordinary provider failure pauses later queued turns; use local_agent_session_resume after inspecting the failure. Never retry an indeterminate turn without explicit evidence-backed reconciliation through local_agent_turn_resolve because the prior provider effect may be unknown. Local-agent sessions and queues are executor-local coordination, not standing ZES identity, task, decision, writer, effect, or canonical-memory authority."
     : "";
   const artifactInstruction = config.artifactsEnabled && isArtifactDownloadSupportedPlatform()
     ? " When the user supplies or generates a file that is not present on the DevSpace host, use download_artifact with its native file value, the existing workspace ID, and a suitable relative destination path chosen from the user's request and project structure. The tool refuses to overwrite an existing destination and returns the normalized workspace-relative path. Use normal workspace tools when explicit inspection, replacement, movement, renaming, or deletion is needed. Do not recreate binary files with write/edit calls or place signed URLs, native file objects, base64 content, or invented host paths in shell commands or logs."
@@ -2760,7 +2760,10 @@ export function createServer(
       })
     : undefined;
   const localAgentProviders = config.subagents
-    ? getLocalAgentProviderAvailabilitySnapshot()
+    ? getLocalAgentProviderAvailabilitySnapshot(
+        process.env,
+        config.localAgentBilling.mode,
+      )
     : [];
 
   const logSessionCloseResults = (
@@ -3054,6 +3057,7 @@ if (await isMainModule()) {
     console.log(`native artifact download: ${artifactDownloadStatus}`);
     if (config.subagents) {
       console.log(`subagent providers: ${formatLocalAgentProviderAvailabilitySummary(localAgentProviders)}`);
+      console.log(`local-agent billing: ${config.localAgentBilling.mode}`);
       console.log(
         `local-agent queue: max pending ${config.localAgentQueue.maxPendingPerAgent}, lease ${Math.round(config.localAgentQueue.leaseMs / 1_000)}s, heartbeat ${Math.round(config.localAgentQueue.heartbeatMs / 1_000)}s`,
       );

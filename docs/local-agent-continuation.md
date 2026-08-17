@@ -5,6 +5,30 @@ accept new work from either the CLI or another execution scope. This layer is
 for DevSpace-managed provider sessions; it is separate from WebChat execution
 scopes and from canonical ZES task, decision, writer, effect, or memory state.
 
+## Billing safety
+
+Local-agent provider execution defaults to
+`DEVSPACE_LOCAL_AGENT_BILLING_MODE=subscription_only`. In that mode DevSpace
+fails closed rather than silently falling through to a usage-billed API route:
+
+- Codex must attest that the CLI is logged in through ChatGPT;
+- Claude must attest first-party subscription auth;
+- Cursor and Copilot are rejected when known API/BYOK environment overrides
+  are present;
+- OpenCode and Pi are disabled because their current adapters are multi-provider
+  and do not pin one subscription-backed backend.
+
+The guard runs during provider discovery and immediately before an adapter is
+used. Credential variable names may appear in a diagnostic, but credential
+values never do. `payg_allowed` is an explicit escape hatch for intentional
+usage-billed credentials. The policy does not cap vendor-side subscription
+overage or extra-usage features.
+
+In `subscription_only`, the Codex local-agent lane also overrides provider
+routing to Codex's built-in `openai` provider and the official ChatGPT Codex
+endpoint, so a user-level custom `model_provider` or base URL is not inherited
+by that lane.
+
 ## Supported continuation adapters
 
 This version qualifies provider-session continuation for:

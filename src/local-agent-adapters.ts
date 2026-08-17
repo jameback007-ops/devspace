@@ -1,7 +1,13 @@
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { resolve } from "node:path";
 import { Readable, Writable } from "node:stream";
+import type { CodexOptions } from "@openai/codex-sdk";
 import type { EffortLevel } from "@anthropic-ai/claude-agent-sdk";
+import {
+  parseLocalAgentBillingMode,
+  type LocalAgentBillingMode,
+} from "./local-agent-billing.js";
+import { assertLocalAgentProviderAvailable } from "./local-agent-availability.js";
 import type { LocalAgentProvider } from "./local-agent-profiles.js";
 import { removeDevspaceNodeModulesBinFromPath } from "./local-agent-path.js";
 import {
@@ -25,7 +31,15 @@ export async function runLocalAgentProvider(
   provider: LocalAgentProvider,
   input: LocalAgentRunInput,
 ): Promise<LocalAgentRunResult> {
-  return createLocalAgentAdapter(provider).run(input);
+  const billingMode = input.billingMode ?? parseLocalAgentBillingMode(
+    process.env.DEVSPACE_LOCAL_AGENT_BILLING_MODE,
+  );
+  assertLocalAgentProviderAvailable(
+    provider,
+    process.env,
+    billingMode,
+  );
+  return createLocalAgentAdapter(provider).run({ ...input, billingMode });
 }
 
 export function createLocalAgentAdapter(provider: LocalAgentProvider): LocalAgentAdapter {
@@ -48,9 +62,24 @@ class CodexLocalAgentAdapter implements LocalAgentAdapter {
   readonly provider = "codex" as const;
 
   async run(input: LocalAgentRunInput): Promise<LocalAgentRunResult> {
-    const runtime = await createCodexSdkLocalAgentRuntime();
+    const runtime = await createCodexSdkLocalAgentRuntime(
+      codexOptionsForBilling(input.billingMode),
+    );
     return runtime.run(input);
   }
+}
+
+export function codexOptionsForBilling(
+  billingMode: LocalAgentBillingMode | undefined,
+): CodexOptions | undefined {
+  if (billingMode === "payg_allowed") return undefined;
+  return {
+    config: {
+      model_provider: "openai",
+      openai_base_url: "https://chatgpt.com/backend-api/codex",
+      chatgpt_base_url: "https://chatgpt.com/backend-api/",
+    },
+  };
 }
 
 class ClaudeLocalAgentAdapter implements LocalAgentAdapter {

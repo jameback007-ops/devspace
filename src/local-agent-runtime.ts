@@ -6,6 +6,7 @@ import type {
   SandboxMode,
   ThreadOptions,
 } from "@openai/codex-sdk";
+import type { LocalAgentBillingMode } from "./local-agent-billing.js";
 
 export type LocalAgentWriteMode = "read_only" | "allowed" | "full_access";
 
@@ -17,6 +18,7 @@ export interface LocalAgentRunInput {
   model?: string;
   thinking?: string;
   signal?: AbortSignal;
+  billingMode?: LocalAgentBillingMode;
 }
 
 export interface LocalAgentRunResult {

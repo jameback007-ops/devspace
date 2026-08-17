@@ -139,6 +139,7 @@ DevSpace gives ChatGPT tools to:
 - use isolated Git worktrees for parallel coding sessions
 - inspect independent host execution scopes without merging their conversations
 - send durable target-bound messages between execution scopes with receipts
+- keep local subagents on fail-closed subscription auth unless PAYG is explicitly enabled
 - enqueue serialized follow-up turns into DevSpace-managed Codex, Claude, OpenCode, and Pi sessions
 - follow project instructions from `AGENTS.md` and `CLAUDE.md`
 - discover local agent skills from your skill folders
