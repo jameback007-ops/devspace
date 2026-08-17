@@ -14,7 +14,7 @@ relevant open upstream pull requests.
 - Upstream repository: `Waishnav/devspace`
 - Upstream main: `b5b4ab62a8718e1186aef815538741d9402f92ba`
   (`v1.0.7`)
-- ZES fork baseline: `8c45cb35b0567086bf9b1845811bcf8dc21daf1d`
+- ZES fork baseline: `8c45cb38e817f0a13f76eb6833fed367f0960806`
 - Fork divergence at audit time: 14 commits ahead, 0 commits behind upstream
   main
 - Deployed tool mode: `codex`
