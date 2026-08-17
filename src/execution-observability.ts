@@ -86,6 +86,7 @@ const NON_AUDITED_TOOL_NAMES = new Set([
 ]);
 const MAX_DETAIL_JSON_BYTES = 16_000;
 const MAX_SAFE_TEXT = 4_096;
+const MAX_SAFE_FILE_RECEIPTS = 50;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -276,14 +277,56 @@ function summarizeExecutionToolResponse(response: unknown): Record<string, unkno
   if (!structured) return {};
 
   const detail: Record<string, unknown> = {};
-  for (const key of ["workspaceId", "mode", "sourceRoot", "root", "signal"]) {
+  for (const key of [
+    "workspaceId",
+    "mode",
+    "sourceRoot",
+    "root",
+    "signal",
+    "status",
+    "wakeReason",
+    "outputDeltaDigestSha256",
+    "outputDigestSha256",
+  ]) {
     addString(detail, structured, key);
   }
-  for (const key of ["sessionId", "exitCode", "wallTimeMs"]) {
+  for (const key of [
+    "sessionId",
+    "exitCode",
+    "wallTimeMs",
+    "outputDeltaBytes",
+    "outputTotalBytes",
+    "outputEventCount",
+    "outputSequenceStart",
+    "outputSequenceEnd",
+    "additions",
+    "removals",
+  ]) {
     addInteger(detail, structured, key);
   }
-  for (const key of ["running", "outputTruncated"]) {
+  for (const key of ["running", "outputTruncated", "outputComplete"]) {
     addBoolean(detail, structured, key);
+  }
+  if (Array.isArray(structured.files)) {
+    detail.fileReceiptCount = structured.files.length;
+    const files = structured.files
+      .slice(0, MAX_SAFE_FILE_RECEIPTS)
+      .flatMap((value) => {
+        if (!isRecord(value)) return [];
+        const path = boundedString(value.path, 1_000);
+        const previousPath = boundedString(value.previousPath, 1_000);
+        const operation = boundedString(value.operation, 32);
+        if (!path || !operation) return [];
+        return [{
+          path,
+          ...(previousPath ? { previousPath } : {}),
+          operation,
+        }];
+      });
+    if (files.length > 0) detail.files = files;
+    if (structured.files.length > MAX_SAFE_FILE_RECEIPTS) {
+      detail.fileReceiptsTruncated = true;
+    }
   }
   return detail;
 }

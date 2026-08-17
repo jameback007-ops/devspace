@@ -83,6 +83,14 @@ test("execution scope inspection joins durable audit with live workspace and pro
         running: true,
         wallTimeMs: 1,
         outputTruncated: false,
+        outputDeltaBytes: 12,
+        outputDeltaDigestSha256: "a".repeat(64),
+        outputTotalBytes: 12,
+        outputDigestSha256: "b".repeat(64),
+        outputEventCount: 1,
+        outputSequenceStart: 1,
+        outputSequenceEnd: 1,
+        outputComplete: true,
       },
     },
   });
@@ -147,6 +155,14 @@ test("execution scope inspection joins durable audit with live workspace and pro
   const detail = events[0]?.detail as Record<string, unknown>;
   assert.equal(detail.cmdLength, command.length);
   assert.match(String(detail.cmdDigestSha256), /^[a-f0-9]{64}$/);
+  assert.equal(detail.outputDeltaBytes, 12);
+  assert.equal(detail.outputDeltaDigestSha256, "a".repeat(64));
+  assert.equal(detail.outputTotalBytes, 12);
+  assert.equal(detail.outputDigestSha256, "b".repeat(64));
+  assert.equal(detail.outputEventCount, 1);
+  assert.equal(detail.outputSequenceStart, 1);
+  assert.equal(detail.outputSequenceEnd, 1);
+  assert.equal(detail.outputComplete, true);
   assert.equal("cmd" in detail, false);
   assert.equal(JSON.stringify(audit).includes("secret-value-from-command"), false);
   const summary = audit.summary as Record<string, unknown>;
@@ -170,6 +186,56 @@ test("execution scope inspection joins durable audit with live workspace and pro
     sessionId: foreignProcess.sessionId,
     yieldTimeMs: 2_000,
   });
+});
+
+test("apply_patch observations retain bounded file receipts without patch content", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "devspace-execution-patch-receipt-"));
+  const stateDir = join(root, ".state");
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const processes = new ProcessSessionManager();
+  const manager = new ExecutionScopeManager(config, stateDir, processes);
+  t.after(() => {
+    processes.shutdown();
+    manager.close();
+  });
+  const identity = executionScopeIdentity({ "openai/session": "patch-receipt-scope" });
+  assert.ok(identity);
+  const patch = "*** Begin Patch\n*** Update File: src/private.ts\n@@\n-secret\n+replacement\n*** End Patch";
+  const handle = manager.beginTool(identity, "apply_patch", {
+    workspaceId: "ws_missing",
+    patch,
+  });
+  manager.finishTool(handle, "succeeded", {
+    response: {
+      structuredContent: {
+        result: "Applied patch containing private replacement text",
+        additions: 3,
+        removals: 2,
+        files: [
+          { path: "src/private.ts", operation: "update" },
+          {
+            path: "src/new.ts",
+            previousPath: "src/old.ts",
+            operation: "move",
+          },
+        ],
+      },
+    },
+  });
+
+  const audit = manager.audit(identity.scopeRef, undefined, { limit: 10 });
+  const event = (audit.events as Array<Record<string, unknown>>)[0];
+  const detail = event?.detail as Record<string, unknown>;
+  assert.equal(detail.additions, 3);
+  assert.equal(detail.removals, 2);
+  assert.equal(detail.fileReceiptCount, 2);
+  assert.deepEqual(detail.files, [
+    { path: "src/private.ts", operation: "update" },
+    { path: "src/new.ts", previousPath: "src/old.ts", operation: "move" },
+  ]);
+  const serialized = JSON.stringify(audit);
+  assert.equal(serialized.includes("replacement text"), false);
+  assert.equal(serialized.includes("-secret"), false);
 });
 
 test("current scope inspection is available before the first audited executor event", async (t) => {

@@ -99,6 +99,30 @@ test("open_workspace keeps lifecycle flags out of model output and preserves com
   assert.ok(Array.isArray(card.agents));
 });
 
+test("open_workspace returns only root context when the nested instruction inventory is too large", async (t) => {
+  const context = await fixture(t);
+  for (let index = 0; index < 101; index += 1) {
+    const directory = join(context.project, `nested-${index}`);
+    await mkdir(directory);
+    await writeFile(join(directory, "AGENTS.md"), "nested instructions\n");
+  }
+
+  const result = await callOpen(context.client, context.project, "chat-1");
+  const structured = structuredContent(result);
+  const card = responseCard(result);
+
+  assert.ok(Array.isArray(structured.agentsFiles));
+  assert.equal(structured.availableAgentsFiles, undefined);
+  assert.deepEqual(structured.instructionDiscovery, {
+    status: "incomplete",
+    reason: "result_limit_exceeded",
+  });
+  assert.equal(card.availableAgentsFiles, undefined);
+  assert.deepEqual(card.instructionDiscovery, structured.instructionDiscovery);
+  assert.match(responseText(result), /Only global and root-level instructions are loaded/);
+  assert.match(responseText(result), /Open the specific project directory/);
+});
+
 test("codex write_stdin exposes the output-aware long-poll contract", async (t) => {
   const context = await fixture(t, { toolMode: "codex" });
   const tools = await context.client.listTools();
@@ -625,9 +649,22 @@ test("one host scope can inspect another through bounded execution-scope tools",
       .observedActivityAfterCapsule,
     false,
   );
+  const initialEvidence = semanticRecovery.evidenceSinceCapsule as Record<
+    string,
+    unknown
+  >;
+  assert.equal(initialEvidence.source, "sanitized_execution_scope_event_receipts");
+  assert.equal(initialEvidence.capsuleEventRetained, true);
+  assert.equal(
+    initialEvidence.receiptWindowCompleteness,
+    "complete_while_capsule_event_is_retained",
+  );
+  assert.equal(initialEvidence.retainedEventCount, 0);
+  assert.deepEqual(initialEvidence.events, []);
   const semanticPolicy = semanticRecovery.policy as Record<string, unknown>;
   assert.equal(semanticPolicy.privateReasoningCaptured, false);
   assert.equal(semanticPolicy.inferredFromToolEventsOrFilenames, false);
+  assert.equal(semanticPolicy.executionEvidenceCanModifySemanticState, false);
   assert.equal(JSON.stringify(semanticRecovery).includes("PRIVATE-NOTE-SHOULD-NOT-PROJECT"), false);
 
   await context.client.callTool({
@@ -653,6 +690,21 @@ test("one host scope can inspect another through bounded execution-scope tools",
     (laterSemantic.worktree as Record<string, unknown>).workspaceFreshness,
     "fresh",
   );
+  const laterEvidence = laterSemantic.evidenceSinceCapsule as Record<string, unknown>;
+  assert.equal(laterEvidence.retainedEventCount, 1);
+  assert.equal(laterEvidence.returnedEventCount, 1);
+  assert.equal(laterEvidence.truncated, false);
+  assert.equal(
+    ((laterEvidence.byTool as Record<string, Record<string, unknown>>).read).calls,
+    1,
+  );
+  const laterEvidenceEvents = laterEvidence.events as Array<Record<string, unknown>>;
+  assert.equal(laterEvidenceEvents[0]?.tool, "read");
+  assert.equal(
+    (laterEvidenceEvents[0]?.detail as Record<string, unknown>).path,
+    "AGENTS.md",
+  );
+  assert.equal(JSON.stringify(laterEvidence).includes("project instructions"), false);
 
   const audit = await context.client.callTool({
     name: "execution_scope_audit",

@@ -131,6 +131,21 @@ interface CapsuleRow {
   recorded_at_ms: number;
 }
 
+interface RecoveryEvidenceEventRow {
+  sequence: number;
+  tool_name: string;
+  outcome: string;
+  started_at_ms: number;
+  completed_at_ms: number | null;
+  duration_ms: number | null;
+  workspace_id: string | null;
+  process_session_id: number | null;
+  detail_json: string | null;
+  error_kind: string | null;
+  error_summary: string | null;
+  error_digest_sha256: string | null;
+}
+
 interface RecoverySemanticState {
   missionRef?: string;
   authorityOwnerRefs: string[];
@@ -181,6 +196,7 @@ const MAX_ARRAY_TEXT_CHARACTERS = 2_000;
 const MAX_UNTRACKED_HASH_PATHS = 200;
 const MAX_GIT_OUTPUT_BYTES = 50 * 1024 * 1024;
 const EXPLICIT_KEY_MAX_CHARACTERS = 200;
+const MAX_RECOVERY_EVIDENCE_EVENTS = 20;
 const CONTROL_TOOL_NAMES = new Set([
   "turn_horizon_begin",
   "turn_horizon_status",
@@ -217,6 +233,16 @@ function iso(ms: number | null | undefined): string | undefined {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function parseOptionalRecordJson(value: string | null): Record<string, unknown> | undefined {
+  if (!value) return undefined;
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return isRecord(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function canonicalValue(value: unknown): unknown {
@@ -906,6 +932,10 @@ export class TurnContinuityManager {
       workspaceComparison.freshness,
       authorityComparison.freshness,
     );
+    const evidenceSinceCapsule = this.recoveryEvidenceSinceCapsule(
+      row,
+      options.observedScopeTotalEventCount,
+    );
     const nowMs = this.now();
 
     return {
@@ -970,6 +1000,7 @@ export class TurnContinuityManager {
         potentialMutationAfterCapsule,
         latestPotentialMutationAt: iso(horizon?.last_mutation_at_ms),
       },
+      evidenceSinceCapsule,
       classification: semanticProjectionClassification(
         workspaceComparison.freshness,
         activityAfterCapsule,
@@ -977,6 +1008,142 @@ export class TurnContinuityManager {
       instruction:
         "This is explicit executor-local semantic recovery state joined to current workspace and execution observations. Authority freshness is unverified in cross-scope status; rehydrate rightful owners before relying on the exact action.",
       policy: this.semanticProjectionPolicy(),
+    };
+  }
+
+  private recoveryEvidenceSinceCapsule(
+    capsule: CapsuleRow,
+    observedScopeTotalEventCount: number | undefined,
+  ): Record<string, unknown> {
+    const sequenceAnchored = capsule.recorded_event_sequence !== null;
+    const predicate = sequenceAnchored ? "sequence > ?" : "started_at_ms > ?";
+    const anchor = sequenceAnchored
+      ? capsule.recorded_event_sequence as number
+      : capsule.recorded_at_ms;
+    const aggregate = this.database.sqlite
+      .prepare(`
+        select count(*) as retained_count,
+               max(sequence) as newest_sequence,
+               sum(case when outcome = 'running' then 1 else 0 end) as running_count,
+               sum(case when outcome = 'succeeded' then 1 else 0 end) as succeeded_count,
+               sum(case when outcome = 'error' then 1 else 0 end) as error_count,
+               sum(case when outcome = 'blocked' then 1 else 0 end) as blocked_count,
+               sum(case when outcome = 'interrupted' then 1 else 0 end) as interrupted_count
+          from execution_scope_events
+         where scope_ref = ? and ${predicate}
+      `)
+      .get(capsule.scope_ref, anchor) as Record<string, unknown>;
+    const rows = this.database.sqlite
+      .prepare(`
+        select sequence, tool_name, outcome, started_at_ms, completed_at_ms,
+               duration_ms, workspace_id, process_session_id, detail_json,
+               error_kind, error_summary, error_digest_sha256
+          from execution_scope_events
+         where scope_ref = ? and ${predicate}
+         order by sequence desc
+         limit ?
+      `)
+      .all(
+        capsule.scope_ref,
+        anchor,
+        MAX_RECOVERY_EVIDENCE_EVENTS,
+      ) as RecoveryEvidenceEventRow[];
+    const byToolRows = this.database.sqlite
+      .prepare(`
+        select tool_name,
+               count(*) as calls,
+               sum(case when outcome = 'succeeded' then 1 else 0 end) as succeeded,
+               sum(case when outcome = 'error' then 1 else 0 end) as failed,
+               sum(case when outcome = 'blocked' then 1 else 0 end) as blocked,
+               sum(case when outcome = 'interrupted' then 1 else 0 end) as interrupted,
+               sum(case when outcome = 'running' then 1 else 0 end) as running
+          from execution_scope_events
+         where scope_ref = ? and ${predicate}
+         group by tool_name
+         order by calls desc, tool_name asc
+      `)
+      .all(capsule.scope_ref, anchor) as Array<Record<string, unknown>>;
+    const retainedEventCount = Number(aggregate.retained_count ?? 0);
+    const capsuleEventRetained = sequenceAnchored
+      ? this.database.sqlite
+          .prepare(`
+            select 1
+              from execution_scope_events
+             where scope_ref = ? and sequence = ?
+          `)
+          .get(capsule.scope_ref, capsule.recorded_event_sequence) !== undefined
+      : undefined;
+    const activityCounterIndicatesLaterEvents = sequenceAnchored
+      && observedScopeTotalEventCount !== undefined
+      ? observedScopeTotalEventCount > (capsule.recorded_event_sequence as number)
+      : undefined;
+    const receiptWindowCompleteness = sequenceAnchored
+      ? capsuleEventRetained
+        ? "complete_while_capsule_event_is_retained"
+        : retainedEventCount > 0
+          ? "retained_events_only_capsule_anchor_pruned"
+          : activityCounterIndicatesLaterEvents
+            ? "event_receipts_pruned_or_unavailable"
+            : "unknown_capsule_anchor_not_retained"
+      : "time_anchored_retained_window";
+    const events = [...rows].reverse().map((event) => ({
+      sequence: event.sequence,
+      tool: event.tool_name,
+      outcome: event.outcome,
+      startedAt: iso(event.started_at_ms),
+      completedAt: iso(event.completed_at_ms),
+      durationMs: event.duration_ms ?? undefined,
+      workspaceId: event.workspace_id ?? undefined,
+      processSessionId: event.process_session_id ?? undefined,
+      detail: parseOptionalRecordJson(event.detail_json),
+      errorKind: event.error_kind ?? undefined,
+      errorSummary: event.error_summary ?? undefined,
+      errorDigestSha256: event.error_digest_sha256 ?? undefined,
+    }));
+    const byTool = Object.fromEntries(
+      byToolRows.map((row) => [
+        String(row.tool_name),
+        {
+          calls: Number(row.calls ?? 0),
+          succeeded: Number(row.succeeded ?? 0),
+          failed: Number(row.failed ?? 0),
+          blocked: Number(row.blocked ?? 0),
+          interrupted: Number(row.interrupted ?? 0),
+          running: Number(row.running ?? 0),
+        },
+      ]),
+    );
+
+    return {
+      source: "sanitized_execution_scope_event_receipts",
+      basis: sequenceAnchored
+        ? "events_after_recorded_capsule_sequence"
+        : "events_started_after_capsule_timestamp",
+      recordedEventSequence: capsule.recorded_event_sequence ?? undefined,
+      observedScopeTotalEventCount,
+      activityCounterIndicatesLaterEvents,
+      capsuleEventRetained,
+      receiptWindowCompleteness,
+      retainedEventCount,
+      returnedEventCount: events.length,
+      newestRetainedEventSequence:
+        aggregate.newest_sequence === null || aggregate.newest_sequence === undefined
+          ? undefined
+          : Number(aggregate.newest_sequence),
+      order: "oldest_first_within_latest_window",
+      maxReturnedEvents: MAX_RECOVERY_EVIDENCE_EVENTS,
+      truncated: retainedEventCount > events.length,
+      outcomes: {
+        running: Number(aggregate.running_count ?? 0),
+        succeeded: Number(aggregate.succeeded_count ?? 0),
+        failed: Number(aggregate.error_count ?? 0),
+        blocked: Number(aggregate.blocked_count ?? 0),
+        interrupted: Number(aggregate.interrupted_count ?? 0),
+      },
+      byTool,
+      events,
+      instruction:
+        "These are bounded sanitized executor-event receipts after the explicit capsule. They establish local tool/process activity, not semantic intent, canonical task state, writer authority, effect outcome, or publication safety.",
     };
   }
 
@@ -1299,6 +1466,10 @@ export class TurnContinuityManager {
       authority: "executor_local_semantic_observation_only",
       sourceOfSemanticState: "explicit_recovery_capsule",
       inferredFromToolEventsOrFilenames: false,
+      executionEvidenceSource: "sanitized_execution_scope_event_receipts",
+      executionEvidenceCanModifySemanticState: false,
+      executionEvidenceMaxReturnedEvents: MAX_RECOVERY_EVIDENCE_EVENTS,
+      executionEvidenceRetentionMayLimitCompleteness: true,
       transcriptCaptured: false,
       promptsCaptured: false,
       privateReasoningCaptured: false,

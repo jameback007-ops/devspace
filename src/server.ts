@@ -82,7 +82,11 @@ import { registerZesCodexInspectionTools } from "./zes-codex-inspection.js";
 import { registerZesContinuationPreflightTool } from "./zes-continuation-preflight.js";
 import { createWorkspaceStore } from "./workspace-store.js";
 import { WorkspaceLifecycleManager } from "./workspace-lifecycle.js";
-import { formatAgentsPath, WorkspaceRegistry } from "./workspaces.js";
+import {
+  formatAgentsPath,
+  WorkspaceRegistry,
+  type WorkspaceInstructionDiscovery,
+} from "./workspaces.js";
 import { summarizeLocalAgentProfile } from "./local-agent-profiles.js";
 import {
   formatLocalAgentProviderAvailabilitySummary,
@@ -243,6 +247,9 @@ interface ToolLogFields {
   success: boolean;
   durationMs: number;
   error?: string;
+  instructionDiscoveryStatus?: WorkspaceInstructionDiscovery["status"];
+  instructionDiscoveryReason?: "deadline_exceeded" | "result_limit_exceeded";
+  instructionDiscoveryFinder?: "fd" | "node";
 }
 
 const toolExecutionContexts = new WeakMap<
@@ -575,6 +582,22 @@ const workspaceLocalAgentProviderOutputSchema = z.object({
 const workspaceAvailableAgentsFileOutputSchema = z.object({
   path: z.string(),
 });
+
+const workspaceInstructionDiscoveryOutputSchema = z.object({
+  status: z.literal("incomplete"),
+  reason: z.enum(["deadline_exceeded", "result_limit_exceeded"]),
+});
+
+function incompleteInstructionDiscoveryMessage(
+  discovery: WorkspaceInstructionDiscovery,
+): string | undefined {
+  if (discovery.status === "complete") return undefined;
+
+  const reason = discovery.reason === "deadline_exceeded"
+    ? "Nested instruction discovery exceeded its time budget."
+    : "More nested instruction files were found than can be safely returned.";
+  return `${reason} Only global and root-level instructions are loaded. Open the specific project directory before working inside it.`;
+}
 
 const reviewFileOutputSchema = z.object({
   path: z.string(),
@@ -2105,6 +2128,7 @@ export function createMcpServer(
           .optional(),
         agentsFiles: z.array(workspaceAgentsFileOutputSchema).optional(),
         availableAgentsFiles: z.array(workspaceAvailableAgentsFileOutputSchema).optional(),
+        instructionDiscovery: workspaceInstructionDiscoveryOutputSchema.optional(),
         skills: z.array(workspaceSkillOutputSchema).optional(),
         agentProviders: z.array(workspaceLocalAgentProviderOutputSchema).optional(),
         agents: z.array(workspaceLocalAgentOutputSchema).optional(),
@@ -2120,6 +2144,7 @@ export function createMcpServer(
         workspace,
         agentsFiles,
         availableAgentsFiles,
+        instructionDiscovery,
         workspaceReused,
         includeBootstrapContext,
       } = await workspaces.openWorkspace(
@@ -2161,10 +2186,14 @@ export function createMcpServer(
       const visibleAgents = includeBootstrapContext ? cardAgents : [];
       const loadedAgentsFiles = includeBootstrapContext ? cardAgentsFiles : [];
       const availableAgentsFileOutputs = includeBootstrapContext ? cardAvailableAgentsFiles : [];
-      const cardInstruction = config.skillsEnabled
+      const discoveryWarning = incompleteInstructionDiscoveryMessage(instructionDiscovery);
+      const standardCardInstruction = config.skillsEnabled
         ? "Use this workspaceId for subsequent work in this project. Keep reusing it while working in this project. Follow loaded agentsFiles instructions. Before working under a path listed in availableAgentsFiles, read that instruction file. When a task matches a listed skill, read its path before proceeding. Use skill_search only when a specialized project or host capability is needed but was not listed automatically."
         : "Use this workspaceId for subsequent work in this project. Keep reusing it while working in this project. Follow loaded agentsFiles instructions. Before working under a path listed in availableAgentsFiles, read that instruction file.";
-      const instruction = workspaceReused
+      const cardInstruction = [standardCardInstruction, discoveryWarning]
+        .filter(Boolean)
+        .join("\n\n");
+      const baseInstruction = workspaceReused
         ? [
             `Workspace already open as ${workspace.id}.`,
             "Continue with this workspaceId.",
@@ -2172,7 +2201,10 @@ export function createMcpServer(
           ].join("\n\n")
         : workspace.mode === "worktree"
           ? "Use this workspaceId for subsequent work in this isolated worktree. Keep reusing it while working in this worktree. Follow the project instructions, nested instruction files, skills, agent profiles, and diagnostics returned for it."
-          : cardInstruction;
+          : standardCardInstruction;
+      const instruction = [baseInstruction, discoveryWarning]
+        .filter(Boolean)
+        .join("\n\n");
       const resultContent: ToolContent[] = [
         {
           type: "text" as const,
@@ -2190,6 +2222,7 @@ export function createMcpServer(
             availableAgentsFileOutputs.length > 0
               ? `Available nested instructions: ${availableAgentsFileOutputs.map((file) => file.path).join(", ")}`
               : undefined,
+            discoveryWarning,
             visibleSkills.length > 0
               ? `Available skills: ${visibleSkills.map((skill) => skill.name).join(", ")}`
               : undefined,
@@ -2212,6 +2245,10 @@ export function createMcpServer(
         path: workspace.root,
         success: true,
         durationMs: Math.round(performance.now() - startedAt),
+        instructionDiscoveryStatus: instructionDiscovery.status,
+        instructionDiscoveryReason:
+          instructionDiscovery.status === "incomplete" ? instructionDiscovery.reason : undefined,
+        instructionDiscoveryFinder: instructionDiscovery.finder,
       });
 
       return {
@@ -2228,7 +2265,14 @@ export function createMcpServer(
             sourceRoot: workspace.sourceRoot,
             worktree: workspace.worktree,
             agentsFiles: cardAgentsFiles,
-            availableAgentsFiles: cardAvailableAgentsFiles,
+            ...(instructionDiscovery.status === "complete"
+              ? { availableAgentsFiles: cardAvailableAgentsFiles }
+              : {
+                  instructionDiscovery: {
+                    status: instructionDiscovery.status,
+                    reason: instructionDiscovery.reason,
+                  },
+                }),
             skills: cardSkills,
             agentProviders: cardAgentProviders,
             agents: cardAgents,
@@ -2237,6 +2281,7 @@ export function createMcpServer(
               mode: workspace.mode,
               agentsFiles: cardAgentsFiles.length,
               availableAgentsFiles: cardAvailableAgentsFiles.length,
+              instructionDiscovery: instructionDiscovery.status,
               skills: cardSkills.length,
               agentProviders: cardAgentProviders.length,
               agents: cardAgents.length,
@@ -2252,7 +2297,14 @@ export function createMcpServer(
           ...(includeBootstrapContext
             ? {
                 agentsFiles: loadedAgentsFiles,
-                availableAgentsFiles: availableAgentsFileOutputs,
+                ...(instructionDiscovery.status === "complete"
+                  ? { availableAgentsFiles: availableAgentsFileOutputs }
+                  : {
+                      instructionDiscovery: {
+                        status: instructionDiscovery.status,
+                        reason: instructionDiscovery.reason,
+                      },
+                    }),
                 skills: visibleSkills,
                 agentProviders: visibleAgentProviders,
                 agents: visibleAgents,

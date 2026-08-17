@@ -5,6 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { promisify } from "node:util";
+import { ExecutionScopeManager } from "./execution-observability.js";
+import { ProcessSessionManager } from "./process-sessions.js";
 import {
   executionScopeIdentity,
   executorTurnMetadata,
@@ -176,6 +178,96 @@ test("an exact host deadline uses lead-window advisories without enforcing the d
   assert.equal(overrun.advisory, "landing_opportunity");
   assert.equal(overrun.toolsBlocked, false);
   assert.ok(Number(overrun.overrunMs) > 0);
+});
+
+test("semantic recovery exposes only the latest bounded executor evidence window", async (t) => {
+  const stateDir = await mkdtemp(join(tmpdir(), "devspace-recovery-evidence-window-"));
+  let now = 75_000;
+  const continuity = new TurnContinuityManager(config, stateDir, { now: () => now });
+  const processes = new ProcessSessionManager();
+  const observations = new ExecutionScopeManager(
+    {
+      enabled: true,
+      retentionMs: 7 * 24 * 60 * 60 * 1_000,
+      maxEventsPerScope: 100,
+      idleAfterMs: 5 * 60 * 1_000,
+    },
+    stateDir,
+    processes,
+    { now: () => now },
+  );
+  const identity = executionScopeIdentity({ "openai/session": "evidence-window-scope" });
+  assert.ok(identity);
+  t.after(async () => {
+    observations.close();
+    processes.shutdown();
+    continuity.close();
+    await rm(stateDir, { recursive: true, force: true });
+  });
+
+  const capsuleHandle = observations.beginTool(
+    identity,
+    "recovery_capsule_record",
+    { workspaceId: "ws_evidence" },
+  );
+  await continuity.recordCapsule(identity, { id: "ws_evidence", root: stateDir }, {
+    idempotencyKey: "evidence-window-capsule",
+    intent: "rolling",
+    currentFrontier: "prove bounded event evidence",
+    currentCausalSlice: "record more successor events than the projection returns",
+    validationState: "partial",
+    worktreeState: "unknown",
+    effectState: "none",
+    retryPolicy: "normal",
+    exactNextAction: "inspect the bounded evidence window",
+  });
+  observations.finishTool(capsuleHandle, "succeeded");
+
+  for (let index = 0; index < 25; index += 1) {
+    now += 1;
+    const tool = index % 2 === 0 ? "read" : "exec_command";
+    const handle = observations.beginTool(identity, tool, {
+      workspaceId: "ws_evidence",
+      path: tool === "read" ? `file-${index}.ts` : undefined,
+      cmd: tool === "exec_command" ? `printf secret-${index}` : undefined,
+    });
+    observations.finishTool(handle, "succeeded", {
+      response: tool === "exec_command"
+        ? {
+            structuredContent: {
+              output: `secret-${index}`,
+              outputDeltaBytes: 8,
+              outputDeltaDigestSha256: "a".repeat(64),
+              outputTotalBytes: 8,
+              outputDigestSha256: "b".repeat(64),
+              outputEventCount: 1,
+              outputComplete: true,
+            },
+          }
+        : undefined,
+    });
+  }
+
+  const projection = await continuity.semanticProjectionForScope(identity.scopeRef, {
+    observedScopeLastActivityAtMs: now,
+    observedScopeTotalEventCount: 26,
+  });
+  const evidence = projection.evidenceSinceCapsule as Record<string, unknown>;
+  assert.equal(evidence.retainedEventCount, 25);
+  assert.equal(evidence.returnedEventCount, 20);
+  assert.equal(evidence.truncated, true);
+  assert.equal(evidence.capsuleEventRetained, true);
+  assert.equal(
+    evidence.receiptWindowCompleteness,
+    "complete_while_capsule_event_is_retained",
+  );
+  const events = evidence.events as Array<Record<string, unknown>>;
+  assert.equal(events.length, 20);
+  assert.ok(Number(events[0]?.sequence) < Number(events.at(-1)?.sequence));
+  const serialized = JSON.stringify(evidence);
+  assert.equal(serialized.includes("secret-"), false);
+  assert.equal(serialized.includes("output\":"), false);
+  assert.match(serialized, /outputDigestSha256/);
 });
 
 test("recovery capsule is Git-bound, detects stale tracked and untracked state, and survives another scope", async (t) => {
