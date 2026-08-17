@@ -874,6 +874,13 @@ function scopeRuntimeRelation(
       typeof toolSurface?.fingerprintSha256 === "string"
         ? toolSurface.fingerprintSha256
         : undefined,
+    currentBackendToolSurfaceEpoch:
+      typeof toolSurface?.surfaceEpoch === "string"
+        ? toolSurface.surfaceEpoch
+        : undefined,
+    requiredClientTools: Array.isArray(toolSurface?.requiredClientTools)
+      ? toolSurface.requiredClientTools
+      : undefined,
     scopeCreatedBeforeCurrentBackendInstance:
       Number.isFinite(scopeCreatedAtMs) && Number.isFinite(backendStartedAtMs)
         ? scopeCreatedAtMs < backendStartedAtMs
@@ -886,6 +893,15 @@ function scopeRuntimeRelation(
     clientToolCatalogObservable: false,
     catalogFreshnessDetermination: "unavailable",
   };
+}
+
+function setRuntimeCapabilityHeaders(
+  res: Response,
+  runtimeCapabilities: RuntimeCapabilityRegistry,
+): void {
+  for (const [name, value] of Object.entries(runtimeCapabilities.responseHeaders())) {
+    res.setHeader(name, value);
+  }
 }
 
 function registerExecutionScopeTools(
@@ -3107,10 +3123,28 @@ export function createServer(
   );
 
   app.get("/healthz", (_req, res) => {
-    res.json({ ok: true, name: "devspace" });
+    setRuntimeCapabilityHeaders(res, runtimeCapabilities);
+    const runtime = runtimeCapabilities.snapshot();
+    const backend = isRecord(runtime.backend) ? runtime.backend : {};
+    const toolSurface = isRecord(runtime.toolSurface) ? runtime.toolSurface : {};
+    res.json({
+      ok: true,
+      name: "devspace",
+      backendInstanceRef: backend.instanceRef,
+      backendStartedAt: backend.startedAt,
+      toolSurface: {
+        initialized: toolSurface.initialized,
+        fingerprintSha256: toolSurface.fingerprintSha256,
+        surfaceEpoch: toolSurface.surfaceEpoch,
+        toolCount: toolSurface.toolCount,
+        requiredClientTools: toolSurface.requiredClientTools,
+      },
+      clientCatalogObservation: runtime.clientCatalogObservation,
+    });
   });
 
   app.all("/mcp", async (req, res) => {
+    setRuntimeCapabilityHeaders(res, runtimeCapabilities);
     const requestId = res.locals.requestId as string | undefined;
     const sessionId = req.header("mcp-session-id");
     const initializeRequest = req.method === "POST" && isInitializeRequest(req.body);
@@ -3249,6 +3283,11 @@ export function createServer(
         return;
       }
 
+      // createMcpServer registers the exact surface before the request is
+      // handled. Re-apply headers so tool discovery and execution responses
+      // carry the complete backend fingerprint rather than the pre-registration
+      // process-only identity.
+      setRuntimeCapabilityHeaders(res, runtimeCapabilities);
       await transport.handleRequest(req, res, req.body);
     } catch (error) {
       logEvent(config.logging, "error", "mcp_request_error", {

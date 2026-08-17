@@ -475,9 +475,17 @@ export class ExecutionScopeManager {
     if (!this.config.enabled) return this.disabledResult();
     this.maybePruneExpired(this.now());
     const boundedLimit = Math.max(1, Math.min(100, Math.floor(limit)));
-    const scopes = this.listStoredScopes(boundedLimit).map((scope) =>
+    const storedScopes = this.listStoredScopes(boundedLimit);
+    const scopes = storedScopes.map((scope) =>
       this.scopeSummary(scope, currentIdentity?.scopeRef)
     );
+    if (
+      currentIdentity
+      && !storedScopes.some((scope) => scope.scopeRef === currentIdentity.scopeRef)
+    ) {
+      scopes.unshift(this.unmaterializedCurrentScopeSummary(currentIdentity));
+      if (scopes.length > boundedLimit) scopes.length = boundedLimit;
+    }
     return {
       schemaVersion: 1,
       enabled: true,
@@ -499,7 +507,20 @@ export class ExecutionScopeManager {
       throw new Error("scopeRef is required when the current host supplies no stable execution scope.");
     }
     const scope = this.getStoredScope(targetRef);
-    if (!scope) throw new Error(`Unknown execution scope: ${targetRef}`);
+    if (!scope) {
+      if (currentIdentity?.scopeRef !== targetRef) {
+        throw new Error(`Unknown execution scope: ${targetRef}`);
+      }
+      return {
+        schemaVersion: 1,
+        enabled: true,
+        scope: this.unmaterializedCurrentScopeSummary(currentIdentity),
+        workspaces: [],
+        processes: [],
+        otherOrUnattributedRunningProcessCount: 0,
+        policy: this.policy(),
+      };
+    }
     const workspaces = this.listStoredWorkspaces(targetRef);
     const processProjection = this.processProjection(targetRef, workspaces);
 
@@ -533,7 +554,19 @@ export class ExecutionScopeManager {
       throw new Error("scopeRef is required when the current host supplies no stable execution scope.");
     }
     if (!this.getStoredScope(targetRef)) {
-      throw new Error(`Unknown execution scope: ${targetRef}`);
+      if (currentIdentity?.scopeRef !== targetRef) {
+        throw new Error(`Unknown execution scope: ${targetRef}`);
+      }
+      return {
+        schemaVersion: 1,
+        enabled: true,
+        scopeRef: targetRef,
+        currentScopeMaterialized: false,
+        order: "newest_first",
+        events: [],
+        nextCursor: undefined,
+        policy: this.policy(),
+      };
     }
     const limit = Math.max(1, Math.min(100, Math.floor(options.limit ?? 30)));
     const beforeSequence = decodeCursor(options.cursor);
@@ -843,6 +876,7 @@ export class ExecutionScopeManager {
       scopeRef: scope.scopeRef,
       isCurrent: scope.scopeRef === currentScopeRef,
       adapter: scope.adapter,
+      materialized: true,
       activityState,
       createdAt: iso(scope.createdAtMs),
       lastActivityAt: iso(scope.lastActivityAtMs),
@@ -866,6 +900,34 @@ export class ExecutionScopeManager {
         providerGenerationObservable: false,
         modelState: "not_observed",
         hungDetermination: "unavailable",
+      },
+    };
+  }
+
+  private unmaterializedCurrentScopeSummary(
+    identity: ExecutionScopeIdentity,
+  ): Record<string, unknown> {
+    return {
+      scopeRef: identity.scopeRef,
+      isCurrent: true,
+      adapter: identity.adapter,
+      materialized: false,
+      activityState: "unobserved",
+      runningToolCount: 0,
+      runningProcessCount: 0,
+      otherOrUnattributedRunningProcessCount: 0,
+      workspaceCount: 0,
+      totalEventCount: 0,
+      observation: {
+        boundary: "mcp_tool_and_process_observation_only",
+        observableExecutorState: "no_observed_tool_or_process_yet",
+        blindIntervalActive: false,
+        modelProgressObservable: false,
+        providerGenerationObservable: false,
+        modelState: "not_observed",
+        hungDetermination: "unavailable",
+        reason:
+          "The host supplied a stable current scope identity, but no audited executor event has materialized this scope yet.",
       },
     };
   }

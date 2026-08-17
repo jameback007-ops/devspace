@@ -338,6 +338,45 @@ test("skill search is absent when skills are disabled", async (t) => {
   );
 });
 
+test("a fresh current host scope can inspect status before any audited executor tool", async (t) => {
+  const context = await fixture(t, { toolMode: "codex" });
+  const freshSession = "fresh-status-only-session";
+
+  const status = await context.client.callTool({
+    name: "execution_scope_status",
+    arguments: {},
+    _meta: { "openai/session": freshSession },
+  } as Parameters<Client["callTool"]>[0]);
+  assert.equal(status.isError, undefined);
+  const statusData = structuredData(status);
+  const statusScope = statusData.scope as Record<string, unknown>;
+  assert.equal(statusScope.isCurrent, true);
+  assert.equal(statusScope.materialized, false);
+  assert.equal(statusScope.activityState, "unobserved");
+  assert.equal(statusScope.totalEventCount, 0);
+  assert.deepEqual(statusData.workspaces, []);
+  assert.deepEqual(statusData.processes, []);
+
+  const listed = await context.client.callTool({
+    name: "execution_scope_list",
+    arguments: { limit: 10 },
+    _meta: { "openai/session": freshSession },
+  } as Parameters<Client["callTool"]>[0]);
+  const listedScopes = structuredData(listed).scopes as Array<Record<string, unknown>>;
+  const current = listedScopes.find((scope) => scope.isCurrent === true);
+  assert.ok(current);
+  assert.equal(current.materialized, false);
+
+  const audit = await context.client.callTool({
+    name: "execution_scope_audit",
+    arguments: { limit: 10 },
+    _meta: { "openai/session": freshSession },
+  } as Parameters<Client["callTool"]>[0]);
+  const auditData = structuredData(audit);
+  assert.equal(auditData.currentScopeMaterialized, false);
+  assert.deepEqual(auditData.events, []);
+});
+
 test("one host scope can inspect another through bounded execution-scope tools", async (t) => {
   const context = await fixture(t, { toolMode: "codex", git: true });
   const workerSession = "worker-private-session-id";
@@ -410,6 +449,19 @@ test("one host scope can inspect another through bounded execution-scope tools",
   >;
   assert.match(String(backend.instanceRef), /^[a-f0-9]{16}$/);
   assert.match(String(toolSurface.fingerprintSha256), /^[a-f0-9]{64}$/);
+  assert.equal(toolSurface.initialized, true);
+  assert.equal(
+    toolSurface.surfaceEpoch,
+    `nexus:${String(toolSurface.fingerprintSha256).slice(0, 16)}`,
+  );
+  assert.deepEqual(toolSurface.requiredClientTools, [
+    "execution_scope_list",
+    "execution_scope_status",
+    "open_workspace",
+    "read",
+    "exec_command",
+    "skill_search",
+  ]);
   assert.deepEqual(
     toolSurface.toolNames,
     tools.tools.map((tool) => tool.name).sort(),
@@ -424,21 +476,32 @@ test("one host scope can inspect another through bounded execution-scope tools",
   );
   assert.equal(clientCatalogObservation.observable, false);
   assert.equal(clientCatalogObservation.freshness, "unavailable");
+  assert.equal(clientCatalogObservation.status, "SERVER_CURRENT_CLIENT_UNKNOWN");
+  assert.equal(
+    clientCatalogObservation.expectedSurfaceEpoch,
+    toolSurface.surfaceEpoch,
+  );
   assert.equal(
     clientCatalogObservation.missingRegisteredToolDoesNotImplyBackendCapabilityAbsent,
     true,
   );
-  assert.equal(scopes.length, 1);
-  const scopeRef = String(scopes[0]?.scopeRef);
+  assert.equal(scopes.length, 2);
+  const currentScope = scopes.find((scope) => scope.isCurrent === true);
+  assert.ok(currentScope);
+  assert.equal(currentScope.materialized, false);
+  const workerScope = scopes.find((scope) => scope.isCurrent === false);
+  assert.ok(workerScope);
+  const scopeRef = String(workerScope.scopeRef);
   assert.match(scopeRef, /^[a-f0-9]{16}$/);
-  assert.equal(scopes[0]?.isCurrent, false);
-  assert.equal(scopes[0]?.displayLabel, "DEVSPACE-SEMANTIC-OBSERVABILITY");
+  assert.equal(workerScope.isCurrent, false);
+  assert.equal(workerScope.materialized, true);
+  assert.equal(workerScope.displayLabel, "DEVSPACE-SEMANTIC-OBSERVABILITY");
   assert.equal(
-    scopes[0]?.displayLabelSource,
+    workerScope.displayLabelSource,
     "recovery_capsule_mission_ref",
   );
-  assert.equal(scopes[0]?.displayLabelIsHostChatTitle, false);
-  const semanticHint = scopes[0]?.semanticHint as Record<string, unknown>;
+  assert.equal(workerScope.displayLabelIsHostChatTitle, false);
+  const semanticHint = workerScope.semanticHint as Record<string, unknown>;
   assert.equal(semanticHint.available, true);
   assert.equal(semanticHint.displayLabel, "DEVSPACE-SEMANTIC-OBSERVABILITY");
   assert.equal(
@@ -455,15 +518,23 @@ test("one host scope can inspect another through bounded execution-scope tools",
     semanticHint.exactActionReliance,
     "requires_current_authority_reconciliation",
   );
-  const listedObservation = scopes[0]?.observation as Record<string, unknown>;
+  const listedObservation = workerScope.observation as Record<string, unknown>;
   assert.equal(listedObservation.modelProgressObservable, false);
   assert.equal(listedObservation.providerGenerationObservable, false);
   assert.equal(listedObservation.hungDetermination, "unavailable");
-  const listedRuntimeRelation = scopes[0]?.runtimeRelation as Record<string, unknown>;
+  const listedRuntimeRelation = workerScope.runtimeRelation as Record<string, unknown>;
   assert.equal(listedRuntimeRelation.currentBackendInstanceRef, backend.instanceRef);
   assert.equal(
     listedRuntimeRelation.currentBackendToolSurfaceFingerprintSha256,
     toolSurface.fingerprintSha256,
+  );
+  assert.equal(
+    listedRuntimeRelation.currentBackendToolSurfaceEpoch,
+    toolSurface.surfaceEpoch,
+  );
+  assert.deepEqual(
+    listedRuntimeRelation.requiredClientTools,
+    toolSurface.requiredClientTools,
   );
   assert.equal(listedRuntimeRelation.clientToolCatalogObservable, false);
   assert.equal(listedRuntimeRelation.catalogFreshnessDetermination, "unavailable");

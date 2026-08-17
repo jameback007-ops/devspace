@@ -42,6 +42,15 @@ causal slice, and capsule reference. The response also includes one
 `backendRuntime` block describing the currently executing DevSpace process and
 the exact registered model-facing tool surface.
 
+A host may present a stable current execution-scope identity before it invokes
+any audited executor tool. In that case the list and current-scope status return
+an explicit `materialized: false`, `activityState: "unobserved"` projection
+instead of treating the scope as unknown. Inspection-only calls do not create a
+durable audit row; the scope becomes materialized only after a real audited
+executor event. This distinction prevents a fresh WebChat session from being
+misreported as lacking a VPS executor merely because its first call is a status
+probe.
+
 The display label comes from the capsule's `missionRef`, falling back to its
 current frontier. It is not the ChatGPT/host conversation title and does not
 replace the opaque `scopeRef`. When no capsule exists, the semantic hint reports
@@ -97,6 +106,9 @@ the tools registered through the normal DevSpace MCP registration path:
   artifact download;
 - a SHA-256 fingerprint over tool names, descriptions, input/output JSON
   schemas, annotations, and the safe model-facing configuration.
+- a surface epoch derived from that fingerprint and a small sentinel list of
+  client-critical tools used to compare what the backend exposes with what the
+  current host can actually invoke.
 
 The fingerprint is independent of registration order and process instance. A
 model-facing schema or tool-set change produces a different fingerprint. The
@@ -106,11 +118,22 @@ authority.
 
 DevSpace cannot inspect the MCP client's cached `tools/list` result because a
 normal tool call does not send that catalog back to the server. Consequently,
-`clientCatalogObservation` always states that client-side freshness is
-unavailable. If `backendRuntime` reports a tool as registered but the current
-host cannot invoke or discover it, treat this as connector/catalog freshness or
+`clientCatalogObservation` reports `SERVER_CURRENT_CLIENT_UNKNOWN` when the
+backend has a complete registered surface but no comparable client attestation.
+If `backendRuntime` reports a sentinel tool as registered but the current host
+cannot invoke or discover it, treat this as connector/catalog freshness or
 routing evidence and refresh or reconnect the MCP connector. Do not infer that
 the backend capability is absent and do not reimplement it from that symptom.
+
+The HTTP `/healthz` and MCP responses expose the current instance reference,
+tool-surface fingerprint, surface epoch, freshness classification, and
+`Cache-Control: no-store` as operator evidence. These headers do not prove that
+ChatGPT surfaces them to the model or that an already-open host session has
+discarded its cached tool catalog. OpenAI's stateless request path also means a
+server restart can occur between tool discovery and later execution. Prefer one
+qualified cutover after build verification rather than repeated service
+restarts, then refresh or reconnect host sessions whose sentinel inventory is
+stale.
 
 The current backend instance reference and fingerprint are operational
 diagnostics only. They are not a deployment receipt, source-build attestation,

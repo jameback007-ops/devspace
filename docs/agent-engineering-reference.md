@@ -25,6 +25,10 @@ mandatory `AGENTS.md`; it does not replace it.
 - **Execution scope** — a stable provider-neutral host conversation/task scope
   joining workspace, process, mailbox, and bounded audit observations. It is
   not a transcript or product authority.
+- **Unmaterialized current scope** — a host-supplied stable execution-scope
+  identity that has not yet produced an audited executor event. Inspection may
+  project it read-only, but it is not evidence that executor capability is
+  absent and inspection alone must not create durable audit state.
 - **Turn horizon** — advisory assistant-turn timing derived from exact host
   metadata or one explicit begin call. It never blocks tools or limits a task.
 - **Recovery capsule** — a bounded semantic executor handoff bound to current
@@ -111,7 +115,10 @@ Behavior may differ across:
 For model-facing changes, inspect the schema and the actual structured response.
 Use the backend tool-surface fingerprint to distinguish a changed server schema
 from a host that still presents an older cached catalog; the server cannot
-observe client catalog freshness directly.
+observe client catalog freshness directly. For OpenAI's stateless request path,
+assume discovery and execution may be separated across backend restarts: avoid
+repeated deployment restarts, expose no-store/fingerprint/epoch evidence, and
+refresh or reconnect the host when required sentinel tools are missing.
 For UI or artifacts, inspect rendered output rather than inferring success from
 the producing command. State clearly when only a narrower proxy was verified.
 

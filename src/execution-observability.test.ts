@@ -164,6 +164,66 @@ test("execution scope inspection joins durable audit with live workspace and pro
   });
 });
 
+test("current scope inspection is available before the first audited executor event", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "devspace-execution-unmaterialized-current-"));
+  const stateDir = join(root, ".state");
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const processes = new ProcessSessionManager();
+  const manager = new ExecutionScopeManager(config, stateDir, processes);
+  t.after(() => {
+    processes.shutdown();
+    manager.close();
+  });
+
+  const identity = executionScopeIdentity({ "openai/session": "fresh-current-scope" });
+  assert.ok(identity);
+
+  const listed = manager.list(identity, 10);
+  const listedScopes = listed.scopes as Array<Record<string, unknown>>;
+  assert.equal(listedScopes.length, 1);
+  assert.equal(listedScopes[0]?.scopeRef, identity.scopeRef);
+  assert.equal(listedScopes[0]?.isCurrent, true);
+  assert.equal(listedScopes[0]?.materialized, false);
+  assert.equal(listedScopes[0]?.activityState, "unobserved");
+  assert.equal(listedScopes[0]?.totalEventCount, 0);
+  const listedObservation = listedScopes[0]?.observation as Record<string, unknown>;
+  assert.equal(
+    listedObservation.observableExecutorState,
+    "no_observed_tool_or_process_yet",
+  );
+  assert.equal(listedObservation.hungDetermination, "unavailable");
+
+  const status = manager.status(undefined, identity);
+  const statusScope = status.scope as Record<string, unknown>;
+  assert.equal(statusScope.scopeRef, identity.scopeRef);
+  assert.equal(statusScope.materialized, false);
+  assert.deepEqual(status.workspaces, []);
+  assert.deepEqual(status.processes, []);
+
+  const audit = manager.audit(undefined, identity, { limit: 10 });
+  assert.equal(audit.scopeRef, identity.scopeRef);
+  assert.equal(audit.currentScopeMaterialized, false);
+  assert.deepEqual(audit.events, []);
+
+  const inspectionDatabase = openDatabase(stateDir);
+  try {
+    const stored = inspectionDatabase.sqlite
+      .prepare("select count(*) as count from execution_scopes where scope_ref = ?")
+      .get(identity.scopeRef) as { count: number };
+    assert.equal(stored.count, 0, "inspection-only calls must not create audit state");
+  } finally {
+    inspectionDatabase.close();
+  }
+
+  const handle = manager.beginTool(identity, "read", { path: "AGENTS.md" });
+  manager.finishTool(handle, "succeeded");
+  const afterActivity = manager.list(identity, 10);
+  const materialized = (afterActivity.scopes as Array<Record<string, unknown>>)[0];
+  assert.equal(materialized?.scopeRef, identity.scopeRef);
+  assert.equal(materialized?.materialized, true);
+  assert.equal(materialized?.totalEventCount, 1);
+});
+
 test("unfinished observations recover as interrupted after a server restart", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "devspace-execution-recovery-"));
   const stateDir = join(root, ".state");

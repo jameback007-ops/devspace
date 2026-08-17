@@ -67,6 +67,15 @@ const CRITICAL_TOOL_GROUPS = {
   artifactDownload: ["download_artifact"],
 } as const;
 
+const REQUIRED_CLIENT_TOOLS = [
+  "execution_scope_list",
+  "execution_scope_status",
+  "open_workspace",
+  "read",
+  "exec_command",
+  "skill_search",
+] as const;
+
 /**
  * Read-only observation of the exact tools registered through the normal
  * DevSpace registration path. This registry never controls registration and is
@@ -113,6 +122,8 @@ export class RuntimeCapabilityRegistry {
       tools: toolEntries,
     }));
     this.fingerprintSha256 = fingerprintSha256;
+    const surfaceEpoch = `nexus:${fingerprintSha256.slice(0, 16)}`;
+    const initialized = toolNames.length > 0;
 
     return {
       schemaVersion: 1,
@@ -126,17 +137,24 @@ export class RuntimeCapabilityRegistry {
         uptimeMs: Math.max(0, this.now() - this.startedAtMs),
       },
       toolSurface: {
+        initialized,
         fingerprintSha256,
+        surfaceEpoch,
         toolCount: toolNames.length,
         toolNames,
+        requiredClientTools: [...REQUIRED_CLIENT_TOOLS],
         configuration: safeConfiguration,
         criticalToolGroups: this.criticalToolGroups(new Set(toolNames)),
       },
       clientCatalogObservation: {
         observable: false,
         freshness: "unavailable",
+        status: "SERVER_CURRENT_CLIENT_UNKNOWN",
         reason:
           "MCP tool calls do not include the client-side cached tools/list result.",
+        expectedSurfaceEpoch: surfaceEpoch,
+        expectedFingerprintSha256: fingerprintSha256,
+        requiredClientTools: [...REQUIRED_CLIENT_TOOLS],
         backendRegisteredSurfaceObservable: true,
         missingRegisteredToolDoesNotImplyBackendCapabilityAbsent: true,
         actionWhenClientLacksRegisteredTool:
@@ -152,6 +170,24 @@ export class RuntimeCapabilityRegistry {
         credentialsCaptured: false,
       },
     };
+  }
+
+  responseHeaders(): Record<string, string> {
+    const headers: Record<string, string> = {
+      "Cache-Control": "no-store",
+      "X-ZES-Nexus-Instance-Ref": this.instanceRef,
+    };
+    if (this.tools.size === 0) return headers;
+    const snapshot = this.snapshot();
+    const toolSurface = snapshot.toolSurface as Record<string, unknown>;
+    if (typeof toolSurface.fingerprintSha256 === "string") {
+      headers["X-ZES-Tool-Surface-Fingerprint"] = toolSurface.fingerprintSha256;
+    }
+    if (typeof toolSurface.surfaceEpoch === "string") {
+      headers["X-ZES-Tool-Surface-Epoch"] = toolSurface.surfaceEpoch;
+    }
+    headers["X-ZES-Tool-Surface-Freshness"] = "SERVER_CURRENT_CLIENT_UNKNOWN";
+    return headers;
   }
 
   private safeConfiguration(): Record<string, unknown> {

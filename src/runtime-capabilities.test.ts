@@ -81,6 +81,19 @@ assert.deepEqual(firstSurface.toolNames, [
   "recovery_capsule_record",
   "recovery_capsule_status",
 ]);
+assert.equal(firstSurface.initialized, true);
+assert.equal(
+  firstSurface.surfaceEpoch,
+  `nexus:${String(firstSurface.fingerprintSha256).slice(0, 16)}`,
+);
+assert.deepEqual(firstSurface.requiredClientTools, [
+  "execution_scope_list",
+  "execution_scope_status",
+  "open_workspace",
+  "read",
+  "exec_command",
+  "skill_search",
+]);
 
 const recoveryGroup = (
   firstSurface.criticalToolGroups as Record<string, Record<string, unknown>>
@@ -123,9 +136,31 @@ assert.notEqual(
 const clientCatalog = firstSnapshot.clientCatalogObservation as Record<string, unknown>;
 assert.equal(clientCatalog.observable, false);
 assert.equal(clientCatalog.freshness, "unavailable");
+assert.equal(clientCatalog.status, "SERVER_CURRENT_CLIENT_UNKNOWN");
+assert.equal(clientCatalog.expectedSurfaceEpoch, firstSurface.surfaceEpoch);
+assert.equal(
+  clientCatalog.expectedFingerprintSha256,
+  firstSurface.fingerprintSha256,
+);
 assert.equal(
   clientCatalog.missingRegisteredToolDoesNotImplyBackendCapabilityAbsent,
   true,
 );
+
+const empty = new RuntimeCapabilityRegistry(config, {
+  now: () => 1_000,
+  instanceRef: "4444444444444444",
+});
+assert.deepEqual(empty.responseHeaders(), {
+  "Cache-Control": "no-store",
+  "X-ZES-Nexus-Instance-Ref": "4444444444444444",
+});
+assert.deepEqual(first.responseHeaders(), {
+  "Cache-Control": "no-store",
+  "X-ZES-Nexus-Instance-Ref": "1111111111111111",
+  "X-ZES-Tool-Surface-Fingerprint": String(firstSurface.fingerprintSha256),
+  "X-ZES-Tool-Surface-Epoch": String(firstSurface.surfaceEpoch),
+  "X-ZES-Tool-Surface-Freshness": "SERVER_CURRENT_CLIENT_UNKNOWN",
+});
 
 rmSync(root, { recursive: true, force: true });
