@@ -1,22 +1,38 @@
 import { createHash, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { toJsonSchemaCompat } from "@modelcontextprotocol/sdk/server/zod-json-schema-compat.js";
 import * as z from "zod/v4";
 import type { ServerConfig } from "./config.js";
-
-type JsonPrimitive = boolean | number | string | null;
-type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
+import {
+  assessNexusBackendFreshness,
+  enrichNexusBackendRuntime,
+  type ExistingStatusToolClientInput,
+  type NexusBackendRuntimeObservation,
+  type NexusRuntimeBindingObservation,
+} from "./nexus-backend-freshness-adapter.js";
+import {
+  createToolSurfaceIdentity,
+  freshnessHeaders,
+  loadDeploymentManifestEnvelopeSync,
+  observeFileIdentitySync,
+  observePathIdentitySync,
+  validateRuntimeNativeMcpIdentities,
+  type ClientCatalogAttestation,
+  type LoadedDeploymentManifest,
+  type McpToolDescriptor,
+  type RuntimeNativeMcpIdentity,
+  type ToolSurfaceIdentity,
+} from "./tool-surface-freshness.js";
+import { DEVSPACE_PACKAGE_VERSION } from "./version.js";
 
 interface RuntimeCapabilityRegistryOptions {
   now?: () => number;
   instanceRef?: string;
 }
 
-interface RegisteredToolDefinition {
-  title?: string;
-  description?: string;
-  inputSchema?: JsonValue;
-  outputSchema?: JsonValue;
-  annotations?: JsonValue;
+export interface RuntimeCapabilitySnapshotOptions {
+  clientInput?: ExistingStatusToolClientInput;
+  clientAttestation?: ClientCatalogAttestation;
 }
 
 interface CriticalToolGroupDefinition {
@@ -24,15 +40,7 @@ interface CriticalToolGroupDefinition {
   expectedTools: readonly string[];
 }
 
-const PACKAGE_VERSION = readPackageVersion();
-
-/**
- * MCP server version is kept separate from the npm package version because the
- * ZES deployment carries executor-local additions that are not an upstream npm
- * release. The exact model-facing tool surface is identified independently by
- * a content fingerprint.
- */
-export const DEVSPACE_MCP_SERVER_VERSION = `${PACKAGE_VERSION}-zes.1`;
+const PACKAGE_VERSION = DEVSPACE_PACKAGE_VERSION;
 
 const CRITICAL_TOOL_GROUPS = {
   executionObservability: [
@@ -85,9 +93,12 @@ export class RuntimeCapabilityRegistry {
   readonly startedAtMs: number;
   readonly instanceRef: string;
 
-  private readonly tools = new Map<string, RegisteredToolDefinition>();
+  private readonly tools = new Map<string, McpToolDescriptor>();
   private readonly now: () => number;
-  private fingerprintSha256: string | undefined;
+  private readonly deployment: LoadedDeploymentManifest | undefined;
+  private readonly runtimeBindings: NexusRuntimeBindingObservation;
+  private readonly deploymentDiagnostics: Record<string, unknown>;
+  private toolSurfaceIdentity: ToolSurfaceIdentity | undefined;
 
   constructor(
     private readonly config: ServerConfig,
@@ -97,6 +108,10 @@ export class RuntimeCapabilityRegistry {
     this.startedAtMs = this.now();
     this.instanceRef = options.instanceRef
       ?? sha256(randomUUID()).slice(0, 16);
+    const loaded = loadDeploymentState(config);
+    this.deployment = loaded.deployment;
+    this.runtimeBindings = loaded.runtimeBindings;
+    this.deploymentDiagnostics = loaded.diagnostics;
   }
 
   registerTool(name: string, toolConfig: Record<string, unknown>): void {
@@ -105,61 +120,49 @@ export class RuntimeCapabilityRegistry {
     // Tool definitions are static for that process/configuration, so normalize
     // each name only once instead of rebuilding every JSON schema per tool call.
     if (this.tools.has(name)) return;
-    this.tools.set(name, normalizeToolDefinition(toolConfig));
-    this.fingerprintSha256 = undefined;
+    this.tools.set(name, normalizeToolDefinition(name, toolConfig));
+    this.toolSurfaceIdentity = undefined;
   }
 
-  snapshot(): Record<string, unknown> {
-    const toolEntries = Array.from(this.tools.entries())
-      .sort(([left], [right]) => left.localeCompare(right))
-      .map(([name, definition]) => ({ name, ...definition }));
-    const toolNames = toolEntries.map((entry) => entry.name);
+  descriptors(): McpToolDescriptor[] {
+    return [...this.tools.values()]
+      .map((entry) => structuredClone(entry));
+  }
+
+  snapshot(options: RuntimeCapabilitySnapshotOptions = {}): Record<string, unknown> {
+    const toolEntries = this.descriptors();
+    const identity = this.toolSurfaceIdentity
+      ?? createToolSurfaceIdentity(toolEntries);
+    this.toolSurfaceIdentity = identity;
+    const toolNames = identity.toolNames;
     const safeConfiguration = this.safeConfiguration();
-    const fingerprintSha256 = this.fingerprintSha256 ?? sha256(stableJson({
-      schemaVersion: 1,
-      mcpServerVersion: DEVSPACE_MCP_SERVER_VERSION,
-      configuration: safeConfiguration,
-      tools: toolEntries,
-    }));
-    this.fingerprintSha256 = fingerprintSha256;
-    const surfaceEpoch = `nexus:${fingerprintSha256.slice(0, 16)}`;
+    const surfaceEpoch = this.runtimeBindings.surfaceEpoch
+      ?? `nexus:${identity.fingerprintSha256.slice(0, 16)}`;
     const initialized = toolNames.length > 0;
 
-    return {
+    const backendRuntime: NexusBackendRuntimeObservation = {
       schemaVersion: 1,
       backend: {
         name: "devspace",
         implementation: "zes-nexus",
         packageVersion: PACKAGE_VERSION,
-        mcpServerVersion: DEVSPACE_MCP_SERVER_VERSION,
+        mcpServerVersion: this.config.mcpServerVersion,
         instanceRef: this.instanceRef,
         startedAt: new Date(this.startedAtMs).toISOString(),
         uptimeMs: Math.max(0, this.now() - this.startedAtMs),
       },
       toolSurface: {
         initialized,
-        fingerprintSha256,
+        fingerprintSha256: identity.fingerprintSha256,
         surfaceEpoch,
-        toolCount: toolNames.length,
+        toolCount: identity.toolCount,
         toolNames,
         requiredClientTools: [...REQUIRED_CLIENT_TOOLS],
+        fingerprintBasis: "canonical_complete_mcp_tools_list_descriptors",
         configuration: safeConfiguration,
         criticalToolGroups: this.criticalToolGroups(new Set(toolNames)),
       },
-      clientCatalogObservation: {
-        observable: false,
-        freshness: "unavailable",
-        status: "SERVER_CURRENT_CLIENT_UNKNOWN",
-        reason:
-          "MCP tool calls do not include the client-side cached tools/list result.",
-        expectedSurfaceEpoch: surfaceEpoch,
-        expectedFingerprintSha256: fingerprintSha256,
-        requiredClientTools: [...REQUIRED_CLIENT_TOOLS],
-        backendRegisteredSurfaceObservable: true,
-        missingRegisteredToolDoesNotImplyBackendCapabilityAbsent: true,
-        actionWhenClientLacksRegisteredTool:
-          "Refresh or reconnect the MCP connector, then inspect the newly listed tool schema.",
-      },
+      deploymentManifestObservation: this.deploymentDiagnostics,
       policy: {
         authority: "executor_local_runtime_observation_only",
         controlsToolRegistration: false,
@@ -170,24 +173,75 @@ export class RuntimeCapabilityRegistry {
         credentialsCaptured: false,
       },
     };
+
+    const { runtime, assessment } = assessNexusBackendFreshness({
+      backendRuntime,
+      bindings: {
+        ...this.runtimeBindings,
+        surfaceEpoch,
+      },
+      expected: this.deployment?.manifest,
+      clientInput: options.clientInput,
+      clientAttestation: options.clientAttestation,
+      assessedAt: new Date(this.now()).toISOString(),
+    });
+    const enriched = enrichNexusBackendRuntime(backendRuntime, assessment);
+    enriched.clientCatalogObservation = {
+      ...assessment.clientCatalogObservation,
+      status: assessment.status,
+      backendRegisteredSurfaceObservable: true,
+      missingRegisteredToolDoesNotImplyBackendCapabilityAbsent: true,
+      actionWhenClientLacksRegisteredTool:
+        "Refresh or reconnect the MCP connector, then attest the complete tools/list fingerprint.",
+    };
+    return {
+      ...enriched,
+      runtimeBindingObservation: {
+        build: runtime.build,
+        acceleratorProfile: runtime.acceleratorProfile,
+        nativeMcps: runtime.nativeMcps,
+      },
+    };
   }
 
-  responseHeaders(): Record<string, string> {
+  responseHeaders(
+    clientAttestation?: ClientCatalogAttestation,
+  ): Record<string, string> {
     const headers: Record<string, string> = {
       "Cache-Control": "no-store",
       "X-ZES-Nexus-Instance-Ref": this.instanceRef,
     };
     if (this.tools.size === 0) return headers;
-    const snapshot = this.snapshot();
+    const snapshot = this.snapshot({ clientAttestation });
     const toolSurface = snapshot.toolSurface as Record<string, unknown>;
-    if (typeof toolSurface.fingerprintSha256 === "string") {
-      headers["X-ZES-Tool-Surface-Fingerprint"] = toolSurface.fingerprintSha256;
-    }
-    if (typeof toolSurface.surfaceEpoch === "string") {
-      headers["X-ZES-Tool-Surface-Epoch"] = toolSurface.surfaceEpoch;
-    }
-    headers["X-ZES-Tool-Surface-Freshness"] = "SERVER_CURRENT_CLIENT_UNKNOWN";
-    return headers;
+    const freshness = snapshot.toolSurfaceFreshness as Record<string, unknown>;
+    const runtime = {
+      instanceRef: this.instanceRef,
+      startedAt: new Date(this.startedAtMs).toISOString(),
+      surfaceEpoch:
+        typeof toolSurface.surfaceEpoch === "string"
+          ? toolSurface.surfaceEpoch
+          : undefined,
+      build: {
+        packageVersion: PACKAGE_VERSION,
+        mcpServerVersion: this.config.mcpServerVersion,
+      },
+      toolSurface: {
+        fingerprintSha256: String(toolSurface.fingerprintSha256),
+        toolCount: Number(toolSurface.toolCount),
+        toolNames: Array.isArray(toolSurface.toolNames)
+          ? toolSurface.toolNames.filter((entry): entry is string => typeof entry === "string")
+          : [],
+      },
+      nativeMcps: [],
+    };
+    return {
+      ...headers,
+      ...freshnessHeaders(
+        freshness as unknown as Parameters<typeof freshnessHeaders>[0],
+        runtime,
+      ),
+    };
   }
 
   private safeConfiguration(): Record<string, unknown> {
@@ -264,73 +318,191 @@ export class RuntimeCapabilityRegistry {
 }
 
 function normalizeToolDefinition(
+  name: string,
   toolConfig: Record<string, unknown>,
-): RegisteredToolDefinition {
-  return {
+): McpToolDescriptor {
+  const descriptor: McpToolDescriptor = {
+    name,
     title: typeof toolConfig.title === "string" ? toolConfig.title : undefined,
     description:
       typeof toolConfig.description === "string" ? toolConfig.description : undefined,
-    inputSchema: jsonSchemaForRawShape(toolConfig.inputSchema),
-    outputSchema: jsonSchemaForRawShape(toolConfig.outputSchema),
-    annotations: canonicalJson(toolConfig.annotations),
+    inputSchema:
+      jsonSchemaForRawShape(toolConfig.inputSchema, "input")
+      ?? { type: "object", properties: {} },
+    annotations: cloneJsonValue(toolConfig.annotations),
+    execution: { taskSupport: "forbidden" },
+    _meta: normalizeAppToolMetadata(toolConfig._meta),
+  };
+  const outputSchema = jsonSchemaForRawShape(toolConfig.outputSchema, "output");
+  if (outputSchema !== undefined) descriptor.outputSchema = outputSchema;
+  return descriptor;
+}
+
+function normalizeAppToolMetadata(value: unknown): unknown {
+  const cloned = cloneJsonValue(value);
+  if (!isRecord(cloned)) return cloned;
+  const nestedUi = isRecord(cloned.ui) ? cloned.ui : undefined;
+  const nestedResourceUri = typeof nestedUi?.resourceUri === "string"
+    ? nestedUi.resourceUri
+    : undefined;
+  const legacyResourceUri = typeof cloned["ui/resourceUri"] === "string"
+    ? cloned["ui/resourceUri"]
+    : undefined;
+  if (nestedResourceUri && !legacyResourceUri) {
+    return { ...cloned, "ui/resourceUri": nestedResourceUri };
+  }
+  if (legacyResourceUri && !nestedResourceUri) {
+    return {
+      ...cloned,
+      ui: { ...nestedUi, resourceUri: legacyResourceUri },
+    };
+  }
+  return cloned;
+}
+
+function jsonSchemaForRawShape(
+  value: unknown,
+  pipeStrategy: "input" | "output",
+): Record<string, unknown> | undefined {
+  if (!isRecord(value)) return undefined;
+  try {
+    return toJsonSchemaCompat(
+      z.object(value as Record<string, z.ZodType>),
+      { strictUnions: true, pipeStrategy },
+    ) as Record<string, unknown>;
+  } catch {
+    return undefined;
+  }
+}
+
+function cloneJsonValue(value: unknown): unknown {
+  if (value === undefined) return undefined;
+  try {
+    return structuredClone(value);
+  } catch {
+    return undefined;
+  }
+}
+
+interface LoadedDeploymentState {
+  deployment?: LoadedDeploymentManifest;
+  runtimeBindings: NexusRuntimeBindingObservation;
+  diagnostics: Record<string, unknown>;
+}
+
+function loadDeploymentState(config: ServerConfig): LoadedDeploymentState {
+  const freshness = config.toolSurfaceFreshness;
+  const errors: Array<Record<string, unknown>> = [];
+  let deployment: LoadedDeploymentManifest | undefined;
+  let buildArtifactDigestSha256: string | undefined;
+  let acceleratorProfile: ReturnType<typeof observeFileIdentitySync> | undefined;
+  let nativeMcps: RuntimeNativeMcpIdentity[] = [];
+
+  if (
+    freshness.deploymentManifestPath
+    && freshness.deploymentManifestDigestSha256
+  ) {
+    try {
+      deployment = loadDeploymentManifestEnvelopeSync(
+        freshness.deploymentManifestPath,
+        freshness.deploymentManifestPath,
+        freshness.deploymentManifestDigestSha256,
+      );
+    } catch (error) {
+      errors.push({
+        scope: "deployment_manifest",
+        path: freshness.deploymentManifestPath,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  } else if (freshness.deploymentManifestPath) {
+    errors.push({
+      scope: "deployment_manifest",
+      path: freshness.deploymentManifestPath,
+      error: "DEVSPACE_TOOL_SURFACE_MANIFEST requires DEVSPACE_TOOL_SURFACE_MANIFEST_SHA256",
+    });
+  } else if (freshness.deploymentManifestDigestSha256) {
+    errors.push({
+      scope: "deployment_manifest",
+      error: "DEVSPACE_TOOL_SURFACE_MANIFEST_SHA256 is set without DEVSPACE_TOOL_SURFACE_MANIFEST",
+    });
+  }
+
+  if (freshness.buildArtifactPath) {
+    try {
+      buildArtifactDigestSha256 = observePathIdentitySync(
+        freshness.buildArtifactPath,
+        `build-artifact:${freshness.buildArtifactPath}`,
+      ).digestSha256;
+    } catch (error) {
+      errors.push({
+        scope: "server_build",
+        path: freshness.buildArtifactPath,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  if (freshness.acceleratorProfilePath) {
+    try {
+      acceleratorProfile = observeFileIdentitySync(
+        freshness.acceleratorProfilePath,
+        freshness.acceleratorProfileRef ?? freshness.acceleratorProfilePath,
+      );
+    } catch (error) {
+      errors.push({
+        scope: "accelerator_profile",
+        path: freshness.acceleratorProfilePath,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  if (freshness.nativeMcpRuntimeIdentitiesPath) {
+    try {
+      nativeMcps = validateRuntimeNativeMcpIdentities(
+        JSON.parse(readFileSync(freshness.nativeMcpRuntimeIdentitiesPath, "utf8")),
+      );
+    } catch (error) {
+      errors.push({
+        scope: "native_mcp",
+        path: freshness.nativeMcpRuntimeIdentitiesPath,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  return {
+    deployment,
+    runtimeBindings: {
+      sourceCommit: freshness.sourceCommit,
+      sourceTree: freshness.sourceTree,
+      buildArtifactDigestSha256,
+      surfaceEpoch: freshness.surfaceEpoch,
+      acceleratorProfile,
+      nativeMcps,
+      observationErrors: errors,
+    },
+    diagnostics: {
+      configured: Boolean(freshness.deploymentManifestPath),
+      path: freshness.deploymentManifestPath,
+      digestPinned: Boolean(freshness.deploymentManifestDigestSha256),
+      expectedDigestSha256: freshness.deploymentManifestDigestSha256,
+      loaded: Boolean(deployment),
+      observedDigestSha256: deployment?.identity.digestSha256,
+      generatedAt: deployment?.manifest.generatedAt,
+      surfaceEpoch: deployment?.manifest.surfaceEpoch,
+      errors,
+    },
   };
 }
 
-function jsonSchemaForRawShape(value: unknown): JsonValue | undefined {
-  if (!isRecord(value)) return canonicalJson(value);
-  try {
-    return canonicalJson(
-      z.toJSONSchema(z.object(value as Record<string, z.ZodType>)),
-    );
-  } catch {
-    return canonicalJson(value);
-  }
-}
-
-function canonicalJson(value: unknown): JsonValue | undefined {
-  if (
-    value === null
-    || typeof value === "boolean"
-    || typeof value === "number"
-    || typeof value === "string"
-  ) {
-    return value;
-  }
-  if (Array.isArray(value)) {
-    return value
-      .map(canonicalJson)
-      .filter((item): item is JsonValue => item !== undefined);
-  }
-  if (!isRecord(value)) return undefined;
-
-  const entries = Object.entries(value)
-    .sort(([left], [right]) => left.localeCompare(right))
-    .flatMap(([key, child]) => {
-      const normalized = canonicalJson(child);
-      return normalized === undefined ? [] : [[key, normalized] as const];
-    });
-  return Object.fromEntries(entries);
-}
-
-function stableJson(value: unknown): string {
-  return JSON.stringify(canonicalJson(value));
+function compareCodeUnits(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
 }
 
 function sha256(value: string): string {
   return createHash("sha256").update(value).digest("hex");
-}
-
-function readPackageVersion(): string {
-  try {
-    const parsed = JSON.parse(
-      readFileSync(new URL("../package.json", import.meta.url), "utf8"),
-    ) as { version?: unknown };
-    return typeof parsed.version === "string" && parsed.version.length > 0
-      ? parsed.version
-      : "unknown";
-  } catch {
-    return "unknown";
-  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

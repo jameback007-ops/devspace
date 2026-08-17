@@ -21,6 +21,47 @@ assert.equal(loadConfig({ ...baseEnv, DEVSPACE_TOOL_MODE: "minimal" }).toolMode,
 assert.equal(loadConfig({ ...baseEnv, DEVSPACE_TOOL_MODE: "full" }).toolMode, "full");
 assert.equal(loadConfig({ ...baseEnv, DEVSPACE_TOOL_MODE: "codex" }).toolMode, "codex");
 assert.equal(loadConfig(baseEnv).codexNavigationTools, false);
+assert.equal(loadConfig(baseEnv).mcpServerVersion, "1.0.7-zes.1");
+assert.equal(
+  loadConfig({
+    ...baseEnv,
+    DEVSPACE_MCP_SERVER_VERSION: "1.0.7-zes.2",
+  }).mcpServerVersion,
+  "1.0.7-zes.2",
+);
+assert.deepEqual(loadConfig(baseEnv).toolSurfaceFreshness, {});
+assert.deepEqual(
+  loadConfig({
+    ...baseEnv,
+    DEVSPACE_TOOL_SURFACE_MANIFEST: join(emptyConfigDir, "deployment.json"),
+    DEVSPACE_TOOL_SURFACE_MANIFEST_SHA256: "a".repeat(64),
+    DEVSPACE_TOOL_SURFACE_SOURCE_COMMIT: "commit-1",
+    DEVSPACE_TOOL_SURFACE_SOURCE_TREE: "tree-1",
+    DEVSPACE_TOOL_SURFACE_BUILD_ARTIFACT: join(emptyConfigDir, "dist", "server.js"),
+    DEVSPACE_TOOL_SURFACE_EPOCH: "nexus:deployment-1",
+    DEVSPACE_ACCELERATOR_PROFILE: join(emptyConfigDir, "accelerator.yaml"),
+    DEVSPACE_ACCELERATOR_PROFILE_REF: "git:zes-main:accelerator.yaml",
+    DEVSPACE_NATIVE_MCP_RUNTIME_IDENTITIES: join(emptyConfigDir, "native-mcps.json"),
+  }).toolSurfaceFreshness,
+  {
+    deploymentManifestPath: join(emptyConfigDir, "deployment.json"),
+    deploymentManifestDigestSha256: "a".repeat(64),
+    sourceCommit: "commit-1",
+    sourceTree: "tree-1",
+    buildArtifactPath: join(emptyConfigDir, "dist", "server.js"),
+    surfaceEpoch: "nexus:deployment-1",
+    acceleratorProfilePath: join(emptyConfigDir, "accelerator.yaml"),
+    acceleratorProfileRef: "git:zes-main:accelerator.yaml",
+    nativeMcpRuntimeIdentitiesPath: join(emptyConfigDir, "native-mcps.json"),
+  },
+);
+assert.throws(
+  () => loadConfig({
+    ...baseEnv,
+    DEVSPACE_TOOL_SURFACE_MANIFEST_SHA256: "not-a-digest",
+  }),
+  /lowercase SHA-256 digest/,
+);
 assert.equal(
   loadConfig({ ...baseEnv, DEVSPACE_CODEX_NAVIGATION_TOOLS: "1" }).codexNavigationTools,
   true,

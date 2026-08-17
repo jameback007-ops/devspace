@@ -72,9 +72,12 @@ import {
 import { shutdownHttpServer } from "./server-shutdown.js";
 import { formatPathForPrompt } from "./skills.js";
 import {
-  DEVSPACE_MCP_SERVER_VERSION,
   RuntimeCapabilityRegistry,
 } from "./runtime-capabilities.js";
+import {
+  clientAttestationFromHeaders,
+  type ClientCatalogAttestation,
+} from "./tool-surface-freshness.js";
 import { registerZesCodexInspectionTools } from "./zes-codex-inspection.js";
 import { createWorkspaceStore } from "./workspace-store.js";
 import { formatAgentsPath, WorkspaceRegistry } from "./workspaces.js";
@@ -898,9 +901,24 @@ function scopeRuntimeRelation(
 function setRuntimeCapabilityHeaders(
   res: Response,
   runtimeCapabilities: RuntimeCapabilityRegistry,
+  clientAttestation?: ClientCatalogAttestation,
 ): void {
-  for (const [name, value] of Object.entries(runtimeCapabilities.responseHeaders())) {
+  for (const [name, value] of Object.entries(
+    runtimeCapabilities.responseHeaders(clientAttestation),
+  )) {
     res.setHeader(name, value);
+  }
+}
+
+function requestClientCatalogAttestation(
+  req: Request,
+): ClientCatalogAttestation | undefined {
+  try {
+    return clientAttestationFromHeaders(req.headers);
+  } catch {
+    // Never treat malformed optional attestation as proof. The request remains
+    // usable and the response reports the client catalog as unknown.
+    return undefined;
   }
 }
 
@@ -917,6 +935,30 @@ function registerExecutionScopeTools(
     .describe(
       "Opaque execution scope reference returned by execution_scope_list. Omit to inspect the current scope.",
     );
+  const clientCatalogInputSchema = {
+    clientObservedSurfaceEpoch: z
+      .string()
+      .min(1)
+      .max(256)
+      .optional()
+      .describe(
+        "Optional exact surface epoch observed by this client after tools/list. This is an attestation, not server inference.",
+      ),
+    clientObservedFingerprintSha256: z
+      .string()
+      .regex(/^[a-f0-9]{64}$/)
+      .optional()
+      .describe(
+        "Optional SHA-256 of the canonical complete client-observed tools/list descriptors.",
+      ),
+    clientObservedToolNames: z
+      .array(z.string().min(1).max(1_024))
+      .max(10_000)
+      .optional()
+      .describe(
+        "Optional exact tool names from the same client-observed tools/list response.",
+      ),
+  };
 
   registerAppTool(
     server,
@@ -933,14 +975,26 @@ function registerExecutionScopeTools(
           .max(100)
           .optional()
           .describe("Maximum scopes to return. Defaults to 20."),
+        ...clientCatalogInputSchema,
       },
       outputSchema: resultOutputSchema({ data: z.unknown() }),
       ...toolWidgetDescriptorMeta(config, "read"),
       annotations: CODEX_SESSION_TOOL_ANNOTATIONS,
     },
-    async ({ limit }, { _meta }) => {
+    async ({
+      limit,
+      clientObservedSurfaceEpoch,
+      clientObservedFingerprintSha256,
+      clientObservedToolNames,
+    }, { _meta }) => {
       const listed = executionScopes.list(executionScopeIdentity(_meta), limit);
-      const backendRuntime = runtimeCapabilities.snapshot();
+      const backendRuntime = runtimeCapabilities.snapshot({
+        clientInput: {
+          clientObservedSurfaceEpoch,
+          clientObservedFingerprintSha256,
+          clientObservedToolNames,
+        },
+      });
       if (!Array.isArray(listed.scopes)) {
         return jsonToolResponse({ ...listed, backendRuntime });
       }
@@ -991,12 +1045,18 @@ function registerExecutionScopeTools(
         "Read one DevSpace execution scope by opaque scopeRef, including linked workspaces, live process sessions, the observation gap since the last MCP/tool event, the current backend runtime/tool-surface fingerprint, and—when the target explicitly recorded one—the latest bounded semantic recovery capsule joined with local workspace freshness and later activity. Omit scopeRef for the current host scope. The server reports which critical tools are currently registered but cannot observe the host's cached tools/list result. Model progress and provider generation are not observable between MCP calls, so status never claims that a silent interval is normal reasoning or a hang. Semantic state is never inferred from filenames or tool events. Raw host session IDs, prompts, private reasoning, credentials, tool outputs, patches, and raw commands are never returned; capsule state remains executor-local observation rather than task, decision, writer, effect, or publication authority.",
       inputSchema: {
         scopeRef: scopeRefSchema.optional(),
+        ...clientCatalogInputSchema,
       },
       outputSchema: resultOutputSchema({ data: z.unknown() }),
       ...toolWidgetDescriptorMeta(config, "read"),
       annotations: CODEX_SESSION_TOOL_ANNOTATIONS,
     },
-    async ({ scopeRef }, { _meta }) => {
+    async ({
+      scopeRef,
+      clientObservedSurfaceEpoch,
+      clientObservedFingerprintSha256,
+      clientObservedToolNames,
+    }, { _meta }) => {
       const status = executionScopes.status(
         scopeRef,
         executionScopeIdentity(_meta),
@@ -1020,7 +1080,13 @@ function registerExecutionScopeTools(
             observedScopeTotalEventCount: totalEventCount,
           })
         : undefined;
-      const backendRuntime = runtimeCapabilities.snapshot();
+      const backendRuntime = runtimeCapabilities.snapshot({
+        clientInput: {
+          clientObservedSurfaceEpoch,
+          clientObservedFingerprintSha256,
+          clientObservedToolNames,
+        },
+      });
       return jsonToolResponse({
         ...status,
         backendRuntime,
@@ -1891,7 +1957,7 @@ export function createMcpServer(
     {
       name: "devspace",
       title: "DevSpace",
-      version: DEVSPACE_MCP_SERVER_VERSION,
+      version: config.mcpServerVersion,
       description:
         "Coding tools for project workspaces, advisory turn continuity and Git-bound recovery capsules, execution-scope observability and messaging, serialized local-agent provider continuation, and optional read-only inspection of the exact live AOQ Codex adapter and worktree.",
     },
@@ -3038,6 +3104,23 @@ export function createServer(
       )
     : [];
 
+  // Materialize the exact registered descriptor set before the first HTTP
+  // request. This keeps /healthz and response headers from presenting an empty
+  // process surface during the interval before the first tools/list call.
+  const catalogBootstrapServer = createMcpServer(
+    config,
+    workspaces,
+    reviewCheckpoints,
+    processSessions,
+    localAgentProviders,
+    incomingArtifactAdapters,
+    executionScopes,
+    executionMailbox,
+    localAgentCoordinator,
+    turnContinuity,
+    runtimeCapabilities,
+  );
+
   const logSessionCloseResults = (
     reason: "idle_timeout" | "server_shutdown",
     results: McpSessionCloseResult[],
@@ -3122,14 +3205,17 @@ export function createServer(
     }),
   );
 
-  app.get("/healthz", (_req, res) => {
-    setRuntimeCapabilityHeaders(res, runtimeCapabilities);
-    const runtime = runtimeCapabilities.snapshot();
+  app.get("/healthz", (req, res) => {
+    const clientAttestation = requestClientCatalogAttestation(req);
+    setRuntimeCapabilityHeaders(res, runtimeCapabilities, clientAttestation);
+    const runtime = runtimeCapabilities.snapshot({ clientAttestation });
     const backend = isRecord(runtime.backend) ? runtime.backend : {};
     const toolSurface = isRecord(runtime.toolSurface) ? runtime.toolSurface : {};
     res.json({
       ok: true,
       name: "devspace",
+      packageVersion: backend.packageVersion,
+      mcpServerVersion: backend.mcpServerVersion,
       backendInstanceRef: backend.instanceRef,
       backendStartedAt: backend.startedAt,
       toolSurface: {
@@ -3140,11 +3226,15 @@ export function createServer(
         requiredClientTools: toolSurface.requiredClientTools,
       },
       clientCatalogObservation: runtime.clientCatalogObservation,
+      toolSurfaceFreshness: runtime.toolSurfaceFreshness,
+      deploymentManifestObservation: runtime.deploymentManifestObservation,
+      runtimeBindingObservation: runtime.runtimeBindingObservation,
     });
   });
 
   app.all("/mcp", async (req, res) => {
-    setRuntimeCapabilityHeaders(res, runtimeCapabilities);
+    const clientAttestation = requestClientCatalogAttestation(req);
+    setRuntimeCapabilityHeaders(res, runtimeCapabilities, clientAttestation);
     const requestId = res.locals.requestId as string | undefined;
     const sessionId = req.header("mcp-session-id");
     const initializeRequest = req.method === "POST" && isInitializeRequest(req.body);
@@ -3287,7 +3377,7 @@ export function createServer(
       // handled. Re-apply headers so tool discovery and execution responses
       // carry the complete backend fingerprint rather than the pre-registration
       // process-only identity.
-      setRuntimeCapabilityHeaders(res, runtimeCapabilities);
+      setRuntimeCapabilityHeaders(res, runtimeCapabilities, clientAttestation);
       await transport.handleRequest(req, res, req.body);
     } catch (error) {
       logEvent(config.logging, "error", "mcp_request_error", {
@@ -3315,6 +3405,7 @@ export function createServer(
         turnContinuity.close();
         executionMailbox.close();
         executionScopes.close();
+        await catalogBootstrapServer.close();
         oauthProvider.close();
         workspaceStore.close?.();
       })();

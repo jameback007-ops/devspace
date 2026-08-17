@@ -366,3 +366,28 @@ npx @waishnav/devspace serve
 
 The environment assignments must be part of the same command invocation, or
 exported first.
+
+## Tool-Surface Deployment Attestation
+
+Qualified ZES Nexus deployments can bind the running source, build artifact,
+complete MCP descriptor surface, accelerator profile, and exact native MCP
+receipts to a digest-pinned manifest. These variables are optional for ordinary
+DevSpace use; when a deployment claims freshness, set the applicable values as
+one release unit.
+
+| Variable | Purpose |
+| --- | --- |
+| `DEVSPACE_MCP_SERVER_VERSION` | Release identity returned in MCP `serverInfo`. Change it for a newly qualified deployed surface. |
+| `DEVSPACE_TOOL_SURFACE_MANIFEST` | Absolute path to the validated deployment manifest. |
+| `DEVSPACE_TOOL_SURFACE_MANIFEST_SHA256` | Lowercase SHA-256 pin for the complete manifest bytes. |
+| `DEVSPACE_TOOL_SURFACE_SOURCE_COMMIT` | Exact source commit loaded into the deployment. |
+| `DEVSPACE_TOOL_SURFACE_SOURCE_TREE` | Exact source tree for that commit. |
+| `DEVSPACE_TOOL_SURFACE_BUILD_ARTIFACT` | Built server file or complete build directory deterministically hashed by the running process. |
+| `DEVSPACE_TOOL_SURFACE_EPOCH` | Deployment epoch expected by the manifest and response headers. |
+| `DEVSPACE_ACCELERATOR_PROFILE` | Exact governed accelerator-profile file observed at runtime. |
+| `DEVSPACE_ACCELERATOR_PROFILE_REF` | Stable provenance reference recorded alongside the profile digest. |
+| `DEVSPACE_NATIVE_MCP_RUNTIME_IDENTITIES` | Optional JSON array of exact native MCP runtime observations; never infer these from names alone. |
+
+See [Tool-Surface Freshness and Deployment Attestation](tool-surface-freshness.md)
+for the status model, probe/generator commands, client-attestation boundary,
+and restart procedure.

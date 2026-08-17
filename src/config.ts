@@ -12,9 +12,21 @@ import {
 } from "./local-agent-billing.js";
 import type { LocalAgentQueueConfig } from "./local-agent-queue.js";
 import { devspaceAgentsDir, devspaceSkillsDir, loadDevspaceFiles } from "./user-config.js";
+import { DEFAULT_DEVSPACE_MCP_SERVER_VERSION } from "./version.js";
 
 export type ToolMode = "minimal" | "full" | "codex";
 export type WidgetMode = "off" | "changes" | "full";
+export interface ToolSurfaceFreshnessConfig {
+  deploymentManifestPath?: string;
+  deploymentManifestDigestSha256?: string;
+  sourceCommit?: string;
+  sourceTree?: string;
+  buildArtifactPath?: string;
+  surfaceEpoch?: string;
+  acceleratorProfilePath?: string;
+  acceleratorProfileRef?: string;
+  nativeMcpRuntimeIdentitiesPath?: string;
+}
 const DEFAULT_OAUTH_ACCESS_TOKEN_TTL_SECONDS = 60 * 60;
 const DEFAULT_OAUTH_REFRESH_TOKEN_TTL_SECONDS = 30 * 24 * 60 * 60;
 const DEFAULT_ARTIFACT_MAX_FILE_BYTES = 100 * 1024 * 1024;
@@ -46,6 +58,7 @@ export interface ServerConfig {
   allowedRoots: string[];
   allowedHosts: string[];
   publicBaseUrl: string;
+  mcpServerVersion: string;
   toolMode: ToolMode;
   codexNavigationTools: boolean;
   widgets: WidgetMode;
@@ -64,6 +77,7 @@ export interface ServerConfig {
   turnContinuity: TurnContinuityConfig;
   localAgentBilling: LocalAgentBillingConfig;
   localAgentQueue: LocalAgentQueueConfig;
+  toolSurfaceFreshness: ToolSurfaceFreshnessConfig;
   logging: LoggingConfig;
 }
 
@@ -116,6 +130,79 @@ function normalizeAllowedHosts(rawHosts: string[], derivedHosts: string[]): stri
 
 function parseBoolean(value: string | undefined): boolean {
   return ["1", "true", "yes", "on"].includes(value?.toLowerCase() ?? "");
+}
+
+function parseOptionalString(
+  value: string | undefined,
+  name: string,
+  maxLength = 1_024,
+): string | undefined {
+  if (value === undefined) return undefined;
+  const trimmed = value.trim();
+  if (trimmed.length === 0 || trimmed.length > maxLength) {
+    throw new Error(`Invalid ${name}: expected a non-empty value no longer than ${maxLength} characters`);
+  }
+  return trimmed;
+}
+
+function parseOptionalSha256(value: string | undefined, name: string): string | undefined {
+  const parsed = parseOptionalString(value, name, 64);
+  if (parsed !== undefined && !/^[a-f0-9]{64}$/.test(parsed)) {
+    throw new Error(`Invalid ${name}: expected a lowercase SHA-256 digest`);
+  }
+  return parsed;
+}
+
+function parseOptionalAbsolutePath(value: string | undefined, name: string): string | undefined {
+  const parsed = parseOptionalString(value, name, 4_096);
+  return parsed === undefined ? undefined : resolve(expandHomePath(parsed));
+}
+
+function parseToolSurfaceFreshnessConfig(
+  env: NodeJS.ProcessEnv,
+): ToolSurfaceFreshnessConfig {
+  const parsed: ToolSurfaceFreshnessConfig = {
+    deploymentManifestPath: parseOptionalAbsolutePath(
+      env.DEVSPACE_TOOL_SURFACE_MANIFEST,
+      "DEVSPACE_TOOL_SURFACE_MANIFEST",
+    ),
+    deploymentManifestDigestSha256: parseOptionalSha256(
+      env.DEVSPACE_TOOL_SURFACE_MANIFEST_SHA256,
+      "DEVSPACE_TOOL_SURFACE_MANIFEST_SHA256",
+    ),
+    sourceCommit: parseOptionalString(
+      env.DEVSPACE_TOOL_SURFACE_SOURCE_COMMIT,
+      "DEVSPACE_TOOL_SURFACE_SOURCE_COMMIT",
+    ),
+    sourceTree: parseOptionalString(
+      env.DEVSPACE_TOOL_SURFACE_SOURCE_TREE,
+      "DEVSPACE_TOOL_SURFACE_SOURCE_TREE",
+    ),
+    buildArtifactPath: parseOptionalAbsolutePath(
+      env.DEVSPACE_TOOL_SURFACE_BUILD_ARTIFACT,
+      "DEVSPACE_TOOL_SURFACE_BUILD_ARTIFACT",
+    ),
+    surfaceEpoch: parseOptionalString(
+      env.DEVSPACE_TOOL_SURFACE_EPOCH,
+      "DEVSPACE_TOOL_SURFACE_EPOCH",
+      256,
+    ),
+    acceleratorProfilePath: parseOptionalAbsolutePath(
+      env.DEVSPACE_ACCELERATOR_PROFILE,
+      "DEVSPACE_ACCELERATOR_PROFILE",
+    ),
+    acceleratorProfileRef: parseOptionalString(
+      env.DEVSPACE_ACCELERATOR_PROFILE_REF,
+      "DEVSPACE_ACCELERATOR_PROFILE_REF",
+    ),
+    nativeMcpRuntimeIdentitiesPath: parseOptionalAbsolutePath(
+      env.DEVSPACE_NATIVE_MCP_RUNTIME_IDENTITIES,
+      "DEVSPACE_NATIVE_MCP_RUNTIME_IDENTITIES",
+    ),
+  };
+  return Object.fromEntries(
+    Object.entries(parsed).filter(([, value]) => value !== undefined),
+  ) as ToolSurfaceFreshnessConfig;
 }
 
 function parseToolMode(env: NodeJS.ProcessEnv): ToolMode {
@@ -452,6 +539,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     allowedRoots: parseAllowedRoots(env.DEVSPACE_ALLOWED_ROOTS ?? files.config.allowedRoots),
     allowedHosts: parseAllowedHosts(env.DEVSPACE_ALLOWED_HOSTS, derivedAllowedHosts),
     publicBaseUrl,
+    mcpServerVersion:
+      parseOptionalString(
+        env.DEVSPACE_MCP_SERVER_VERSION,
+        "DEVSPACE_MCP_SERVER_VERSION",
+        256,
+      ) ?? DEFAULT_DEVSPACE_MCP_SERVER_VERSION,
     toolMode: parseToolMode(env),
     codexNavigationTools:
       env.DEVSPACE_CODEX_NAVIGATION_TOOLS === undefined
@@ -485,6 +578,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
       mode: parseLocalAgentBillingMode(env.DEVSPACE_LOCAL_AGENT_BILLING_MODE),
     },
     localAgentQueue: parseLocalAgentQueueConfig(env),
+    toolSurfaceFreshness: parseToolSurfaceFreshnessConfig(env),
     logging: parseLoggingConfig(env),
   };
 }

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as z from "zod/v4";
@@ -136,12 +136,8 @@ assert.notEqual(
 const clientCatalog = firstSnapshot.clientCatalogObservation as Record<string, unknown>;
 assert.equal(clientCatalog.observable, false);
 assert.equal(clientCatalog.freshness, "unavailable");
-assert.equal(clientCatalog.status, "SERVER_CURRENT_CLIENT_UNKNOWN");
-assert.equal(clientCatalog.expectedSurfaceEpoch, firstSurface.surfaceEpoch);
-assert.equal(
-  clientCatalog.expectedFingerprintSha256,
-  firstSurface.fingerprintSha256,
-);
+assert.equal(clientCatalog.status, "INDETERMINATE");
+assert.equal(clientCatalog.reason, "deployment_manifest_unavailable");
 assert.equal(
   clientCatalog.missingRegisteredToolDoesNotImplyBackendCapabilityAbsent,
   true,
@@ -160,7 +156,32 @@ assert.deepEqual(first.responseHeaders(), {
   "X-ZES-Nexus-Instance-Ref": "1111111111111111",
   "X-ZES-Tool-Surface-Fingerprint": String(firstSurface.fingerprintSha256),
   "X-ZES-Tool-Surface-Epoch": String(firstSurface.surfaceEpoch),
-  "X-ZES-Tool-Surface-Freshness": "SERVER_CURRENT_CLIENT_UNKNOWN",
+  "X-ZES-Tool-Surface-Freshness": "INDETERMINATE",
 });
+
+const unpinnedManifestPath = join(root, "unpinned-deployment.json");
+writeFileSync(unpinnedManifestPath, "{}\n");
+const unpinned = new RuntimeCapabilityRegistry(loadConfig({
+  DEVSPACE_CONFIG_DIR: join(root, ".unpinned-config"),
+  DEVSPACE_ALLOWED_ROOTS: root,
+  DEVSPACE_STATE_DIR: join(root, ".unpinned-state"),
+  DEVSPACE_WORKTREE_ROOT: join(root, ".unpinned-worktrees"),
+  DEVSPACE_TOOL_MODE: "codex",
+  DEVSPACE_OAUTH_OWNER_TOKEN: "test-owner-token-that-is-long-enough",
+  DEVSPACE_TOOL_SURFACE_MANIFEST: unpinnedManifestPath,
+}));
+const unpinnedSnapshot = unpinned.snapshot();
+const unpinnedManifest = unpinnedSnapshot.deploymentManifestObservation as Record<string, unknown>;
+assert.equal(unpinnedManifest.configured, true);
+assert.equal(unpinnedManifest.digestPinned, false);
+assert.equal(unpinnedManifest.loaded, false);
+assert.match(
+  JSON.stringify(unpinnedManifest.errors),
+  /requires DEVSPACE_TOOL_SURFACE_MANIFEST_SHA256/,
+);
+assert.equal(
+  (unpinnedSnapshot.toolSurfaceFreshness as Record<string, unknown>).status,
+  "INDETERMINATE",
+);
 
 rmSync(root, { recursive: true, force: true });

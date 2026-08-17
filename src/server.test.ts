@@ -15,11 +15,47 @@ import {
 } from "./local-agent-coordinator.js";
 import { createReviewCheckpointManager } from "./review-checkpoints.js";
 import { ProcessSessionManager } from "./process-sessions.js";
+import { RuntimeCapabilityRegistry } from "./runtime-capabilities.js";
 import { createMcpServer } from "./server.js";
+import { createToolSurfaceIdentity } from "./tool-surface-freshness.js";
 import { SqliteWorkspaceStore } from "./workspace-store.js";
 import { WorkspaceRegistry } from "./workspaces.js";
 
 const execFileAsync = promisify(execFile);
+
+test("runtime fingerprint exactly matches the SDK tools/list descriptors", async (t) => {
+  const context = await fixture(t, {
+    toolMode: "codex",
+    codexNavigationTools: true,
+    subagents: true,
+    runtimeCapabilities: true,
+  });
+  const listed = await context.client.listTools();
+  const expected = createToolSurfaceIdentity(listed.tools);
+  assert.deepEqual(
+    context.runtimeCapabilities!.descriptors(),
+    listed.tools,
+    "registry descriptors must be the exact SDK tools/list descriptors",
+  );
+  const snapshot = context.runtimeCapabilities!.snapshot();
+  const toolSurface = snapshot.toolSurface as Record<string, unknown>;
+
+  assert.equal(toolSurface.fingerprintSha256, expected.fingerprintSha256);
+  assert.equal(toolSurface.toolCount, expected.toolCount);
+  assert.deepEqual(toolSurface.toolNames, expected.toolNames);
+  assert.equal(
+    toolSurface.fingerprintBasis,
+    "canonical_complete_mcp_tools_list_descriptors",
+  );
+  assert.ok(
+    listed.tools.every((tool) => tool.execution?.taskSupport === "forbidden"),
+    "the attested descriptors must include the SDK execution contract",
+  );
+  assert.equal(
+    context.client.getServerVersion()?.version,
+    context.config.mcpServerVersion,
+  );
+});
 
 test("open_workspace keeps lifecycle flags out of model output and preserves complete card metadata", async (t) => {
   const context = await fixture(t);
@@ -476,11 +512,12 @@ test("one host scope can inspect another through bounded execution-scope tools",
   );
   assert.equal(clientCatalogObservation.observable, false);
   assert.equal(clientCatalogObservation.freshness, "unavailable");
-  assert.equal(clientCatalogObservation.status, "SERVER_CURRENT_CLIENT_UNKNOWN");
+  assert.equal(clientCatalogObservation.status, "INDETERMINATE");
   assert.equal(
-    clientCatalogObservation.expectedSurfaceEpoch,
-    toolSurface.surfaceEpoch,
+    clientCatalogObservation.reason,
+    "deployment_manifest_unavailable",
   );
+  assert.equal(clientCatalogObservation.expectedSurfaceEpoch, undefined);
   assert.equal(
     clientCatalogObservation.missingRegisteredToolDoesNotImplyBackendCapabilityAbsent,
     true,
@@ -1228,6 +1265,7 @@ interface ServerFixture {
   stateDir: string;
   hostSkillPath?: string;
   localAgentCoordinator?: LocalAgentCoordinator;
+  runtimeCapabilities?: RuntimeCapabilityRegistry;
   close: () => Promise<void>;
 }
 
@@ -1242,6 +1280,7 @@ async function fixture(
     skillsEnabled?: boolean;
     codexNavigationTools?: boolean;
     localAgentCoordinatorOptions?: LocalAgentCoordinatorOptions;
+    runtimeCapabilities?: boolean;
   } = {},
 ): Promise<ServerFixture> {
   const root = await mkdtemp(join(tmpdir(), "devspace-server-test-"));
@@ -1328,6 +1367,12 @@ async function fixture(
   const localAgentCoordinator = options.subagents
     ? new LocalAgentCoordinator(config, options.localAgentCoordinatorOptions)
     : undefined;
+  const runtimeCapabilities = options.runtimeCapabilities
+    ? new RuntimeCapabilityRegistry(config, {
+        now: () => 1_000,
+        instanceRef: "1111111111111111",
+      })
+    : undefined;
   const server = executionScopes
     ? createMcpServer(
         config,
@@ -1339,6 +1384,8 @@ async function fixture(
         executionScopes,
         undefined,
         localAgentCoordinator,
+        undefined,
+        runtimeCapabilities,
       )
     : createMcpServer(
         config,
@@ -1350,6 +1397,8 @@ async function fixture(
         undefined,
         undefined,
         localAgentCoordinator,
+        undefined,
+        runtimeCapabilities,
       );
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: "devspace-test-client", version: "1.0.0" });
@@ -1382,6 +1431,7 @@ async function fixture(
     stateDir,
     hostSkillPath,
     localAgentCoordinator,
+    runtimeCapabilities,
     close,
   };
 }
