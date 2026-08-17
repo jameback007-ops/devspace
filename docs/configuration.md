@@ -199,6 +199,13 @@ MCP clients discover metadata from:
 The `codex` mode must be selected through `DEVSPACE_TOOL_MODE` and always uses
 its fixed short tool names regardless of `DEVSPACE_TOOL_NAMING`.
 
+Set `DEVSPACE_CODEX_NAVIGATION_TOOLS=1` to add the upstream-native read-only
+`grep`, `glob`, and `ls` handlers to `codex` mode. This composes the dedicated
+workspace-bounded navigation tools with `apply_patch`, `exec_command`, and
+`write_stdin`; it does not add another shell, patch, workspace, or process
+engine. The option is disabled by default so existing MCP tool surfaces remain
+stable.
+
 Codex-mode commands run without a PTY by default. Set `tty: true` on
 `exec_command` for interactive terminal programs. PTY support uses the optional
 `node-pty` dependency; `write_stdin` can send input, poll output, and resize PTY

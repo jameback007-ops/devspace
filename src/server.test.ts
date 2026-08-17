@@ -85,6 +85,50 @@ test("codex write_stdin exposes the output-aware long-poll contract", async (t) 
   assert.match(String(yieldTimeMs?.description), /bounded to 30000/i);
 });
 
+test("codex mode can opt into the upstream native navigation tools", async (t) => {
+  const disabled = await fixture(t, { toolMode: "codex", git: true });
+  const disabledTools = await disabled.client.listTools();
+  for (const name of ["grep", "glob", "ls"]) {
+    assert.equal(
+      disabledTools.tools.some((tool) => tool.name === name),
+      false,
+      `${name} should remain opt-in in codex mode`,
+    );
+  }
+
+  const enabled = await fixture(t, {
+    toolMode: "codex",
+    git: true,
+    codexNavigationTools: true,
+  });
+  const enabledTools = await enabled.client.listTools();
+  for (const name of ["grep", "glob", "ls"]) {
+    const tool = enabledTools.tools.find((candidate) => candidate.name === name);
+    assert.ok(tool, `${name} should be registered`);
+    assert.equal(tool.annotations?.readOnlyHint, true);
+  }
+
+  const opened = await callOpen(enabled.client, enabled.project, "codex-navigation");
+  const workspaceId = String(structuredContent(opened).workspaceId);
+  const grep = await enabled.client.callTool({
+    name: "grep",
+    arguments: { workspaceId, pattern: "hello", path: "README.md" },
+  });
+  assert.match(responseText(grep), /README\.md/);
+
+  const glob = await enabled.client.callTool({
+    name: "glob",
+    arguments: { workspaceId, pattern: "*.md" },
+  });
+  assert.match(responseText(glob), /README\.md/);
+
+  const ls = await enabled.client.callTool({
+    name: "ls",
+    arguments: { workspaceId, path: "." },
+  });
+  assert.match(responseText(ls), /README\.md/);
+});
+
 test("turn continuity is advisory-only and recovery capsules detect later workspace changes", async (t) => {
   const context = await fixture(t, { toolMode: "codex", git: true });
   const session = "turn-continuity-session";
@@ -1069,6 +1113,7 @@ async function fixture(
     subagents?: boolean;
     skillFixtures?: boolean;
     skillsEnabled?: boolean;
+    codexNavigationTools?: boolean;
     localAgentCoordinatorOptions?: LocalAgentCoordinatorOptions;
   } = {},
 ): Promise<ServerFixture> {
@@ -1137,6 +1182,7 @@ async function fixture(
     DEVSPACE_AGENT_DIR: agentDir,
     DEVSPACE_WIDGETS: "full",
     DEVSPACE_TOOL_MODE: options.toolMode ?? "full",
+    DEVSPACE_CODEX_NAVIGATION_TOOLS: options.codexNavigationTools ? "1" : "0",
     DEVSPACE_SKILLS: options.skillsEnabled === false ? "0" : "1",
     DEVSPACE_SUBAGENTS: options.subagents ? "1" : "0",
     DEVSPACE_OAUTH_OWNER_TOKEN: "test-owner-token-that-is-long-enough",

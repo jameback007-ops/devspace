@@ -19,6 +19,7 @@ export interface DevspaceUserConfig {
   worktreeRoot?: string;
   artifactsEnabled?: boolean;
   artifactMaxFileBytes?: number;
+  codexNavigationTools?: boolean;
   agentDir?: string;
   subagents?: boolean;
 }

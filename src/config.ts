@@ -47,6 +47,7 @@ export interface ServerConfig {
   allowedHosts: string[];
   publicBaseUrl: string;
   toolMode: ToolMode;
+  codexNavigationTools: boolean;
   widgets: WidgetMode;
   stateDir: string;
   worktreeRoot: string;
@@ -452,6 +453,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     allowedHosts: parseAllowedHosts(env.DEVSPACE_ALLOWED_HOSTS, derivedAllowedHosts),
     publicBaseUrl,
     toolMode: parseToolMode(env),
+    codexNavigationTools:
+      env.DEVSPACE_CODEX_NAVIGATION_TOOLS === undefined
+        ? files.config.codexNavigationTools === true
+        : parseBoolean(env.DEVSPACE_CODEX_NAVIGATION_TOOLS),
     widgets: parseWidgetMode(env.DEVSPACE_WIDGETS),
     stateDir: resolve(expandHomePath(env.DEVSPACE_STATE_DIR ?? files.config.stateDir ?? defaultStateDir())),
     worktreeRoot: resolve(expandHomePath(env.DEVSPACE_WORKTREE_ROOT ?? files.config.worktreeRoot ?? defaultWorktreeRoot())),
