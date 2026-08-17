@@ -84,6 +84,35 @@ upstream handlers while retaining the Codex-native mutation and process surface:
 - the option is off by default to preserve existing installations and tool
   schemas.
 
+### Follow-up: backend tool-surface freshness observation
+
+A second source and open-PR check was performed before changing recovery or
+execution-scope observability. Upstream `v1.0.7` contains no released tool that
+lets the server read a client's cached `tools/list` result, and the current open
+PR set does not provide that missing client-to-server evidence contract. The MCP
+SDK already supports native tool-list change capability and notifications, but
+that mechanism does not make an OpenAI stateless connector return its cached
+catalog to the server or prove that an existing host conversation refreshed
+after a backend deployment. PR #201 concerns modern protocol negotiation and
+remains a separate deferred transport adoption.
+
+The follow-up therefore uses `WRAP_NATIVE`, not a new catalog engine:
+
+- the existing `registerAppTool` path remains the only tool-registration owner;
+- a read-only observer normalizes the same registered descriptions, JSON
+  schemas, and annotations and emits a deterministic SHA-256 surface
+  fingerprint;
+- existing execution-scope inspection responses expose current backend
+  instance/tool evidence, so an already-visible tool can diagnose whether the
+  backend presently registers recovery capsules;
+- client catalog freshness remains explicitly unavailable, and a missing
+  host-visible tool requires connector refresh/reconnection rather than a
+  duplicate implementation.
+
+The observer cannot add, remove, route, authorize, or execute tools. Its
+fingerprint is operational evidence, not release, source-build, task, decision,
+writer, effect, or publication authority.
+
 ## Custom-layer reconciliation
 
 | ZES component | Exact responsibility | Upstream overlap | Decision |

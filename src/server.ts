@@ -71,6 +71,10 @@ import {
 } from "./request-meta.js";
 import { shutdownHttpServer } from "./server-shutdown.js";
 import { formatPathForPrompt } from "./skills.js";
+import {
+  DEVSPACE_MCP_SERVER_VERSION,
+  RuntimeCapabilityRegistry,
+} from "./runtime-capabilities.js";
 import { registerZesCodexInspectionTools } from "./zes-codex-inspection.js";
 import { createWorkspaceStore } from "./workspace-store.js";
 import { formatAgentsPath, WorkspaceRegistry } from "./workspaces.js";
@@ -237,6 +241,7 @@ const toolExecutionContexts = new WeakMap<
     executionScopes: ExecutionScopeManager;
     executionMailbox: ExecutionMailboxManager;
     turnContinuity: TurnContinuityManager;
+    runtimeCapabilities: RuntimeCapabilityRegistry;
     config: ServerConfig;
   }
 >();
@@ -303,7 +308,7 @@ const registerAppTool = ((
     );
   }
 
-  return registerMcpAppTool(
+  const registeredTool = registerMcpAppTool(
     server,
     name,
     toolConfig as never,
@@ -448,13 +453,15 @@ const registerAppTool = ((
       }
     }) as never,
   );
+  toolContext.runtimeCapabilities.registerTool(name, toolConfig);
+  return registeredTool;
 }) as unknown as typeof registerMcpAppTool;
 
 function serverInstructions(config: ServerConfig): string {
   const codexSessionInstruction =
     " To inspect the allowlisted AOQ Codex executor adapter, use codex_session_status, codex_session_tail, or codex_session_audit. These tools report adapter transport health separately from the Codex thread lifecycle and never represent DevSpace, VPS, workspace, or ZES product health. To inspect the exact live AOQ worktree, use codex_workspace_git_status, codex_workspace_tree, codex_workspace_read, codex_workspace_search, or codex_workspace_diff. These brokered commands are read-only and independent from the Codex thread lifecycle.";
   const executionScopeInstruction = config.executionObservability.enabled
-    ? " Use execution_scope_list to discover recent DevSpace execution scopes. When a target explicitly recorded a recovery capsule, the list includes a compact capsule-derived semantic label/frontier hint; it is not a host chat title and absent capsule means unknown mission. Use execution_scope_status for linked workspaces, live processes, explicit semantic recovery state, and the observation gap since the last MCP/tool event. A no-tool interval does not reveal whether the model is reasoning, queued, generating, or hung; model progress and provider generation remain unobservable between MCP calls. Use execution_scope_audit for bounded metadata-only tool lifecycle. Semantic state is never inferred from filenames or tool events, cross-scope authority freshness remains unverified, and the recorded exact action is historical until current canonical/runtime/writer/effect owners are rehydrated. These views never replace Git, canonical product state, runtime/effect readback, or writer/lease reconciliation, and they do not contain transcripts, prompts, private reasoning, tool outputs, patches, credentials, or raw commands."
+    ? " Use execution_scope_list to discover recent DevSpace execution scopes. When a target explicitly recorded a recovery capsule, the list includes a compact capsule-derived semantic label/frontier hint; it is not a host chat title and absent capsule means unknown mission. Use execution_scope_status for linked workspaces, live processes, explicit semantic recovery state, and the observation gap since the last MCP/tool event. Scope inspection also returns the current backend runtime instance and an exact fingerprint of the registered model-facing tool surface. The server cannot see the host's cached tools/list result; when a tool is registered by the backend but absent from the host catalog, refresh or reconnect the MCP connector rather than rebuilding that capability. A no-tool interval does not reveal whether the model is reasoning, queued, generating, or hung; model progress and provider generation remain unobservable between MCP calls. Use execution_scope_audit for bounded metadata-only tool lifecycle. Semantic state is never inferred from filenames or tool events, cross-scope authority freshness remains unverified, and the recorded exact action is historical until current canonical/runtime/writer/effect owners are rehydrated. These views never replace Git, canonical product state, runtime/effect readback, or writer/lease reconciliation, and they do not contain transcripts, prompts, private reasoning, tool outputs, patches, credentials, or raw commands."
     : "";
   const executionMailboxInstruction = config.executionMailbox.enabled
     ? " Use execution_scope_message_send to leave a durable message for another known scope, reusing one idempotencyKey for retries. Acceptance means stored, not observed. When a tool result reports pending mail, call execution_scope_message_inbox before opening a new major frontier, then record acknowledged or acted state with execution_scope_message_receipt. Use execution_scope_message_status to inspect a message you sent or received. The mailbox is executor-local coordination, not task, decision, effect, writer, or canonical-memory authority, and it cannot wake or inject text directly into an inactive WebChat transcript."
@@ -842,11 +849,51 @@ function jsonToolResponse(data: unknown) {
   };
 }
 
+function scopeRuntimeRelation(
+  scope: Record<string, unknown>,
+  runtime: Record<string, unknown>,
+): Record<string, unknown> {
+  const backend = isRecord(runtime.backend) ? runtime.backend : undefined;
+  const toolSurface = isRecord(runtime.toolSurface) ? runtime.toolSurface : undefined;
+  const backendStartedAt = typeof backend?.startedAt === "string"
+    ? backend.startedAt
+    : undefined;
+  const backendStartedAtMs = backendStartedAt ? Date.parse(backendStartedAt) : Number.NaN;
+  const scopeCreatedAtMs = typeof scope.createdAt === "string"
+    ? Date.parse(scope.createdAt)
+    : Number.NaN;
+  const scopeLastActivityAtMs = typeof scope.lastActivityAt === "string"
+    ? Date.parse(scope.lastActivityAt)
+    : Number.NaN;
+
+  return {
+    currentBackendInstanceRef:
+      typeof backend?.instanceRef === "string" ? backend.instanceRef : undefined,
+    currentBackendStartedAt: backendStartedAt,
+    currentBackendToolSurfaceFingerprintSha256:
+      typeof toolSurface?.fingerprintSha256 === "string"
+        ? toolSurface.fingerprintSha256
+        : undefined,
+    scopeCreatedBeforeCurrentBackendInstance:
+      Number.isFinite(scopeCreatedAtMs) && Number.isFinite(backendStartedAtMs)
+        ? scopeCreatedAtMs < backendStartedAtMs
+        : undefined,
+    lastMcpActivityAtOrAfterCurrentBackendStart:
+      Number.isFinite(scopeLastActivityAtMs) && Number.isFinite(backendStartedAtMs)
+        ? scopeLastActivityAtMs >= backendStartedAtMs
+        : undefined,
+    exactBackendInstanceForHistoricalActivityPersisted: false,
+    clientToolCatalogObservable: false,
+    catalogFreshnessDetermination: "unavailable",
+  };
+}
+
 function registerExecutionScopeTools(
   server: McpServer,
   config: ServerConfig,
   executionScopes: ExecutionScopeManager,
   turnContinuity: TurnContinuityManager,
+  runtimeCapabilities: RuntimeCapabilityRegistry,
 ): void {
   const scopeRefSchema = z
     .string()
@@ -861,7 +908,7 @@ function registerExecutionScopeTools(
     {
       title: "List DevSpace execution scopes",
       description:
-        "List recent provider-neutral DevSpace execution scopes with activity, workspace, process, and explicit capsule-derived semantic hints when available. A displayLabel is derived from the capsule mission/frontier and is not a host chat title. No semantic state is inferred from filenames or tool events. Observation gaps expose that model progress and provider generation are unobservable between MCP calls; they do not classify a model as reasoning or hung. This is read-only executor observability, not a transcript, task store, writer lease, checkpoint, memory, or product authority.",
+        "List recent provider-neutral DevSpace execution scopes with activity, workspace, process, explicit capsule-derived semantic hints when available, and the current backend tool-surface fingerprint. The backend surface can be compared with the host-visible catalog, but DevSpace cannot read the host's cached tools/list result. A displayLabel is derived from the capsule mission/frontier and is not a host chat title. No semantic state is inferred from filenames or tool events. Observation gaps expose that model progress and provider generation are unobservable between MCP calls; they do not classify a model as reasoning or hung. This is read-only executor observability, not a transcript, task store, writer lease, checkpoint, memory, or product authority.",
       inputSchema: {
         limit: z
           .number()
@@ -877,10 +924,14 @@ function registerExecutionScopeTools(
     },
     async ({ limit }, { _meta }) => {
       const listed = executionScopes.list(executionScopeIdentity(_meta), limit);
-      if (!Array.isArray(listed.scopes)) return jsonToolResponse(listed);
+      const backendRuntime = runtimeCapabilities.snapshot();
+      if (!Array.isArray(listed.scopes)) {
+        return jsonToolResponse({ ...listed, backendRuntime });
+      }
       const scopes = listed.scopes.filter(isRecord);
       return jsonToolResponse({
         ...listed,
+        backendRuntime,
         scopes: scopes.map((scope) => {
           const scopeRef = typeof scope.scopeRef === "string"
             ? scope.scopeRef
@@ -900,6 +951,7 @@ function registerExecutionScopeTools(
               : undefined;
           return {
             ...scope,
+            runtimeRelation: scopeRuntimeRelation(scope, backendRuntime),
             ...(displayLabel
               ? {
                   displayLabel,
@@ -920,7 +972,7 @@ function registerExecutionScopeTools(
     {
       title: "Inspect DevSpace execution scope",
       description:
-        "Read one DevSpace execution scope by opaque scopeRef, including linked workspaces, live process sessions, the observation gap since the last MCP/tool event, and—when the target explicitly recorded one—the latest bounded semantic recovery capsule joined with local workspace freshness and later activity. Omit scopeRef for the current host scope. Model progress and provider generation are not observable between MCP calls, so status never claims that a silent interval is normal reasoning or a hang. Semantic state is never inferred from filenames or tool events. Raw host session IDs, prompts, private reasoning, credentials, tool outputs, patches, and raw commands are never returned; capsule state remains executor-local observation rather than task, decision, writer, effect, or publication authority.",
+        "Read one DevSpace execution scope by opaque scopeRef, including linked workspaces, live process sessions, the observation gap since the last MCP/tool event, the current backend runtime/tool-surface fingerprint, and—when the target explicitly recorded one—the latest bounded semantic recovery capsule joined with local workspace freshness and later activity. Omit scopeRef for the current host scope. The server reports which critical tools are currently registered but cannot observe the host's cached tools/list result. Model progress and provider generation are not observable between MCP calls, so status never claims that a silent interval is normal reasoning or a hang. Semantic state is never inferred from filenames or tool events. Raw host session IDs, prompts, private reasoning, credentials, tool outputs, patches, and raw commands are never returned; capsule state remains executor-local observation rather than task, decision, writer, effect, or publication authority.",
       inputSchema: {
         scopeRef: scopeRefSchema.optional(),
       },
@@ -952,8 +1004,13 @@ function registerExecutionScopeTools(
             observedScopeTotalEventCount: totalEventCount,
           })
         : undefined;
+      const backendRuntime = runtimeCapabilities.snapshot();
       return jsonToolResponse({
         ...status,
+        backendRuntime,
+        ...(scope === undefined
+          ? {}
+          : { runtimeRelation: scopeRuntimeRelation(scope, backendRuntime) }),
         ...(semanticRecovery === undefined ? {} : { semanticRecovery }),
       });
     },
@@ -965,7 +1022,7 @@ function registerExecutionScopeTools(
     {
       title: "Audit DevSpace execution scope",
       description:
-        "Read a bounded newest-first operational audit for one DevSpace execution scope. Events contain tool lifecycle, safe workspace/process locators, digests and normalized error categories only; no transcript, prompts, private reasoning, tool output, native file handles, credentials, patches, raw exception messages, or raw shell commands are captured.",
+        "Read a bounded newest-first operational audit for one DevSpace execution scope together with the current backend runtime/tool-surface fingerprint. Events contain tool lifecycle, safe workspace/process locators, digests and normalized error categories only; no transcript, prompts, private reasoning, tool output, native file handles, credentials, patches, raw exception messages, or raw shell commands are captured.",
       inputSchema: {
         scopeRef: scopeRefSchema.optional(),
         limit: z
@@ -985,13 +1042,14 @@ function registerExecutionScopeTools(
       ...toolWidgetDescriptorMeta(config, "read"),
       annotations: CODEX_SESSION_TOOL_ANNOTATIONS,
     },
-    async ({ scopeRef, limit, cursor }, { _meta }) => jsonToolResponse(
-      executionScopes.audit(
+    async ({ scopeRef, limit, cursor }, { _meta }) => jsonToolResponse({
+      ...executionScopes.audit(
         scopeRef,
         executionScopeIdentity(_meta),
         { limit, cursor },
       ),
-    ),
+      backendRuntime: runtimeCapabilities.snapshot(),
+    }),
   );
 }
 
@@ -1783,6 +1841,7 @@ export function createMcpServer(
   executionMailbox?: ExecutionMailboxManager,
   localAgentCoordinator?: LocalAgentCoordinator,
   turnContinuity?: TurnContinuityManager,
+  runtimeCapabilities?: RuntimeCapabilityRegistry,
 ): McpServer {
   const ownsExecutionScopes = executionScopes === undefined;
   const ownsExecutionMailbox = executionMailbox === undefined;
@@ -1801,6 +1860,8 @@ export function createMcpServer(
     config.turnContinuity,
     config.stateDir,
   );
+  const activeRuntimeCapabilities = runtimeCapabilities
+    ?? new RuntimeCapabilityRegistry(config);
   const activeLocalAgentCoordinator = config.subagents
     ? localAgentCoordinator ?? new LocalAgentCoordinator(config, {
         launchWorker: (agentId, workerId) => launchDetachedLocalAgentWorker(
@@ -1814,7 +1875,7 @@ export function createMcpServer(
     {
       name: "devspace",
       title: "DevSpace",
-      version: "0.7.0-zes.1",
+      version: DEVSPACE_MCP_SERVER_VERSION,
       description:
         "Coding tools for project workspaces, advisory turn continuity and Git-bound recovery capsules, execution-scope observability and messaging, serialized local-agent provider continuation, and optional read-only inspection of the exact live AOQ Codex adapter and worktree.",
     },
@@ -1827,6 +1888,7 @@ export function createMcpServer(
     executionScopes: activeExecutionScopes,
     executionMailbox: activeExecutionMailbox,
     turnContinuity: activeTurnContinuity,
+    runtimeCapabilities: activeRuntimeCapabilities,
     config,
   });
 
@@ -1866,6 +1928,7 @@ export function createMcpServer(
     config,
     activeExecutionScopes,
     activeTurnContinuity,
+    activeRuntimeCapabilities,
   );
   registerExecutionMailboxTools(server, config, activeExecutionMailbox);
   registerTurnContinuityTools(
@@ -2929,6 +2992,7 @@ export function createServer(
   const workspaces = new WorkspaceRegistry(config, workspaceStore);
   const reviewCheckpoints = createReviewCheckpointManager();
   const processSessions = new ProcessSessionManager();
+  const runtimeCapabilities = new RuntimeCapabilityRegistry(config);
   const executionScopes = new ExecutionScopeManager(
     config.executionObservability,
     config.stateDir,
@@ -3105,6 +3169,7 @@ export function createServer(
           executionMailbox,
           localAgentCoordinator,
           turnContinuity,
+          runtimeCapabilities,
         );
         await server.connect(transport);
         res.on("close", () => {
@@ -3151,6 +3216,7 @@ export function createServer(
           executionMailbox,
           localAgentCoordinator,
           turnContinuity,
+          runtimeCapabilities,
         );
         await server.connect(transport);
       } else if (req.method === "POST") {
@@ -3171,6 +3237,7 @@ export function createServer(
           executionMailbox,
           localAgentCoordinator,
           turnContinuity,
+          runtimeCapabilities,
         );
         await server.connect(transport);
         res.on("close", () => {

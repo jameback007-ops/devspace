@@ -38,7 +38,9 @@ Returns recent scopes ordered by activity. Each summary includes the opaque
 workspace and live-process counts, and an explicit observation block. When the
 target has recorded a recovery capsule, the summary also includes a compact
 `semanticHint` with a human-readable display label, mission/frontier, current
-causal slice, and capsule reference.
+causal slice, and capsule reference. The response also includes one
+`backendRuntime` block describing the currently executing DevSpace process and
+the exact registered model-facing tool surface.
 
 The display label comes from the capsule's `missionRef`, falling back to its
 current frontier. It is not the ChatGPT/host conversation title and does not
@@ -63,6 +65,12 @@ Returns one scope's current projection:
 Omit `scopeRef` to inspect the current scope. Supply a `scopeRef` from
 `execution_scope_list` to inspect another scope.
 
+The status response includes the same `backendRuntime` evidence plus a bounded
+`runtimeRelation`. This relates the scope's persisted creation and last MCP
+activity timestamps to the current backend process start. It does not claim
+which backend instance handled every historical event because that association
+is not persisted.
+
 This semantic projection comes only from the latest explicit recovery capsule.
 It is joined with current workspace fingerprinting and later execution
 activity; DevSpace does not reconstruct it from filenames or command history.
@@ -74,6 +82,40 @@ authority freshness as unverified and does not make the recorded next action
 available for reliance. Local workspace freshness is separate: another
 executor may advance Git/main, PostgreSQL, writer, runtime, or effect state
 without changing the recorded workspace.
+
+## Backend Tool-Surface Freshness
+
+Every execution-scope inspection response projects a read-only observation of
+the tools registered through the normal DevSpace MCP registration path:
+
+- backend package and MCP implementation versions;
+- one process-local opaque instance reference and process start time;
+- the current tool mode and non-secret feature flags;
+- sorted registered tool names;
+- critical tool groups such as execution observability, messaging, turn
+  continuity, recovery capsules, local-agent continuation, navigation, and
+  artifact download;
+- a SHA-256 fingerprint over tool names, descriptions, input/output JSON
+  schemas, annotations, and the safe model-facing configuration.
+
+The fingerprint is independent of registration order and process instance. A
+model-facing schema or tool-set change produces a different fingerprint. The
+runtime registry is populated from the same registration calls that create the
+real MCP tools; it does not control registration and is not a second catalog or
+authority.
+
+DevSpace cannot inspect the MCP client's cached `tools/list` result because a
+normal tool call does not send that catalog back to the server. Consequently,
+`clientCatalogObservation` always states that client-side freshness is
+unavailable. If `backendRuntime` reports a tool as registered but the current
+host cannot invoke or discover it, treat this as connector/catalog freshness or
+routing evidence and refresh or reconnect the MCP connector. Do not infer that
+the backend capability is absent and do not reimplement it from that symptom.
+
+The current backend instance reference and fingerprint are operational
+diagnostics only. They are not a deployment receipt, source-build attestation,
+canonical release identity, task checkpoint, or evidence that the client has
+adopted the reported schema.
 
 ## Blind Intervals
 

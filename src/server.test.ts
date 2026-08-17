@@ -397,6 +397,37 @@ test("one host scope can inspect another through bounded execution-scope tools",
   } as Parameters<Client["callTool"]>[0]);
   const listData = structuredData(listed);
   const scopes = listData.scopes as Array<Record<string, unknown>>;
+  const backendRuntime = listData.backendRuntime as Record<string, unknown>;
+  const backend = backendRuntime.backend as Record<string, unknown>;
+  const toolSurface = backendRuntime.toolSurface as Record<string, unknown>;
+  const criticalToolGroups = toolSurface.criticalToolGroups as Record<
+    string,
+    Record<string, unknown>
+  >;
+  const clientCatalogObservation = backendRuntime.clientCatalogObservation as Record<
+    string,
+    unknown
+  >;
+  assert.match(String(backend.instanceRef), /^[a-f0-9]{16}$/);
+  assert.match(String(toolSurface.fingerprintSha256), /^[a-f0-9]{64}$/);
+  assert.deepEqual(
+    toolSurface.toolNames,
+    tools.tools.map((tool) => tool.name).sort(),
+  );
+  assert.equal(toolSurface.toolCount, tools.tools.length);
+  assert.equal(criticalToolGroups.recoveryCapsules?.configured, true);
+  assert.equal(criticalToolGroups.recoveryCapsules?.registeredComplete, true);
+  assert.equal(criticalToolGroups.recoveryCapsules?.available, true);
+  assert.deepEqual(
+    criticalToolGroups.recoveryCapsules?.registeredTools,
+    ["recovery_capsule_record", "recovery_capsule_status"],
+  );
+  assert.equal(clientCatalogObservation.observable, false);
+  assert.equal(clientCatalogObservation.freshness, "unavailable");
+  assert.equal(
+    clientCatalogObservation.missingRegisteredToolDoesNotImplyBackendCapabilityAbsent,
+    true,
+  );
   assert.equal(scopes.length, 1);
   const scopeRef = String(scopes[0]?.scopeRef);
   assert.match(scopeRef, /^[a-f0-9]{16}$/);
@@ -428,6 +459,14 @@ test("one host scope can inspect another through bounded execution-scope tools",
   assert.equal(listedObservation.modelProgressObservable, false);
   assert.equal(listedObservation.providerGenerationObservable, false);
   assert.equal(listedObservation.hungDetermination, "unavailable");
+  const listedRuntimeRelation = scopes[0]?.runtimeRelation as Record<string, unknown>;
+  assert.equal(listedRuntimeRelation.currentBackendInstanceRef, backend.instanceRef);
+  assert.equal(
+    listedRuntimeRelation.currentBackendToolSurfaceFingerprintSha256,
+    toolSurface.fingerprintSha256,
+  );
+  assert.equal(listedRuntimeRelation.clientToolCatalogObservable, false);
+  assert.equal(listedRuntimeRelation.catalogFreshnessDetermination, "unavailable");
   assert.equal(JSON.stringify(listData).includes(workerSession), false);
   assert.equal(JSON.stringify(listData).includes(supervisorSession), false);
 
@@ -437,6 +476,18 @@ test("one host scope can inspect another through bounded execution-scope tools",
     _meta: { "openai/session": supervisorSession },
   } as Parameters<Client["callTool"]>[0]);
   const statusData = structuredData(status);
+  const statusRuntime = statusData.backendRuntime as Record<string, unknown>;
+  assert.equal(
+    (statusRuntime.backend as Record<string, unknown>).instanceRef,
+    backend.instanceRef,
+  );
+  assert.equal(
+    (statusRuntime.toolSurface as Record<string, unknown>).fingerprintSha256,
+    toolSurface.fingerprintSha256,
+  );
+  const statusRuntimeRelation = statusData.runtimeRelation as Record<string, unknown>;
+  assert.equal(statusRuntimeRelation.currentBackendInstanceRef, backend.instanceRef);
+  assert.equal(statusRuntimeRelation.exactBackendInstanceForHistoricalActivityPersisted, false);
   const workspaces = statusData.workspaces as Array<Record<string, unknown>>;
   assert.equal(workspaces[0]?.workspaceId, workspaceId);
   assert.equal(workspaces[0]?.root, context.project);
@@ -501,6 +552,11 @@ test("one host scope can inspect another through bounded execution-scope tools",
     _meta: { "openai/session": supervisorSession },
   } as Parameters<Client["callTool"]>[0]);
   const auditData = structuredData(audit);
+  assert.equal(
+    ((auditData.backendRuntime as Record<string, unknown>).toolSurface as Record<string, unknown>)
+      .fingerprintSha256,
+    toolSurface.fingerprintSha256,
+  );
   const events = auditData.events as Array<Record<string, unknown>>;
   assert.deepEqual(
     events.map((event) => event.tool),

@@ -35,6 +35,10 @@ mandatory `AGENTS.md`; it does not replace it.
   does not infer hidden model state or create a second semantic store.
 - **Observation gap** — elapsed time since the last observed MCP/tool event.
   It is not evidence that the model is idle, reasoning, generating, or hung.
+- **Backend tool-surface fingerprint** — a read-only SHA-256 digest over the
+  tools actually registered by the current DevSpace backend, including their
+  model-facing schemas and safe configuration. It does not expose or attest the
+  MCP client's cached tool catalog.
 - **Local-agent turn** — one queued provider prompt serialized by a worker
   lease. It is not canonical work or effect authority.
 - **Worker lease** — an executor-local single-worker claim. Expiry after
@@ -105,6 +109,9 @@ Behavior may differ across:
 - local unit tests and the deployed public endpoint.
 
 For model-facing changes, inspect the schema and the actual structured response.
+Use the backend tool-surface fingerprint to distinguish a changed server schema
+from a host that still presents an older cached catalog; the server cannot
+observe client catalog freshness directly.
 For UI or artifacts, inspect rendered output rather than inferring success from
 the producing command. State clearly when only a narrower proxy was verified.
 

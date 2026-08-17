@@ -65,7 +65,13 @@ grants authority. One notice is emitted per advisory turn epoch.
 Older host conversations may retain a cached MCP schema that predates the
 capsule tools. A fresh host connection is required before relying on this
 adoption path; the server does not infer semantic state for an old scope that
-cannot explicitly record it.
+cannot explicitly record it. `execution_scope_list`,
+`execution_scope_status`, and `execution_scope_audit` expose the current
+backend tool-surface fingerprint and critical recovery-tool registration so a
+missing host-visible capsule tool can be classified as a catalog/connector
+freshness problem rather than mistaken for absent backend implementation. The
+server still cannot read the client's cached catalog or refresh it on the
+client's behalf.
 
 ## Recovery Capsule
 
