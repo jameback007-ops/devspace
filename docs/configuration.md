@@ -96,11 +96,21 @@ flow, native bindings, and failure semantics.
 ## Workspace Lifecycle and Worktree Garbage Collection
 
 DevSpace persists checkout and managed-worktree sessions. Use
-`workspace_list` and `workspace_status` to inspect them. `workspace_close`
-unregisters a checkout or safely removes a managed worktree. By default it
-refuses removal while a DevSpace or operating-system process references the
-worktree, while the tree is dirty, or while its HEAD is not reachable from a
-persistent Git ref.
+`workspace_list`, `workspace_status`, and `workspace_candidate_inventory` to
+inspect them. Every new managed worktree is created on the executor-owned local
+branch `devspace/workspaces/<workspaceId>` instead of detached HEAD. Inventory
+classifies dirty recovery, missing validation, publication readiness,
+reconciliation, integration, and terminal cleanup separately from operational
+activity. It also exposes bounded mission/frontier/next-action hints and linked
+scope refs from explicit recovery capsules; task meaning is never inferred from
+filenames or tool events.
+
+`workspace_close` unregisters a checkout or safely removes a managed worktree.
+It refuses removal while a DevSpace or operating-system process references the
+worktree or while uncommitted changes exist. `force=true` never authorizes
+discarding dirty state. It may remove a clean committed worktree while retaining
+its preservation ref as a branch-only publication candidate. Older detached
+workspaces receive an exact-HEAD preservation ref before such a close.
 
 Worktree garbage collection is a two-step contract:
 
@@ -112,10 +122,37 @@ Worktree garbage collection is a two-step contract:
 
 The collector protects workspaces loaded in the current server, recent
 workspace/scope activity, running processes, dirty or unreadable Git state,
-commits not reachable from a branch/tag/remote ref, and recent or explicitly
-active recovery capsules. Defaults are 24 hours for recent activity and 72
-hours for capsule protection. Measuring directory sizes is optional because it
-can make preview slower on large repositories.
+commits not reachable from a branch/tag/remote ref, unresolved publication debt,
+and recent or explicitly active recovery capsules. Candidate validation is
+current only when a passed capsule contains evidence refs and its Git fingerprint
+matches the exact current HEAD and dirty state. GC recomputes a stable lifecycle
+digest immediately before each removal and deletes executor-owned preservation
+refs with an expected-HEAD compare-and-swap only after terminal integration.
+Defaults are 24 hours for recent activity and 72 hours for capsule protection.
+Measuring directory sizes is optional because it can make preview slower on
+large repositories.
+
+See [Workspace Candidate Lifecycle](workspace-candidate-lifecycle.md) for the
+state machine and authority boundaries.
+
+### Fixed DevSpace self-repository publication
+
+DevSpace can optionally expose a fixed publication preflight for its own source
+repository. The model supplies only a registered workspace ID. Repository root,
+remote, branch, expected remote URL, refspec construction, and expected-old
+authority are server-owned. Preflight reads fresh remote authority with
+`git ls-remote`, binds validation to the exact clean candidate HEAD, and requires
+zero-behind/no-merge history. Effects are a separate opt-in and use an exact
+candidate-object refspec, `--force-with-lease`, and post-effect remote readback.
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `DEVSPACE_SELF_REPOSITORY_PUBLICATION` | `0` | Enable the fixed read/preflight contract. |
+| `DEVSPACE_SELF_REPOSITORY_ROOT` | unset | Exact absolute DevSpace source repository root. Required when enabled. |
+| `DEVSPACE_SELF_REPOSITORY_REMOTE` | `owner` | Fixed local remote name. |
+| `DEVSPACE_SELF_REPOSITORY_BRANCH` | `main` | Fixed remote authority branch. |
+| `DEVSPACE_SELF_REPOSITORY_EXPECTED_REMOTE_URL` | unset | Exact configured remote URL identity. Required when enabled. |
+| `DEVSPACE_SELF_REPOSITORY_PUBLICATION_EFFECTS` | `0` | Register the digest-bound publication effect. Requires the preflight contract. |
 
 ## Advisory Turn Continuity and Recovery Capsules
 

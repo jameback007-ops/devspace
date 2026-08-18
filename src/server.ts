@@ -89,6 +89,10 @@ import {
   type ScopePublicationPreflight,
   type ScopePublicationPreflightSource,
 } from "./scope-publication-preflight.js";
+import {
+  SelfRepositoryPublicationManager,
+  type SelfRepositoryScopePublicationProjection,
+} from "./self-repository-publication.js";
 import { registerZesCodexInspectionTools } from "./zes-codex-inspection.js";
 import {
   registerZesContinuationPreflightTool,
@@ -137,6 +141,12 @@ const CODEX_SESSION_TOOL_ANNOTATIONS = {
   destructiveHint: false,
   idempotentHint: true,
   openWorldHint: false,
+};
+const EXECUTION_SCOPE_STATUS_TOOL_ANNOTATIONS = {
+  ...CODEX_SESSION_TOOL_ANNOTATIONS,
+  // Optional fixed publication projections may perform bounded fresh remote
+  // authority observation. They remain read-only but are not closed-world.
+  openWorldHint: true,
 };
 const WRITE_TOOL_ANNOTATIONS = {
   readOnlyHint: false,
@@ -238,8 +248,11 @@ const toolNames = {
   workspaceList: "workspace_list",
   workspaceStatus: "workspace_status",
   workspaceClose: "workspace_close",
+  workspaceCandidateInventory: "workspace_candidate_inventory",
   workspaceGcPreview: "workspace_gc_preview",
   workspaceGcExecute: "workspace_gc_execute",
+  selfRepositoryPublicationPreflight: "self_repository_publication_preflight",
+  selfRepositoryPublish: "self_repository_publish",
   skillSearch: "skill_search",
   read: "read",
   write: "write",
@@ -514,7 +527,7 @@ function serverInstructions(config: ServerConfig): string {
     ? " When the user supplies or generates a file that is not present on the DevSpace host, use download_artifact with its native file value, the existing workspace ID, and a suitable relative destination path chosen from the user's request and project structure. The tool refuses to overwrite an existing destination and returns the normalized workspace-relative path. Use normal workspace tools when explicit inspection, replacement, movement, renaming, or deletion is needed. Do not recreate binary files with write/edit calls or place signed URLs, native file objects, base64 content, or invented host paths in shell commands or logs."
     : "";
   const workspaceLifecycleInstruction =
-    " Use workspace_list and workspace_status to inspect persisted workspace lifecycle. Use workspace_close for one explicit workspace. For bulk cleanup, always call workspace_gc_preview first, inspect its protected/candidate reasons, and pass the exact returned plan digest with identical options to workspace_gc_execute. Never force-remove dirty, process-bound, or unpublished worktree state merely to reclaim space.";
+    " Use workspace_list and workspace_status to inspect persisted workspace lifecycle. Use workspace_candidate_inventory to classify managed worktrees and retained executor-owned preservation refs as active, dirty-recoverable, awaiting validation, ready for repository-specific publication preflight, needing reconciliation, integrated, baseline-only, or unknown. The inventory is executor-local Git/recovery observation, not canonical task or publication authority. Use workspace_close for one explicit workspace. For bulk cleanup, always call workspace_gc_preview first, inspect candidate lifecycle finalizers and protected reasons, and pass the exact returned plan digest with identical options to workspace_gc_execute. Never force-remove dirty, process-bound, unvalidated, unreconciled, or unpublished worktree state merely to reclaim space.";
   const showChangesInstruction =
     config.widgets === "changes"
       ? " If the turn successfully modifies files by creating, editing, overwriting, deleting, moving, or applying patches, call show_changes exactly once for that workspace after the final related file change and before your final response so the user can inspect the aggregate diff for that turn. Do not call it after every individual file change; do not skip it because individual file-change tools already returned diffs."
@@ -1020,14 +1033,25 @@ function scopeRuntimeRelation(
 }
 
 function stableControlPlaneProjection(
-  continuationPreflight: ZesContinuationPreflightProjection,
-  scopePublicationPreflight?: ScopePublicationPreflight,
+  input: {
+    continuationPreflight?: ZesContinuationPreflightProjection;
+    scopePublicationPreflight?: ScopePublicationPreflight;
+    selfRepositoryPublicationPreflight?: SelfRepositoryScopePublicationProjection;
+  },
 ) {
   const capabilities = {
-    continuationPreflight,
-    ...(scopePublicationPreflight === undefined
+    ...(input.continuationPreflight === undefined
       ? {}
-      : { scopePublicationPreflight }),
+      : { continuationPreflight: input.continuationPreflight }),
+    ...(input.scopePublicationPreflight === undefined
+      ? {}
+      : { scopePublicationPreflight: input.scopePublicationPreflight }),
+    ...(input.selfRepositoryPublicationPreflight === undefined
+      ? {}
+      : {
+          selfRepositoryPublicationPreflight:
+            input.selfRepositoryPublicationPreflight,
+        }),
   };
   return {
     schemaVersion: 1,
@@ -1081,6 +1105,7 @@ function registerExecutionScopeTools(
   runtimeCapabilities: RuntimeCapabilityRegistry,
   continuationPreflightProjector?: ZesContinuationPreflightProjectionSource,
   scopePublicationPreflight?: ScopePublicationPreflightSource,
+  selfRepositoryPublication?: SelfRepositoryPublicationManager,
 ): void {
   const scopeRefSchema = z
     .string()
@@ -1195,14 +1220,14 @@ function registerExecutionScopeTools(
     {
       title: "Inspect DevSpace execution scope",
       description:
-        "Read one DevSpace execution scope by opaque scopeRef, including linked workspaces, live process sessions, the observation gap since the last MCP/tool event, the current backend runtime/tool-surface fingerprint, and—when the target explicitly recorded one—the latest bounded semantic recovery capsule joined with local workspace freshness and later activity. Omit scopeRef for the current host scope. This stable bootstrap route can also carry additive read-only server-owned control-plane capability projections, so a frozen client catalog does not have to discover a newer top-level tool before reading a fixed continuation preflight. The server reports which critical tools are currently registered but cannot observe the host's cached tools/list result. Model progress and provider generation are not observable between MCP calls, so status never claims that a silent interval is normal reasoning or a hang. Semantic state is never inferred from filenames or tool events. Raw host session IDs, prompts, private reasoning, credentials, tool outputs, patches, and raw commands are never returned; capsule and control-plane projections remain executor-local observation rather than task, decision, writer, effect, or publication authority.",
+        "Read one DevSpace execution scope by opaque scopeRef, including linked workspaces, live process sessions, the observation gap since the last MCP/tool event, the current backend runtime/tool-surface fingerprint, and—when the target explicitly recorded one—the latest bounded semantic recovery capsule joined with local workspace freshness and later activity. Omit scopeRef for the current host scope. This stable bootstrap route can also carry additive read-only server-owned control-plane capability projections, so a frozen client catalog does not have to discover a newer top-level tool before reading a fixed continuation preflight. When configured, a publication projection may perform bounded fresh observation of its fixed remote authority but never imports a missing Git object through this status route. The server reports which critical tools are currently registered but cannot observe the host's cached tools/list result. Model progress and provider generation are not observable between MCP calls, so status never claims that a silent interval is normal reasoning or a hang. Semantic state is never inferred from filenames or tool events. Raw host session IDs, prompts, private reasoning, credentials, tool outputs, patches, and raw commands are never returned; capsule and control-plane projections remain executor-local observation rather than task, decision, writer, effect, or publication authority.",
       inputSchema: {
         scopeRef: scopeRefSchema.optional(),
         ...clientCatalogInputSchema,
       },
       outputSchema: resultOutputSchema({ data: z.unknown() }),
       ...toolWidgetDescriptorMeta(config, "read"),
-      annotations: CODEX_SESSION_TOOL_ANNOTATIONS,
+      annotations: EXECUTION_SCOPE_STATUS_TOOL_ANNOTATIONS,
     },
     async ({
       scopeRef,
@@ -1250,11 +1275,15 @@ function registerExecutionScopeTools(
             continuationPreflight,
           })
         : undefined;
-      const stableControlPlane = continuationPreflight
-        ? stableControlPlaneProjection(
+      const selfRepositoryPublicationPreflight = selfRepositoryPublication
+        ? await selfRepositoryPublication.scopeProjection(status.workspaces)
+        : undefined;
+      const stableControlPlane = continuationPreflight || selfRepositoryPublicationPreflight
+        ? stableControlPlaneProjection({
             continuationPreflight,
-            scopePublication,
-          )
+            scopePublicationPreflight: scopePublication,
+            selfRepositoryPublicationPreflight,
+          })
         : undefined;
       return jsonToolResponse({
         ...status,
@@ -2168,6 +2197,13 @@ export function createMcpServer(
         processSessions,
       )
     : undefined;
+  const activeSelfRepositoryPublication =
+    lifecycleStore && config.selfRepositoryPublication.enabled
+      ? new SelfRepositoryPublicationManager(
+          config.selfRepositoryPublication,
+          lifecycleStore,
+        )
+      : undefined;
   const activeLocalAgentCoordinator = config.subagents
     ? localAgentCoordinator ?? new LocalAgentCoordinator(config, {
         launchWorker: (agentId, workerId) => launchDetachedLocalAgentWorker(
@@ -2237,6 +2273,7 @@ export function createMcpServer(
     activeRuntimeCapabilities,
     continuationPreflightProjector,
     scopePublicationPreflight,
+    activeSelfRepositoryPublication,
   );
   registerExecutionMailboxTools(server, config, activeExecutionMailbox);
   registerTurnContinuityTools(
@@ -2293,6 +2330,7 @@ export function createMcpServer(
             path: z.string(),
             baseRef: z.string(),
             baseSha: z.string(),
+            preservationRef: z.string().optional(),
             dirtySource: z.boolean(),
             detached: z.boolean(),
             managed: z.boolean(),
@@ -2577,6 +2615,61 @@ export function createMcpServer(
 
     registerAppTool(
       server,
+      toolNames.workspaceCandidateInventory,
+      {
+        title: "Inventory workspace candidates",
+        description:
+          "Build a read-only, provider-neutral lifecycle inventory for managed worktrees and retained executor-owned preservation refs. It separates operational activity from Git candidate disposition, identifies publication debt, binds validation only when the latest recovery fingerprint matches the exact current HEAD, and reports deletion finalizers. Local refs and capsules are observation only and never grant canonical task, writer, effect, or publication authority.",
+        inputSchema: {
+          activeWithinHours: z
+            .number()
+            .min(0.01)
+            .max(365 * 24)
+            .optional()
+            .describe(
+              "Treat scope activity within this many hours as operationally active. Defaults to 0.25 (15 minutes).",
+            ),
+          includeSizes: z
+            .boolean()
+            .optional()
+            .describe("Measure existing worktree directory sizes. This can make inventory slower."),
+          includeClosed: z
+            .boolean()
+            .optional()
+            .describe(
+              "Include closed workspace sessions so retained branch-only preservation refs remain visible. Defaults to true.",
+            ),
+          limit: z
+            .number()
+            .int()
+            .min(1)
+            .max(2_000)
+            .optional()
+            .describe("Maximum candidate records to return. Defaults to 500."),
+        },
+        outputSchema: resultOutputSchema({ data: z.unknown() }),
+        ...toolWidgetDescriptorMeta(config, "workspace"),
+        annotations: {
+          readOnlyHint: true,
+          destructiveHint: false,
+          idempotentHint: true,
+          openWorldHint: false,
+        },
+      },
+      async (input) => {
+        const startedAt = performance.now();
+        const data = await activeWorkspaceLifecycle.inventory(input);
+        logToolCall(config, {
+          tool: toolNames.workspaceCandidateInventory,
+          success: true,
+          durationMs: Math.round(performance.now() - startedAt),
+        });
+        return jsonToolResponse(data);
+      },
+    );
+
+    registerAppTool(
+      server,
       toolNames.workspaceClose,
       {
         title: "Close workspace",
@@ -2678,6 +2771,86 @@ export function createMcpServer(
         return jsonToolResponse(data);
       },
     );
+  }
+
+  if (activeSelfRepositoryPublication) {
+    registerAppTool(
+      server,
+      toolNames.selfRepositoryPublicationPreflight,
+      {
+        title: "Preflight DevSpace self-publication",
+        description:
+          "Assess one registered managed worktree against the fixed DevSpace self-repository publication contract. The route accepts no repository path, remote, branch, URL, credential, or expected-old SHA from the model. It verifies the configured remote identity, reads fresh remote main with git ls-remote, fetches only when the remote commit object is absent locally, binds validation to the exact clean candidate HEAD, requires explicit writer release, terminal effect state, safeToPublish attestation, zero-behind/no-merge history, and returns a digest-bound compare-and-swap publication plan. It does not grant publication authority or depend on unrelated ZES runtime/writer state.",
+        inputSchema: {
+          workspaceId: z
+            .string()
+            .regex(/^ws_[a-f0-9]{10}$/)
+            .describe("Exact registered DevSpace candidate workspace ID."),
+        },
+        outputSchema: resultOutputSchema({ data: z.unknown() }),
+        ...toolWidgetDescriptorMeta(config, "workspace"),
+        annotations: {
+          readOnlyHint: false,
+          destructiveHint: false,
+          idempotentHint: true,
+          openWorldHint: true,
+        },
+      },
+      async (input) => {
+        const startedAt = performance.now();
+        const data = await activeSelfRepositoryPublication.preflight(input);
+        logToolCall(config, {
+          tool: toolNames.selfRepositoryPublicationPreflight,
+          workspaceId: input.workspaceId,
+          success: true,
+          durationMs: Math.round(performance.now() - startedAt),
+        });
+        return jsonToolResponse(data);
+      },
+    );
+
+    if (config.selfRepositoryPublication.effectsEnabled) {
+      registerAppTool(
+        server,
+        toolNames.selfRepositoryPublish,
+        {
+          title: "Publish DevSpace self-repository candidate",
+          description:
+            "Execute one exact self_repository_publication_preflight plan against the fixed configured owner remote/main. The effect re-runs the preflight, requires an unchanged plan digest, performs a fresh remote readback, pushes with an exact force-with-lease expected-old binding, and derives the outcome from a second remote readback. No arbitrary repository, remote, branch, URL, credential, refspec, or expected-old value is accepted.",
+          inputSchema: {
+            workspaceId: z
+              .string()
+              .regex(/^ws_[a-f0-9]{10}$/)
+              .describe("Exact registered DevSpace candidate workspace ID."),
+            planIdSha256: z
+              .string()
+              .regex(/^[a-f0-9]{64}$/)
+              .describe(
+                "Exact eligible planIdSha256 returned by self_repository_publication_preflight.",
+              ),
+          },
+          outputSchema: resultOutputSchema({ data: z.unknown() }),
+          ...toolWidgetDescriptorMeta(config, "workspace"),
+          annotations: {
+            readOnlyHint: false,
+            destructiveHint: true,
+            idempotentHint: false,
+            openWorldHint: true,
+          },
+        },
+        async (input) => {
+          const startedAt = performance.now();
+          const data = await activeSelfRepositoryPublication.execute(input);
+          logToolCall(config, {
+            tool: toolNames.selfRepositoryPublish,
+            workspaceId: input.workspaceId,
+            success: true,
+            durationMs: Math.round(performance.now() - startedAt),
+          });
+          return jsonToolResponse(data);
+        },
+      );
+    }
   }
 
   if (config.skillsEnabled) {

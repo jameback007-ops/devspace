@@ -28,6 +28,7 @@ export interface ManagedWorktree {
   path: string;
   baseRef: string;
   baseSha: string;
+  preservationRef: string;
   dirtySource: boolean;
   detached: boolean;
   managed: boolean;
@@ -35,6 +36,7 @@ export interface ManagedWorktree {
 
 export async function createManagedWorktree(input: {
   sourcePath: string;
+  workspaceId: string;
   baseRef?: string;
   config: ServerConfig;
 }): Promise<ManagedWorktree> {
@@ -60,6 +62,7 @@ export async function createManagedWorktree(input: {
   const baseRef = input.baseRef ?? "HEAD";
   const baseSha = await resolveBaseCommit(sourceRoot, baseRef);
   const dirtySource = (await git(["status", "--porcelain=v1"], sourceRoot)).trim().length > 0;
+  const preservationRef = managedWorkspacePreservationRef(input.workspaceId);
   const worktreePath = managedWorktreePath({
     worktreeRoot: input.config.worktreeRoot,
     repoRoot: sourceRoot,
@@ -69,9 +72,18 @@ export async function createManagedWorktree(input: {
   assertAllowedPath(worktreePath, [input.config.worktreeRoot]);
 
   try {
-    await git(["worktree", "add", "--detach", worktreePath, baseSha], sourceRoot);
+    await git([
+      "worktree",
+      "add",
+      "--no-track",
+      "-b",
+      preservationRef,
+      worktreePath,
+      baseSha,
+    ], sourceRoot);
   } catch (error) {
     await rm(worktreePath, { recursive: true, force: true });
+    await removeFailedPreservationRef(sourceRoot, preservationRef, baseSha);
     const message = error instanceof Error ? error.message : String(error);
     throw new GitWorktreeError(
       "GIT_WORKTREE_CREATE_FAILED",
@@ -84,10 +96,126 @@ export async function createManagedWorktree(input: {
     path: worktreePath,
     baseRef,
     baseSha,
+    preservationRef,
     dirtySource,
-    detached: true,
+    detached: false,
     managed: true,
   };
+}
+
+export function managedWorkspacePreservationRef(workspaceId: string): string {
+  if (!/^ws_[a-f0-9]{10}$/.test(workspaceId)) {
+    throw new Error(`Invalid DevSpace workspace ID for a preservation ref: ${workspaceId}`);
+  }
+  return `devspace/workspaces/${workspaceId}`;
+}
+
+export async function ensureManagedWorkspacePreservationRef(input: {
+  sourceRoot: string;
+  workspaceId: string;
+  expectedHeadSha: string;
+}): Promise<{
+  preservationRef: string;
+  head: string;
+  created: boolean;
+}> {
+  if (!/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(input.expectedHeadSha)) {
+    throw new Error("expected_head_is_not_a_git_object_id");
+  }
+  const preservationRef = managedWorkspacePreservationRef(input.workspaceId);
+  const fullRef = `refs/heads/${preservationRef}`;
+  try {
+    const observed = (await git([
+      "rev-parse",
+      "--verify",
+      `${fullRef}^{commit}`,
+    ], input.sourceRoot)).trim();
+    if (observed !== input.expectedHeadSha) {
+      throw new Error("workspace_preservation_ref_points_to_another_candidate");
+    }
+    return {
+      preservationRef,
+      head: observed,
+      created: false,
+    };
+  } catch (error) {
+    if (
+      error instanceof Error
+      && error.message === "workspace_preservation_ref_points_to_another_candidate"
+    ) {
+      throw error;
+    }
+  }
+
+  await git([
+    "update-ref",
+    fullRef,
+    input.expectedHeadSha,
+    "0".repeat(input.expectedHeadSha.length),
+  ], input.sourceRoot);
+  return {
+    preservationRef,
+    head: input.expectedHeadSha,
+    created: true,
+  };
+}
+
+export async function deleteManagedWorkspacePreservationRef(input: {
+  sourceRoot: string;
+  preservationRef: string;
+  expectedHeadSha: string;
+}): Promise<{
+  existed: boolean;
+  deleted: boolean;
+  head?: string;
+  error?: string;
+}> {
+  if (!isManagedWorkspacePreservationRef(input.preservationRef)) {
+    return {
+      existed: false,
+      deleted: false,
+      error: "ref_is_not_an_executor_owned_workspace_preservation_ref",
+    };
+  }
+
+  const fullRef = `refs/heads/${input.preservationRef}`;
+  if (!/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(input.expectedHeadSha)) {
+    return {
+      existed: false,
+      deleted: false,
+      error: "expected_head_is_not_a_git_object_id",
+    };
+  }
+  let head: string;
+  try {
+    head = (await git(["rev-parse", "--verify", `${fullRef}^{commit}`], input.sourceRoot)).trim();
+  } catch {
+    return { existed: false, deleted: false };
+  }
+  if (head !== input.expectedHeadSha) {
+    return {
+      existed: true,
+      deleted: false,
+      head,
+      error: "preservation_ref_head_changed_before_delete",
+    };
+  }
+
+  try {
+    await git(["update-ref", "-d", fullRef, input.expectedHeadSha], input.sourceRoot);
+    return { existed: true, deleted: true, head };
+  } catch (error) {
+    return {
+      existed: true,
+      deleted: false,
+      head,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+export function isManagedWorkspacePreservationRef(value: string): boolean {
+  return /^devspace\/workspaces\/ws_[a-f0-9]{10}$/.test(value);
 }
 
 async function resolveGitRoot(path: string, allowedRoots: string[]): Promise<string> {
@@ -157,6 +285,26 @@ function sanitizePathSegment(value: string): string {
     .replace(/[^a-zA-Z0-9._-]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 80);
+}
+
+async function removeFailedPreservationRef(
+  sourceRoot: string,
+  preservationRef: string,
+  expectedHead: string,
+): Promise<void> {
+  try {
+    await git(["worktree", "prune", "--expire", "now"], sourceRoot);
+    const observed = (await git([
+      "rev-parse",
+      "--verify",
+      `refs/heads/${preservationRef}^{commit}`,
+    ], sourceRoot)).trim();
+    if (observed !== expectedHead) return;
+    await git(["branch", "-D", preservationRef], sourceRoot);
+  } catch {
+    // Preserve the original worktree-creation failure. A ref that cannot be
+    // proven to be the newly-created base ref is deliberately retained.
+  }
 }
 
 async function git(args: string[], cwd: string): Promise<string> {

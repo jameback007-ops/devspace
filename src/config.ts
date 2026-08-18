@@ -37,6 +37,14 @@ export interface ToolSurfaceFreshnessConfig {
   acceleratorProfileRef?: string;
   nativeMcpRuntimeIdentitiesPath?: string;
 }
+export interface SelfRepositoryPublicationConfig {
+  enabled: boolean;
+  effectsEnabled: boolean;
+  repositoryRoot?: string;
+  remoteName: string;
+  branchName: string;
+  expectedRemoteUrl?: string;
+}
 const DEFAULT_OAUTH_ACCESS_TOKEN_TTL_SECONDS = 60 * 60;
 const DEFAULT_OAUTH_REFRESH_TOKEN_TTL_SECONDS = 30 * 24 * 60 * 60;
 const DEFAULT_ARTIFACT_MAX_FILE_BYTES = 100 * 1024 * 1024;
@@ -89,6 +97,7 @@ export interface ServerConfig {
   localAgentQueue: LocalAgentQueueConfig;
   zesResearchCycle: ZesResearchCycleConfig;
   toolSurfaceFreshness: ToolSurfaceFreshnessConfig;
+  selfRepositoryPublication: SelfRepositoryPublicationConfig;
   logging: LoggingConfig;
 }
 
@@ -214,6 +223,66 @@ function parseToolSurfaceFreshnessConfig(
   return Object.fromEntries(
     Object.entries(parsed).filter(([, value]) => value !== undefined),
   ) as ToolSurfaceFreshnessConfig;
+}
+
+function parseSelfRepositoryPublicationConfig(
+  env: NodeJS.ProcessEnv,
+): SelfRepositoryPublicationConfig {
+  const enabled = parseBoolean(env.DEVSPACE_SELF_REPOSITORY_PUBLICATION);
+  const effectsEnabled = parseBoolean(
+    env.DEVSPACE_SELF_REPOSITORY_PUBLICATION_EFFECTS,
+  );
+  const repositoryRoot = parseOptionalAbsolutePath(
+    env.DEVSPACE_SELF_REPOSITORY_ROOT,
+    "DEVSPACE_SELF_REPOSITORY_ROOT",
+  );
+  const remoteName = parseOptionalString(
+    env.DEVSPACE_SELF_REPOSITORY_REMOTE,
+    "DEVSPACE_SELF_REPOSITORY_REMOTE",
+    256,
+  ) ?? "owner";
+  const branchName = parseOptionalString(
+    env.DEVSPACE_SELF_REPOSITORY_BRANCH,
+    "DEVSPACE_SELF_REPOSITORY_BRANCH",
+    512,
+  ) ?? "main";
+  const expectedRemoteUrl = parseOptionalString(
+    env.DEVSPACE_SELF_REPOSITORY_EXPECTED_REMOTE_URL,
+    "DEVSPACE_SELF_REPOSITORY_EXPECTED_REMOTE_URL",
+    4_096,
+  );
+
+  if (!/^[A-Za-z0-9._-]+$/.test(remoteName)) {
+    throw new Error(`Invalid DEVSPACE_SELF_REPOSITORY_REMOTE: ${remoteName}`);
+  }
+  if (
+    !/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(branchName)
+    || branchName.includes("..")
+    || branchName.includes("@{")
+    || branchName.endsWith("/")
+    || branchName.endsWith(".")
+  ) {
+    throw new Error(`Invalid DEVSPACE_SELF_REPOSITORY_BRANCH: ${branchName}`);
+  }
+  if (effectsEnabled && !enabled) {
+    throw new Error(
+      "DEVSPACE_SELF_REPOSITORY_PUBLICATION_EFFECTS requires DEVSPACE_SELF_REPOSITORY_PUBLICATION",
+    );
+  }
+  if (enabled && (!repositoryRoot || !expectedRemoteUrl)) {
+    throw new Error(
+      "DEVSPACE_SELF_REPOSITORY_PUBLICATION requires DEVSPACE_SELF_REPOSITORY_ROOT and DEVSPACE_SELF_REPOSITORY_EXPECTED_REMOTE_URL",
+    );
+  }
+
+  return {
+    enabled,
+    effectsEnabled,
+    repositoryRoot,
+    remoteName,
+    branchName,
+    expectedRemoteUrl,
+  };
 }
 
 function parseToolMode(env: NodeJS.ProcessEnv): ToolMode {
@@ -633,6 +702,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
       ),
     },
     toolSurfaceFreshness: parseToolSurfaceFreshnessConfig(env),
+    selfRepositoryPublication: parseSelfRepositoryPublicationConfig(env),
     logging: parseLoggingConfig(env),
   };
 }

@@ -68,6 +68,7 @@ export interface WorkspaceWorktree {
   path: string;
   baseRef: string;
   baseSha: string;
+  preservationRef?: string;
   dirtySource: boolean;
   detached: boolean;
   managed: boolean;
@@ -313,8 +314,9 @@ export class WorkspaceRegistry {
               path: root,
               baseRef: session.baseRef ?? "HEAD",
               baseSha: session.baseSha ?? "",
+              preservationRef: session.preservationRef,
               dirtySource: false,
-              detached: true,
+              detached: session.preservationRef === undefined,
               managed: session.managed,
             }
           : undefined,
@@ -407,13 +409,16 @@ export class WorkspaceRegistry {
   }
 
   private async openWorktreeWorkspace(path: string, baseRef: string | undefined): Promise<WorkspaceContext> {
+    const workspaceId = newWorkspaceId();
     const worktree = await createManagedWorktree({
       sourcePath: path,
+      workspaceId,
       baseRef,
       config: this.config,
     });
 
     return this.createWorkspaceContext({
+      id: workspaceId,
       root: worktree.path,
       mode: "worktree",
       sourceRoot: worktree.sourceRoot,
@@ -422,13 +427,14 @@ export class WorkspaceRegistry {
   }
 
   private async createWorkspaceContext(input: {
+    id?: string;
     root: string;
     mode: WorkspaceMode;
     sourceRoot?: string;
     worktree?: WorkspaceWorktree;
   }): Promise<WorkspaceContext> {
     const workspace: Workspace = {
-      id: `ws_${randomBytes(5).toString("hex")}`,
+      id: input.id ?? newWorkspaceId(),
       root: input.root,
       mode: input.mode,
       sourceRoot: input.sourceRoot,
@@ -445,6 +451,7 @@ export class WorkspaceRegistry {
       sourceRoot: workspace.sourceRoot,
       baseRef: workspace.worktree?.baseRef,
       baseSha: workspace.worktree?.baseSha,
+      preservationRef: workspace.worktree?.preservationRef,
       managed: workspace.worktree?.managed,
     });
     this.workspaces.set(workspace.id, workspace);
@@ -550,6 +557,10 @@ export class WorkspaceRegistry {
       discovery: { status: "complete", finder: discovery.finder },
     };
   }
+}
+
+function newWorkspaceId(): string {
+  return `ws_${randomBytes(5).toString("hex")}`;
 }
 
 async function canonicalPath(path: string): Promise<string> {

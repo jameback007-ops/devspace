@@ -18,6 +18,7 @@ export interface WorkspaceSession {
   sourceRoot?: string;
   baseRef?: string;
   baseSha?: string;
+  preservationRef?: string;
   managed: boolean;
   createdAt: string;
   lastUsedAt: string;
@@ -34,11 +35,14 @@ export interface WorkspaceConversationBinding {
 export interface WorkspaceRecoveryObservation {
   recordedAtMs: number;
   semantic?: Record<string, unknown>;
+  fingerprint?: Record<string, unknown>;
 }
 
 export interface WorkspaceActivityObservation {
   workspaceId: string;
   scopeLastActivityAtMs?: number;
+  latestScopeRef?: string;
+  scopeRefs?: string[];
   bindingLastUsedAt?: string;
   recovery?: WorkspaceRecoveryObservation;
 }
@@ -51,6 +55,7 @@ export interface WorkspaceStore {
     sourceRoot?: string;
     baseRef?: string;
     baseSha?: string;
+    preservationRef?: string;
     managed?: boolean;
   }): WorkspaceSession;
   getSession(id: string): WorkspaceSession | undefined;
@@ -58,6 +63,7 @@ export interface WorkspaceStore {
   getSessionByRoot(root: string): WorkspaceSession | undefined;
   workspaceActivity(id: string): WorkspaceActivityObservation;
   touchSession(id: string): void;
+  setPreservationRef(id: string, preservationRef: string): WorkspaceSession | undefined;
   closeSession(id: string, closedAt?: string): WorkspaceSession | undefined;
   getConversationBinding(
     conversationScopeId: string,
@@ -87,6 +93,7 @@ export class SqliteWorkspaceStore implements WorkspaceStore {
     sourceRoot?: string;
     baseRef?: string;
     baseSha?: string;
+    preservationRef?: string;
     managed?: boolean;
   }): WorkspaceSession {
     const now = new Date().toISOString();
@@ -98,6 +105,7 @@ export class SqliteWorkspaceStore implements WorkspaceStore {
       sourceRoot: input.sourceRoot,
       baseRef: input.baseRef,
       baseSha: input.baseSha,
+      preservationRef: input.preservationRef,
       managed: input.managed ?? false,
       createdAt: now,
       lastUsedAt: now,
@@ -113,6 +121,7 @@ export class SqliteWorkspaceStore implements WorkspaceStore {
         sourceRoot: session.sourceRoot ?? null,
         baseRef: session.baseRef ?? null,
         baseSha: session.baseSha ?? null,
+        preservationRef: session.preservationRef ?? null,
         managed: String(session.managed),
         createdAt: session.createdAt,
         lastUsedAt: session.lastUsedAt,
@@ -152,14 +161,19 @@ export class SqliteWorkspaceStore implements WorkspaceStore {
   }
 
   workspaceActivity(id: string): WorkspaceActivityObservation {
-    const scopeRow = this.database.sqlite
+    const scopeRows = this.database.sqlite
       .prepare(`
-        select max(scope.last_activity_at_ms) as last_activity_at_ms
+        select scope.scope_ref, scope.last_activity_at_ms
           from execution_scope_workspaces link
           join execution_scopes scope on scope.scope_ref = link.scope_ref
          where link.workspace_session_id = ?
+         order by scope.last_activity_at_ms desc
+         limit 50
       `)
-      .get(id) as { last_activity_at_ms?: number | null } | undefined;
+      .all(id) as Array<{
+        scope_ref: string;
+        last_activity_at_ms: number;
+      }>;
     const bindingRow = this.database.sqlite
       .prepare(`
         select max(last_used_at) as last_used_at
@@ -169,15 +183,20 @@ export class SqliteWorkspaceStore implements WorkspaceStore {
       .get(id) as { last_used_at?: string | null } | undefined;
     const recoveryRow = this.database.sqlite
       .prepare(`
-        select recorded_at_ms, semantic_json
+        select recorded_at_ms, semantic_json, fingerprint_json
           from execution_recovery_capsules
          where workspace_session_id = ?
          order by recorded_at_ms desc
          limit 1
       `)
-      .get(id) as { recorded_at_ms: number; semantic_json: string } | undefined;
+      .get(id) as {
+        recorded_at_ms: number;
+        semantic_json: string;
+        fingerprint_json: string;
+      } | undefined;
 
     let semantic: Record<string, unknown> | undefined;
+    let fingerprint: Record<string, unknown> | undefined;
     if (recoveryRow) {
       try {
         const decoded = JSON.parse(recoveryRow.semantic_json) as unknown;
@@ -187,19 +206,30 @@ export class SqliteWorkspaceStore implements WorkspaceStore {
       } catch {
         semantic = undefined;
       }
+      try {
+        const decoded = JSON.parse(recoveryRow.fingerprint_json) as unknown;
+        if (typeof decoded === "object" && decoded !== null && !Array.isArray(decoded)) {
+          fingerprint = decoded as Record<string, unknown>;
+        }
+      } catch {
+        fingerprint = undefined;
+      }
     }
 
     return {
       workspaceId: id,
       scopeLastActivityAtMs:
-        scopeRow?.last_activity_at_ms === null || scopeRow?.last_activity_at_ms === undefined
+        scopeRows[0]?.last_activity_at_ms === undefined
           ? undefined
-          : Number(scopeRow.last_activity_at_ms),
+          : Number(scopeRows[0].last_activity_at_ms),
+      latestScopeRef: scopeRows[0]?.scope_ref,
+      scopeRefs: [...new Set(scopeRows.map((row) => row.scope_ref))],
       bindingLastUsedAt: bindingRow?.last_used_at ?? undefined,
       recovery: recoveryRow
         ? {
             recordedAtMs: Number(recoveryRow.recorded_at_ms),
             semantic,
+            fingerprint,
           }
         : undefined,
     };
@@ -211,6 +241,17 @@ export class SqliteWorkspaceStore implements WorkspaceStore {
       .set({ lastUsedAt: new Date().toISOString() })
       .where(eq(workspaceSessions.id, id))
       .run();
+  }
+
+  setPreservationRef(id: string, preservationRef: string): WorkspaceSession | undefined {
+    const existing = this.getSession(id);
+    if (!existing) return undefined;
+    this.database.db
+      .update(workspaceSessions)
+      .set({ preservationRef })
+      .where(eq(workspaceSessions.id, id))
+      .run();
+    return { ...existing, preservationRef };
   }
 
   closeSession(id: string, closedAt = new Date().toISOString()): WorkspaceSession | undefined {
@@ -332,6 +373,7 @@ function rowToWorkspaceSession(row: WorkspaceSessionRow): WorkspaceSession {
     sourceRoot: row.sourceRoot ?? undefined,
     baseRef: row.baseRef ?? undefined,
     baseSha: row.baseSha ?? undefined,
+    preservationRef: row.preservationRef ?? undefined,
     managed: row.managed === "true",
     createdAt: row.createdAt,
     lastUsedAt: row.lastUsedAt,

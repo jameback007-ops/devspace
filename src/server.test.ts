@@ -1543,6 +1543,7 @@ test("workspace lifecycle tools close managed worktrees and expose digest-bound 
     "workspace_list",
     "workspace_status",
     "workspace_close",
+    "workspace_candidate_inventory",
     "workspace_gc_preview",
     "workspace_gc_execute",
   ]) {
@@ -1562,6 +1563,20 @@ test("workspace lifecycle tools close managed worktrees and expose digest-bound 
   assert.equal(statusData.workspace.id, workspaceId);
   assert.equal(statusData.git.readable, true);
   assert.equal(statusData.git.dirty, false);
+  assert.equal(statusData.candidateLifecycle.disposition, "baseline_only");
+
+  const inventory = await context.client.callTool({
+    name: "workspace_candidate_inventory",
+    arguments: { activeWithinHours: 0.01 },
+    _meta: { "openai/session": "workspace-lifecycle" },
+  } as Parameters<Client["callTool"]>[0]);
+  const inventoryData = structuredData(inventory);
+  assert.equal(inventoryData.capabilityRef, "devspace.workspace-candidate-inventory.v1");
+  assert.ok(
+    inventoryData.candidates.some((candidate: Record<string, unknown>) => (
+      candidate.workspaceId === workspaceId
+    )),
+  );
 
   const closed = await context.client.callTool({
     name: "workspace_close",
@@ -1588,6 +1603,53 @@ test("workspace lifecycle tools close managed worktrees and expose digest-bound 
   const previewData = structuredData(preview);
   assert.match(String(previewData.planIdSha256), /^[a-f0-9]{64}$/);
   assert.equal(previewData.summary.directoryCount, 0);
+});
+
+test("fixed self-repository publication preflight is available directly and through the stable scope route", async (t) => {
+  const context = await fixture(t, {
+    git: true,
+    toolMode: "codex",
+    selfRepositoryPublication: {},
+  });
+  const tools = await context.client.listTools();
+  assert.ok(tools.tools.some((tool) => tool.name === "self_repository_publication_preflight"));
+  assert.ok(!tools.tools.some((tool) => tool.name === "self_repository_publish"));
+
+  const opened = await callOpen(
+    context.client,
+    context.project,
+    "self-repository-publication",
+    "worktree",
+  );
+  const workspaceId = String(structuredContent(opened).workspaceId);
+  const worktreeRoot = String(structuredContent(opened).root);
+  await writeFile(join(worktreeRoot, "candidate.txt"), "candidate\n");
+  await git(worktreeRoot, ["add", "."]);
+  await git(worktreeRoot, ["commit", "-m", "Candidate"]);
+
+  const direct = await context.client.callTool({
+    name: "self_repository_publication_preflight",
+    arguments: { workspaceId },
+    _meta: { "openai/session": "self-repository-publication" },
+  } as Parameters<Client["callTool"]>[0]);
+  const directData = structuredData(direct);
+  assert.equal(directData.status, "blocked");
+  assert.ok(
+    directData.blockingFactors.includes("candidate_validation_missing_or_stale"),
+  );
+  assert.equal(directData.policy.unrelatedZesRuntimeOrWriterStateCanBlockPublication, false);
+
+  const scopeStatus = await context.client.callTool({
+    name: "execution_scope_status",
+    arguments: {},
+    _meta: { "openai/session": "self-repository-publication" },
+  } as Parameters<Client["callTool"]>[0]);
+  const scopeData = structuredData(scopeStatus);
+  const capability = scopeData.stableControlPlane.capabilities
+    .selfRepositoryPublicationPreflight;
+  assert.equal(capability.candidateCount, 1);
+  assert.equal(capability.blockedCount, 1);
+  assert.equal(capability.candidates[0].workspaceId, workspaceId);
 });
 
 test("checkout opened after a worktree receives its own complete context", async (t) => {
@@ -1675,6 +1737,7 @@ interface ServerFixture {
   hostSkillPath?: string;
   localAgentCoordinator?: LocalAgentCoordinator;
   runtimeCapabilities?: RuntimeCapabilityRegistry;
+  ownerRemote?: string;
   close: () => Promise<void>;
 }
 
@@ -1693,6 +1756,9 @@ async function fixture(
     zesResearchCycleMode?: ServerConfig["zesResearchCycle"]["mode"];
     continuationPreflightProjector?: ZesContinuationPreflightProjectionSource;
     scopePublicationPreflight?: ScopePublicationPreflightSource;
+    selfRepositoryPublication?: {
+      effectsEnabled?: boolean;
+    };
   } = {},
 ): Promise<ServerFixture> {
   const root = await mkdtemp(join(tmpdir(), "devspace-server-test-"));
@@ -1751,6 +1817,7 @@ async function fixture(
     );
   }
 
+  let ownerRemote: string | undefined;
   if (options.git) {
     await writeFile(join(project, "README.md"), "hello\n");
     await git(project, ["init"]);
@@ -1758,6 +1825,12 @@ async function fixture(
     await git(project, ["config", "user.name", "DevSpace Test"]);
     await git(project, ["add", "."]);
     await git(project, ["commit", "-m", "Initial commit"]);
+    if (options.selfRepositoryPublication) {
+      ownerRemote = join(root, "owner.git");
+      await git(root, ["init", "--bare", ownerRemote]);
+      await git(project, ["remote", "add", "owner", ownerRemote]);
+      await git(project, ["push", "owner", "HEAD:refs/heads/main"]);
+    }
   }
 
   const config = loadConfig({
@@ -1782,6 +1855,17 @@ async function fixture(
         }
       : {}),
     DEVSPACE_OAUTH_OWNER_TOKEN: "test-owner-token-that-is-long-enough",
+    ...(ownerRemote
+      ? {
+          DEVSPACE_SELF_REPOSITORY_PUBLICATION: "1",
+          DEVSPACE_SELF_REPOSITORY_PUBLICATION_EFFECTS:
+            options.selfRepositoryPublication?.effectsEnabled ? "1" : "0",
+          DEVSPACE_SELF_REPOSITORY_ROOT: project,
+          DEVSPACE_SELF_REPOSITORY_REMOTE: "owner",
+          DEVSPACE_SELF_REPOSITORY_BRANCH: "main",
+          DEVSPACE_SELF_REPOSITORY_EXPECTED_REMOTE_URL: ownerRemote,
+        }
+      : {}),
     PORT: "1",
   });
   const store = new SqliteWorkspaceStore(stateDir);
@@ -1868,6 +1952,7 @@ async function fixture(
     hostSkillPath,
     localAgentCoordinator,
     runtimeCapabilities,
+    ownerRemote,
     close,
   };
 }

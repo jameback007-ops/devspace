@@ -57,6 +57,11 @@ const migrations: Migration[] = [
     name: "recovery-capsule-adoption-nudge",
     up: migrateRecoveryCapsuleAdoptionNudge,
   },
+  {
+    version: 11,
+    name: "workspace-preservation-refs",
+    up: migrateWorkspacePreservationRefs,
+  },
 ];
 
 export function migrateDatabase(sqlite: Database.Database): void {
@@ -475,6 +480,12 @@ function migrateRecoveryCapsuleAdoptionNudge(
     alter table execution_turn_horizons
       add column capsule_nudge_emitted_at_ms integer;
   `);
+}
+
+function migrateWorkspacePreservationRefs(
+  sqlite: Database.Database,
+): void {
+  addColumnIfMissing(sqlite, "workspace_sessions", "preservation_ref", "text");
 }
 
 function addColumnIfMissing(

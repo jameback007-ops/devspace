@@ -137,6 +137,7 @@ DevSpace gives ChatGPT tools to:
 - search code and inspect directories
 - run shell commands for tests, builds, git, and package scripts
 - use isolated Git worktrees for parallel coding sessions
+- keep every new managed worktree on a durable executor-owned preservation branch, inventory publication debt with task/scope hints, and block close/GC until candidate finalizers are satisfied
 - receive advisory long-turn notices and persist Git-bound recovery capsules without blocking tools or forcing task completion
 - inspect independent host execution scopes without merging their conversations
 - send durable target-bound messages between execution scopes with receipts
@@ -191,6 +192,7 @@ devspace doctor
 - [Execution-Scope Messaging](https://github.com/Waishnav/devspace/blob/main/docs/execution-scope-messaging.md)
 - [Local-Agent Session Continuation](https://github.com/Waishnav/devspace/blob/main/docs/local-agent-continuation.md)
 - [ZES Research Reflex Execution Cycle](docs/research-execution-cycle.md)
+- [Workspace Candidate Lifecycle](https://github.com/Waishnav/devspace/blob/main/docs/workspace-candidate-lifecycle.md)
 - [Native File Download](https://github.com/Waishnav/devspace/blob/main/docs/artifact-exchange.md)
 - [Security Model](https://github.com/Waishnav/devspace/blob/main/docs/security.md)
 - [Troubleshooting Gotchas](https://github.com/Waishnav/devspace/blob/main/docs/gotchas.md)

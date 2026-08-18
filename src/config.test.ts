@@ -30,6 +30,59 @@ assert.equal(
   "1.0.7-zes.2",
 );
 assert.deepEqual(loadConfig(baseEnv).toolSurfaceFreshness, {});
+assert.deepEqual(loadConfig(baseEnv).selfRepositoryPublication, {
+  enabled: false,
+  effectsEnabled: false,
+  repositoryRoot: undefined,
+  remoteName: "owner",
+  branchName: "main",
+  expectedRemoteUrl: undefined,
+});
+assert.deepEqual(
+  loadConfig({
+    ...baseEnv,
+    DEVSPACE_SELF_REPOSITORY_PUBLICATION: "1",
+    DEVSPACE_SELF_REPOSITORY_PUBLICATION_EFFECTS: "1",
+    DEVSPACE_SELF_REPOSITORY_ROOT: process.cwd(),
+    DEVSPACE_SELF_REPOSITORY_REMOTE: "owner",
+    DEVSPACE_SELF_REPOSITORY_BRANCH: "main",
+    DEVSPACE_SELF_REPOSITORY_EXPECTED_REMOTE_URL:
+      "https://github.com/example/devspace.git",
+  }).selfRepositoryPublication,
+  {
+    enabled: true,
+    effectsEnabled: true,
+    repositoryRoot: process.cwd(),
+    remoteName: "owner",
+    branchName: "main",
+    expectedRemoteUrl: "https://github.com/example/devspace.git",
+  },
+);
+assert.throws(
+  () => loadConfig({
+    ...baseEnv,
+    DEVSPACE_SELF_REPOSITORY_PUBLICATION: "1",
+  }),
+  /requires DEVSPACE_SELF_REPOSITORY_ROOT and DEVSPACE_SELF_REPOSITORY_EXPECTED_REMOTE_URL/,
+);
+assert.throws(
+  () => loadConfig({
+    ...baseEnv,
+    DEVSPACE_SELF_REPOSITORY_PUBLICATION_EFFECTS: "1",
+  }),
+  /requires DEVSPACE_SELF_REPOSITORY_PUBLICATION/,
+);
+assert.throws(
+  () => loadConfig({
+    ...baseEnv,
+    DEVSPACE_SELF_REPOSITORY_PUBLICATION: "1",
+    DEVSPACE_SELF_REPOSITORY_ROOT: process.cwd(),
+    DEVSPACE_SELF_REPOSITORY_REMOTE: "owner/main",
+    DEVSPACE_SELF_REPOSITORY_EXPECTED_REMOTE_URL:
+      "https://github.com/example/devspace.git",
+  }),
+  /Invalid DEVSPACE_SELF_REPOSITORY_REMOTE/,
+);
 assert.deepEqual(
   loadConfig({
     ...baseEnv,

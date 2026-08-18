@@ -66,8 +66,13 @@ const CRITICAL_TOOL_GROUPS = {
     "workspace_list",
     "workspace_status",
     "workspace_close",
+    "workspace_candidate_inventory",
     "workspace_gc_preview",
     "workspace_gc_execute",
+  ],
+  selfRepositoryPublication: [
+    "self_repository_publication_preflight",
+    "self_repository_publish",
   ],
   localAgentContinuation: [
     "local_agent_session_list",
@@ -272,6 +277,10 @@ export class RuntimeCapabilityRegistry {
       localAgentContinuationEnabled: this.config.subagents,
       zesResearchCycleMode: this.config.zesResearchCycle.mode,
       artifactDownloadConfigured: this.config.artifactsEnabled,
+      selfRepositoryPublicationConfigured:
+        this.config.selfRepositoryPublication.enabled,
+      selfRepositoryPublicationEffectsEnabled:
+        this.config.selfRepositoryPublication.effectsEnabled,
     };
   }
 
@@ -294,6 +303,16 @@ export class RuntimeCapabilityRegistry {
       recoveryCapsules: {
         configured: this.config.turnContinuity.enabled,
         expectedTools: CRITICAL_TOOL_GROUPS.recoveryCapsules,
+      },
+      workspaceLifecycle: {
+        configured: true,
+        expectedTools: CRITICAL_TOOL_GROUPS.workspaceLifecycle,
+      },
+      selfRepositoryPublication: {
+        configured: this.config.selfRepositoryPublication.enabled,
+        expectedTools: this.config.selfRepositoryPublication.effectsEnabled
+          ? CRITICAL_TOOL_GROUPS.selfRepositoryPublication
+          : CRITICAL_TOOL_GROUPS.selfRepositoryPublication.slice(0, 1),
       },
       localAgentContinuation: {
         configured: this.config.subagents,

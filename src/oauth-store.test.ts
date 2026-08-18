@@ -51,6 +51,7 @@ async function testDatabaseConfiguration(stateDir: string): Promise<void> {
       { version: 8, name: "turn-continuity-and-recovery-capsules" },
       { version: 9, name: "semantic-execution-observability" },
       { version: 10, name: "recovery-capsule-adoption-nudge" },
+      { version: 11, name: "workspace-preservation-refs" },
     ]);
   } finally {
     database.close();

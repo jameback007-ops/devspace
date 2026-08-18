@@ -58,7 +58,7 @@ test("digest-bound workspace GC removes only clean old published worktrees", asy
   assert.throws(() => registry.getWorkspace(opened.workspace.id), /is closed/);
 });
 
-test("workspace GC protects dirty trees, unpublished commits, loaded workspaces, and running commands", async (t) => {
+test("workspace GC protects dirty trees, publication debt, loaded workspaces, and running commands", async (t) => {
   const context = await fixture(t);
   const firstStore = new SqliteWorkspaceStore(context.config.stateDir);
   const firstRegistry = new WorkspaceRegistry(context.config, firstStore);
@@ -115,10 +115,14 @@ test("workspace GC protects dirty trees, unpublished commits, loaded workspaces,
   const byId = new Map(preview.items.map((item) => [item.workspaceId, item]));
   assert.ok(byId.get(dirty.workspace.id)?.protectedReasons.includes("dirty_worktree"));
   assert.ok(
-    byId.get(unpublished.workspace.id)?.protectedReasons.includes(
-      "head_not_reachable_from_persistent_ref",
-    ),
+    byId.get(unpublished.workspace.id)?.protectedReasons.includes("publication_debt"),
   );
+  assert.equal(
+    byId.get(unpublished.workspace.id)?.candidateLifecycle.disposition,
+    "awaiting_validation",
+  );
+  assert.ok(unpublished.workspace.worktree?.preservationRef);
+  assert.equal(unpublished.workspace.worktree?.detached, false);
   assert.ok(byId.get(loaded.workspace.id)?.protectedReasons.includes("loaded_in_current_runtime"));
   assert.ok(
     byId.get(running.workspace.id)?.protectedReasons.includes(
@@ -163,6 +167,211 @@ test("workspace GC rejects a stale plan after Git state changes", async (t) => {
   );
 });
 
+test("anchored publication debt is retained until patch-equivalent integration", async (t) => {
+  const context = await fixture(t);
+  const firstStore = new SqliteWorkspaceStore(context.config.stateDir);
+  const firstRegistry = new WorkspaceRegistry(context.config, firstStore);
+  const opened = await firstRegistry.openWorkspace({
+    path: context.repository,
+    mode: "worktree",
+  });
+  const preservationRef = opened.workspace.worktree?.preservationRef;
+  assert.ok(preservationRef);
+  assert.equal(opened.workspace.worktree?.detached, false);
+
+  await writeFile(join(opened.workspace.root, "candidate.txt"), "candidate\n");
+  await git(opened.workspace.root, ["add", "."]);
+  await git(opened.workspace.root, ["commit", "-m", "Candidate change"]);
+  const candidateHead = await gitOutput(opened.workspace.root, ["rev-parse", "HEAD"]);
+  firstStore.close();
+
+  const store = new SqliteWorkspaceStore(context.config.stateDir);
+  const registry = new WorkspaceRegistry(context.config, store);
+  const processes = new ProcessSessionManager();
+  const lifecycle = new WorkspaceLifecycleManager(
+    context.config,
+    store,
+    registry,
+    processes,
+    () => Date.now() + 48 * 60 * 60 * 1_000,
+  );
+  t.after(() => {
+    processes.shutdown();
+    store.close();
+  });
+
+  const before = await lifecycle.inventory({ activeWithinHours: 1 });
+  const candidate = before.candidates.find((item) => item.workspaceId === opened.workspace.id);
+  assert.equal(candidate?.disposition, "awaiting_validation");
+  assert.equal(candidate?.publicationDebt, true);
+  assert.ok(candidate?.finalizers.includes("publication_debt"));
+  await assert.rejects(
+    () => lifecycle.close({ workspaceId: opened.workspace.id }),
+    /unresolved candidate lifecycle state awaiting_validation/,
+  );
+
+  await git(context.repository, ["cherry-pick", candidateHead]);
+  const after = await lifecycle.inventory({ activeWithinHours: 1 });
+  const integrated = after.candidates.find((item) => item.workspaceId === opened.workspace.id);
+  assert.ok(
+    integrated?.disposition === "integrated"
+    || integrated?.disposition === "baseline_only",
+  );
+  assert.equal(integrated?.publicationDebt, false);
+  assert.equal(integrated?.safeToDelete, true);
+
+  const preview = await lifecycle.preview({ olderThanHours: 24, capsuleProtectionHours: 1 });
+  const planned = preview.items.find((item) => item.workspaceId === opened.workspace.id);
+  assert.equal(planned?.eligible, true);
+  const result = await lifecycle.execute({
+    olderThanHours: 24,
+    capsuleProtectionHours: 1,
+    planIdSha256: preview.planIdSha256,
+  });
+  assert.equal(result.removedCount, 1);
+  assert.equal(await exists(opened.workspace.root), false);
+  await assert.rejects(
+    () => git(context.repository, [
+      "show-ref",
+      "--verify",
+      `refs/heads/${preservationRef}`,
+    ]),
+  );
+});
+
+test("forced close retains publication debt as a branch-only preservation candidate", async (t) => {
+  const context = await fixture(t);
+  const store = new SqliteWorkspaceStore(context.config.stateDir);
+  const registry = new WorkspaceRegistry(context.config, store);
+  const opened = await registry.openWorkspace({ path: context.repository, mode: "worktree" });
+  const preservationRef = opened.workspace.worktree?.preservationRef;
+  assert.ok(preservationRef);
+  await writeFile(join(opened.workspace.root, "retained.txt"), "retain me\n");
+  await git(opened.workspace.root, ["add", "."]);
+  await git(opened.workspace.root, ["commit", "-m", "Retained candidate"]);
+
+  const processes = new ProcessSessionManager();
+  const lifecycle = new WorkspaceLifecycleManager(
+    context.config,
+    store,
+    registry,
+    processes,
+    () => Date.now() + 48 * 60 * 60 * 1_000,
+  );
+  t.after(() => {
+    processes.shutdown();
+    store.close();
+  });
+
+  const closed = await lifecycle.close({
+    workspaceId: opened.workspace.id,
+    force: true,
+  });
+  assert.equal(closed.removed, true);
+  assert.equal(await exists(opened.workspace.root), false);
+  await git(context.repository, [
+    "show-ref",
+    "--verify",
+    `refs/heads/${preservationRef}`,
+  ]);
+
+  const inventory = await lifecycle.inventory({ includeClosed: true, activeWithinHours: 1 });
+  const retained = inventory.candidates.find((item) => item.workspaceId === opened.workspace.id);
+  assert.equal(retained?.branchOnly, true);
+  assert.equal(retained?.publicationDebt, true);
+  assert.equal(retained?.disposition, "awaiting_validation");
+});
+
+test("force never discards dirty managed worktree state", async (t) => {
+  const context = await fixture(t);
+  const store = new SqliteWorkspaceStore(context.config.stateDir);
+  const registry = new WorkspaceRegistry(context.config, store);
+  const opened = await registry.openWorkspace({ path: context.repository, mode: "worktree" });
+  await writeFile(join(opened.workspace.root, "uncommitted.txt"), "must survive\n");
+
+  const processes = new ProcessSessionManager();
+  const lifecycle = new WorkspaceLifecycleManager(
+    context.config,
+    store,
+    registry,
+    processes,
+  );
+  t.after(() => {
+    processes.shutdown();
+    store.close();
+  });
+
+  await assert.rejects(
+    () => lifecycle.close({ workspaceId: opened.workspace.id, force: true }),
+    /force does not authorize discarding uncommitted changes/,
+  );
+  assert.equal(await exists(opened.workspace.root), true);
+  assert.equal(await exists(join(opened.workspace.root, "uncommitted.txt")), true);
+});
+
+test("forced close adopts a durable preservation ref for a legacy detached candidate", async (t) => {
+  const context = await fixture(t);
+  const legacyRoot = join(context.root, "legacy-detached");
+  const baseSha = await gitOutput(context.repository, ["rev-parse", "HEAD"]);
+  await git(context.repository, ["worktree", "add", "--detach", legacyRoot, baseSha]);
+  await writeFile(join(legacyRoot, "legacy.txt"), "legacy candidate\n");
+  await git(legacyRoot, ["add", "."]);
+  await git(legacyRoot, ["commit", "-m", "Legacy candidate"]);
+  const candidateHead = await gitOutput(legacyRoot, ["rev-parse", "HEAD"]);
+
+  const store = new SqliteWorkspaceStore(context.config.stateDir);
+  store.createSession({
+    id: "ws_abcdef0123",
+    root: legacyRoot,
+    mode: "worktree",
+    sourceRoot: context.repository,
+    baseRef: "main",
+    baseSha,
+    managed: true,
+  });
+  const registry = new WorkspaceRegistry(context.config, store);
+  const processes = new ProcessSessionManager();
+  const lifecycle = new WorkspaceLifecycleManager(
+    context.config,
+    store,
+    registry,
+    processes,
+  );
+  t.after(() => {
+    processes.shutdown();
+    store.close();
+  });
+
+  const closed = await lifecycle.close({
+    workspaceId: "ws_abcdef0123",
+    force: true,
+  });
+  assert.equal(closed.removed, true);
+  assert.equal(await exists(legacyRoot), false);
+  const preservationRefAdoption = closed.preservationRefAdoption as {
+    preservationRef?: string;
+  };
+  assert.equal(
+    preservationRefAdoption.preservationRef,
+    "devspace/workspaces/ws_abcdef0123",
+  );
+  assert.equal(
+    await gitOutput(context.repository, [
+      "rev-parse",
+      "refs/heads/devspace/workspaces/ws_abcdef0123",
+    ]),
+    candidateHead,
+  );
+
+  const inventory = await lifecycle.inventory({ includeClosed: true });
+  const retained = inventory.candidates.find(
+    (item) => item.workspaceId === "ws_abcdef0123",
+  );
+  assert.equal(retained?.branchOnly, true);
+  assert.equal(retained?.publicationDebt, true);
+  assert.equal(retained?.git.head, candidateHead);
+});
+
 interface Fixture {
   root: string;
   repository: string;
@@ -195,6 +404,11 @@ async function fixture(t: TestContext): Promise<Fixture> {
 
 async function git(cwd: string, args: string[]): Promise<void> {
   await execFileAsync("git", args, { cwd });
+}
+
+async function gitOutput(cwd: string, args: string[]): Promise<string> {
+  const { stdout } = await execFileAsync("git", args, { cwd });
+  return stdout.trim();
 }
 
 async function exists(path: string): Promise<boolean> {
