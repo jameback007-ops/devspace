@@ -4,6 +4,12 @@ import * as z from "zod/v4";
 import type { ServerConfig } from "./config.js";
 import { logEvent } from "./logger.js";
 import {
+  RESEARCH_PROVIDER_PURPOSES,
+  type ResearchProviderPurpose,
+  type ResearchProviderRequest,
+  ZesResearchProviderBroker,
+} from "./research-provider-broker.js";
+import {
   ResearchCycleError,
   researchCommandDigest,
   type ResearchCycleOpenInput,
@@ -40,6 +46,13 @@ const localStateAnnotations = {
   openWorldHint: false,
 };
 
+const externalEvidenceAnnotations = {
+  readOnlyHint: true,
+  destructiveHint: false,
+  idempotentHint: false,
+  openWorldHint: true,
+};
+
 const workspaceIdSchema = z.string().min(1).describe(
   "Workspace ID returned by open_workspace for the exact ZES checkout or worktree.",
 );
@@ -69,6 +82,44 @@ const providerTraceSchema = z.object({
   traceRef: z.string().min(1),
   path: z.string().min(1),
 });
+
+const providerPurposeSchema = z.enum(RESEARCH_PROVIDER_PURPOSES);
+const providerRequestSchema = z.union([
+  z.object({
+    provider: z.literal("context7"),
+    operation: z.literal("resolve-library"),
+    query: z.string().min(1),
+    libraryName: z.string().min(1),
+  }),
+  z.object({
+    provider: z.literal("context7"),
+    operation: z.literal("docs"),
+    query: z.string().min(1),
+    libraryId: z.string().min(1),
+  }),
+  z.object({
+    provider: z.literal("exa"),
+    operation: z.literal("search"),
+    query: z.string().min(1),
+    maxResults: z.number().int().min(1).max(20).optional(),
+  }),
+  z.object({
+    provider: z.literal("exa"),
+    operation: z.literal("fetch"),
+    query: z.string().min(1),
+    urls: z.array(z.string().url()).min(1).max(20),
+    maxCharacters: z.number().int().min(1).max(200_000).optional(),
+  }),
+  z.object({
+    provider: z.literal("web"),
+    operation: z.literal("fetch"),
+    query: z.string().min(1),
+    urls: z.array(z.string().url()).min(1).max(5),
+    targetKind: z.enum(["exact_fact", "named_document", "official_source"]),
+    knownSourceReason: z.string().min(12),
+    maxCharacters: z.number().int().min(1).max(200_000).optional(),
+  }),
+]);
 
 function toolMeta(config: ServerConfig): { _meta: Record<string, unknown> } {
   if (config.widgets === "off") return { _meta: {} };
@@ -162,6 +213,7 @@ function registerLifecycleTool<Input extends object>(
 export const ZES_RESEARCH_CYCLE_TOOL_NAMES = [
   "zes_research_cycle_open",
   "zes_research_cycle_prepare",
+  "zes_research_provider_invoke",
   "zes_research_cycle_assess",
   "zes_research_cycle_invalidate",
   "zes_research_cycle_verify_pre_commit",
@@ -175,8 +227,41 @@ export function registerZesResearchCycleTools(
   manager: ZesResearchCycleManager,
   resolveWorkspace: ResearchWorkspaceResolver,
   registerTool: AppToolRegistrar,
+  providerBroker = new ZesResearchProviderBroker(
+    config.zesResearchCycle,
+    manager,
+  ),
 ): void {
   if (!manager.enabled) return;
+
+  registerLifecycleTool(
+    server,
+    config,
+    registerTool,
+    "zes_research_provider_invoke",
+    {
+      title: "Invoke a fixed Research Reflex evidence provider",
+      description:
+        "Acquire provider-verifiable evidence inside the active prepared Research Reflex generation through one fixed broker. Context7 is for exact upstream documentation. Exa is for open-world candidate discovery, competing patterns, and field failures. Targeted Web fetch is only for an already-known exact fact, named document, or official source and cannot substitute for Exa. The DevSpace service may attach its fixed provider credential handle to the child process, but the model and arbitrary exec_command never receive the credential value or digest. The result includes providerEvidence plus the exact providerTrace to pass to zes_research_cycle_assess.",
+      inputSchema: {
+        workspaceId: workspaceIdSchema,
+        purpose: providerPurposeSchema,
+        request: providerRequestSchema,
+      },
+      outputSchema,
+      ...toolMeta(config),
+      annotations: externalEvidenceAnnotations,
+    },
+    async (input: {
+      workspaceId: string;
+      purpose: ResearchProviderPurpose;
+      request: ResearchProviderRequest;
+    }) => await providerBroker.invoke(
+      resolveWorkspace(input.workspaceId),
+      input.purpose,
+      input.request,
+    ),
+  );
 
   registerLifecycleTool(
     server,

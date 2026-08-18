@@ -117,6 +117,17 @@ export interface ResearchProviderTraceInput {
   path: string;
 }
 
+export interface ResearchProviderEvidenceContext {
+  cycleRef: string;
+  generation: number;
+  phase: "prepared";
+  evidenceDirectory: string;
+  ownerSeededFraming: boolean;
+  taskRef: string;
+  materialDecisionRef: string;
+  decisionBoundaryRef: string;
+}
+
 export interface ResearchPreCommitChallenge {
   localAuthorityRechecked: boolean;
   externalCurrentnessRechecked: boolean;
@@ -1612,6 +1623,31 @@ export class ZesResearchCycleManager {
           stateExists: false,
           policy: researchPolicy(this.config.mode),
         };
+  }
+
+  async providerEvidenceContext(
+    workspace: ResearchWorkspace,
+  ): Promise<ResearchProviderEvidenceContext> {
+    this.assertManaged(workspace);
+    return await this.withLock(workspace, async () => {
+      const state = await this.requireState(workspace);
+      if (state.phase !== "prepared" || !state.prepared) {
+        throw new ResearchCycleError(
+          "RESEARCH_CYCLE_PROVIDER_SCOPE_NOT_PREPARED",
+          `provider acquisition requires prepared phase, found ${state.phase}`,
+        );
+      }
+      return {
+        cycleRef: state.cycleRef,
+        generation: state.generation,
+        phase: "prepared",
+        evidenceDirectory: state.open.evidenceDirectory,
+        ownerSeededFraming: state.open.ownerSeededFraming,
+        taskRef: state.open.taskRef,
+        materialDecisionRef: state.open.materialDecisionRef,
+        decisionBoundaryRef: state.open.decisionBoundaryRef,
+      };
+    });
   }
 
   async guardPatch(

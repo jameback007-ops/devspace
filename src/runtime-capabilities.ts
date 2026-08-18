@@ -81,6 +81,7 @@ const CRITICAL_TOOL_GROUPS = {
   zesResearchCycle: [
     "zes_research_cycle_open",
     "zes_research_cycle_prepare",
+    "zes_research_provider_invoke",
     "zes_research_cycle_assess",
     "zes_research_cycle_invalidate",
     "zes_research_cycle_verify_pre_commit",

@@ -208,6 +208,11 @@ assert.equal(
   true,
 );
 assert.equal(
+  eligible.candidates[0]?.expectedPublication?.refspec,
+  `${CANDIDATE_HEAD}:refs/heads/main`,
+  "the publication effect must push the exact validated object, never checkout HEAD",
+);
+assert.equal(
   eligible.candidates[0]?.expectedPublication?.prePushGuard.environment
     .ZES_CHECKPOINT_PUBLICATION_COMMIT,
   CANDIDATE_HEAD,

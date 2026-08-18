@@ -82,7 +82,7 @@ export interface ScopePublicationCandidateAssessment {
   expectedPublication?: {
     remoteName: "origin";
     remoteRef: "refs/heads/main";
-    refspec: "HEAD:refs/heads/main";
+    refspec: `${string}:refs/heads/main`;
     expectedOldSha: string;
     compareAndSwapRequired: true;
     remoteReadbackRequired: true;
@@ -753,7 +753,7 @@ implements ScopePublicationPreflightSource {
       expectedPublication = {
         remoteName: "origin",
         remoteRef: "refs/heads/main",
-        refspec: "HEAD:refs/heads/main",
+        refspec: `${observation.headSha}:refs/heads/main`,
         expectedOldSha: remoteMainSha,
         compareAndSwapRequired: true,
         remoteReadbackRequired: true,

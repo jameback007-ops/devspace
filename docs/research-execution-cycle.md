@@ -27,20 +27,25 @@ The model-facing flow is:
    regime, source identity, decision scope, implementation boundary, action
    scope, and every exact shell command expected to mutate source or dependency
    files. Only command digests are persisted.
-3. `zes_research_cycle_assess` invokes the fixed native
+3. `zes_research_provider_invoke` optionally acquires one exact provider
+   receipt and binds it to native Research Reflex evidence inside the cycle's
+   private evidence directory. The broker exposes only typed Context7, Exa, and
+   targeted-Web operations. It accepts no provider endpoint, command,
+   credential, or output path from the model.
+4. `zes_research_cycle_assess` invokes the fixed native
    `zes-research-reflex assess` application port. DevSpace stores and hashes the
    returned v2 receipt and lease; it does not recompute sufficiency.
-4. `zes_research_cycle_invalidate` reopens judgment after counterevidence,
+5. `zes_research_cycle_invalidate` reopens judgment after counterevidence,
    architecture or semantic forks, dependency/upstream changes, owner direction
    changes, repeated distinct failures, scope drift, or source-currentness
    expiry.
-5. `zes_research_cycle_verify_pre_commit` re-verifies the native receipt and
+6. `zes_research_cycle_verify_pre_commit` re-verifies the native receipt and
    binds the complete current working-content digest, validation refs,
    currentness checks, assumptions, limitations, unresolved risks, and stopping
    reason.
-6. The normal Git commit is observed. A successful commit is accepted by the
+7. The normal Git commit is observed. A successful commit is accepted by the
    lifecycle only when it contains the complete pre-commit-verified change set.
-7. `zes_research_cycle_close` records the terminal outcome, decision delta,
+8. `zes_research_cycle_close` records the terminal outcome, decision delta,
    reusable findings, and reversal conditions. Fresh or reused external
    research must also compile a native Research Reflex episode packet for
    Task N→N+k reuse.
@@ -92,6 +97,37 @@ arbitrary command is side-effect-free. Prefer `apply_patch`, `write`, or `edit`
 for ordinary source changes because those tools can be held against exact paths
 before the effect.
 
+## Evidence-provider routing
+
+Provider selection follows the evidence need rather than whichever route is
+cheapest or easiest to call:
+
+- Context7 is the default for exact upstream library and versioned
+  documentation semantics.
+- Targeted Web is allowed only when the exact fact, named document, publisher,
+  or official source identity is already known and only its current location or
+  content needs confirmation. It performs bounded pinned-HTTPS fetches and
+  explicitly records that no open-world candidate discovery occurred.
+- Exa is the default for unknown candidate space, competitive alternatives,
+  field failures, community patterns, and broad multi-source discovery.
+- A different provider may replace Exa only when it is explicitly classified
+  as an equivalent open-world route and the Research Reflex request records the
+  exact override and coverage reason.
+
+Targeted Web, ordinary host Web Search, Context7, and one already-known source
+never silently substitute for unavailable Exa on an open-world evidence need.
+That boundary remains held as provider-degraded until Exa or an explicitly
+equivalent open-world provider succeeds. Conversely, a narrow uniquely
+authoritative fact does not have to spend an Exa call merely to retrieve a
+known official source.
+
+The Exa credential remains in the DevSpace service environment. The fixed
+broker copies only the `EXA_API_KEY` handle into the exact Exa child process;
+the model-facing result, provider receipt, logs, bind process, and arbitrary
+`exec_command` environment receive neither the value nor its digest. Context7
+may similarly consume an optional `CONTEXT7_API_KEY`; the public pinned CLI
+route remains usable without it when the upstream permits anonymous access.
+
 ## Configuration
 
 ```text
@@ -100,6 +136,9 @@ DEVSPACE_ZES_RESEARCH_REPOSITORY_ROOT=/srv/zes-codex/ZES-SYSTEM-BLUEPRINT
 DEVSPACE_ZES_RESEARCH_STATE_ROOT=/var/lib/devspace-zesnexus/zes-research-cycles
 DEVSPACE_ZES_RESEARCH_TIMEOUT_SECONDS=60
 DEVSPACE_ZES_RESEARCH_TRUSTED_TRACE_ROOTS=/srv/zes-aoq/aoq01-e77671a/state/provider-traces
+# Service-held provider handles used only by zes_research_provider_invoke.
+EXA_API_KEY=<managed-secret>
+# CONTEXT7_API_KEY=<optional-managed-secret>
 ```
 
 The repository root supplies the fixed native application port. The default is
@@ -120,6 +159,7 @@ accepts their exact identity.
 
 - `zes_research_cycle_open`
 - `zes_research_cycle_prepare`
+- `zes_research_provider_invoke`
 - `zes_research_cycle_assess`
 - `zes_research_cycle_invalidate`
 - `zes_research_cycle_verify_pre_commit`
@@ -132,6 +172,9 @@ tool-surface fingerprint and critical capability-group assessment.
 ## Failure and recovery rules
 
 - Provider failure cannot silently become `NO_SEARCH`.
+- Exa failure cannot silently downgrade an open-world decision to targeted Web.
+- Provider credentials remain service-held handles and are never accepted as
+  model input or passed to arbitrary shell execution.
 - Only the native v2 admission receipt and lease can admit an action.
 - A receipt is bound to task, material decision, decision boundary, source
   identity, implementation boundary, action scope, and exact admitted shell
