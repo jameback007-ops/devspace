@@ -54,6 +54,40 @@ test("fixed self-repository preflight and effect publish one validated zero-behi
   assert.equal(after.publicationRequired, false);
 });
 
+test("scope activity alone does not invalidate an exact self-publication plan", async (t) => {
+  const fixture = await publicationFixture(t, { effectsEnabled: true });
+  const preflight = await fixture.manager.preflight({
+    workspaceId: fixture.session.id,
+  });
+  assert.equal(preflight.status, "eligible");
+  assert.ok(preflight.validationEvidenceDigestSha256);
+
+  fixture.activity.scopeLastActivityAtMs = Date.now();
+  fixture.activity.bindingLastUsedAt = new Date().toISOString();
+  fixture.activity.latestScopeRef = "scope:publication-observer";
+  fixture.activity.scopeRefs = ["scope:publication-observer"];
+
+  const reassessed = await fixture.manager.preflight({
+    workspaceId: fixture.session.id,
+  });
+  assert.notEqual(
+    reassessed.candidateLifecycleDigestSha256,
+    preflight.candidateLifecycleDigestSha256,
+  );
+  assert.equal(
+    reassessed.validationEvidenceDigestSha256,
+    preflight.validationEvidenceDigestSha256,
+  );
+  assert.equal(reassessed.planIdSha256, preflight.planIdSha256);
+
+  const result = await fixture.manager.execute({
+    workspaceId: fixture.session.id,
+    planIdSha256: preflight.planIdSha256,
+  });
+  assert.equal(result.outcome, "published");
+  assert.equal(await remoteHead(fixture.remote), fixture.candidateHeadSha);
+});
+
 test("remote authority movement invalidates an older self-publication plan", async (t) => {
   const fixture = await publicationFixture(t, { effectsEnabled: true });
   const preflight = await fixture.manager.preflight({ workspaceId: fixture.session.id });
@@ -254,6 +288,7 @@ async function publicationFixture(
   remoteBaseSha: string;
   candidateHeadSha: string;
   session: WorkspaceSession;
+  activity: WorkspaceActivityObservation;
   manager: SelfRepositoryPublicationManager;
 }> {
   const root = await mkdtemp(join(tmpdir(), "devspace-self-publication-test-"));
@@ -343,6 +378,7 @@ async function publicationFixture(
     remoteBaseSha,
     candidateHeadSha,
     session,
+    activity,
     manager: new SelfRepositoryPublicationManager(config, store),
   };
 }

@@ -40,6 +40,7 @@ export interface SelfRepositoryPublicationCandidate {
   candidateHeadSha?: string;
   candidateBranch?: string;
   candidateLifecycleDigestSha256?: string;
+  validationEvidenceDigestSha256?: string;
   validationBoundToCandidate: boolean;
   validationEvidenceCount?: number;
   declaredWriterState?: string;
@@ -246,6 +247,9 @@ export class SelfRepositoryPublicationManager {
       nowMs: this.now(),
     });
     const lifecycleMs = elapsedMs(lifecycleStartedAt);
+    const validationEvidenceDigestSha256 = sha256(
+      stableJson(lifecycle.validation),
+    );
     const candidateHead = lifecycle.git.head;
     const candidateCwd = rootExists ? session.root : repositoryRoot;
     const semantic = activity.recovery?.semantic;
@@ -262,6 +266,7 @@ export class SelfRepositoryPublicationManager {
       return finalizeCandidate({
         ...base,
         candidateLifecycleDigestSha256: lifecycle.lifecycleDigestSha256,
+        validationEvidenceDigestSha256,
         validationBoundToCandidate: lifecycle.validation.boundToCurrentHead,
         validationEvidenceCount: lifecycle.validation.evidenceRefs.length,
         declaredWriterState,
@@ -286,6 +291,7 @@ export class SelfRepositoryPublicationManager {
           candidateHeadSha: candidateHead,
           candidateBranch: lifecycle.git.branch,
           candidateLifecycleDigestSha256: lifecycle.lifecycleDigestSha256,
+          validationEvidenceDigestSha256,
           validationBoundToCandidate: lifecycle.validation.boundToCurrentHead,
           validationEvidenceCount: lifecycle.validation.evidenceRefs.length,
           declaredWriterState,
@@ -305,6 +311,7 @@ export class SelfRepositoryPublicationManager {
         candidateHeadSha: candidateHead,
         candidateBranch: lifecycle.git.branch,
         candidateLifecycleDigestSha256: lifecycle.lifecycleDigestSha256,
+        validationEvidenceDigestSha256,
         validationBoundToCandidate: lifecycle.validation.boundToCurrentHead,
         validationEvidenceCount: lifecycle.validation.evidenceRefs.length,
         declaredWriterState,
@@ -328,6 +335,7 @@ export class SelfRepositoryPublicationManager {
         candidateHeadSha: candidateHead,
         candidateBranch: lifecycle.git.branch,
         candidateLifecycleDigestSha256: lifecycle.lifecycleDigestSha256,
+        validationEvidenceDigestSha256,
         validationBoundToCandidate: lifecycle.validation.boundToCurrentHead,
         validationEvidenceCount: lifecycle.validation.evidenceRefs.length,
         declaredWriterState,
@@ -376,6 +384,7 @@ export class SelfRepositoryPublicationManager {
         candidateHeadSha: candidateHead,
         candidateBranch: lifecycle.git.branch,
         candidateLifecycleDigestSha256: lifecycle.lifecycleDigestSha256,
+        validationEvidenceDigestSha256,
         validationBoundToCandidate: lifecycle.validation.boundToCurrentHead,
         validationEvidenceCount: lifecycle.validation.evidenceRefs.length,
         declaredWriterState,
@@ -430,6 +439,7 @@ export class SelfRepositoryPublicationManager {
       candidateHeadSha: candidateHead,
       candidateBranch: lifecycle.git.branch,
       candidateLifecycleDigestSha256: lifecycle.lifecycleDigestSha256,
+      validationEvidenceDigestSha256,
       validationBoundToCandidate: lifecycle.validation.boundToCurrentHead,
       validationEvidenceCount: lifecycle.validation.evidenceRefs.length,
       declaredWriterState,
@@ -939,6 +949,7 @@ function finalizeCandidate(
 function planDigest(value: Record<string, unknown>): string {
   const {
     assessedAt: _assessedAt,
+    candidateLifecycleDigestSha256: _candidateLifecycleDigestSha256,
     planIdSha256: _planIdSha256,
     stageTimingsMs: _stageTimingsMs,
     ...stable
