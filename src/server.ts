@@ -75,6 +75,12 @@ import {
   RuntimeCapabilityRegistry,
 } from "./runtime-capabilities.js";
 import {
+  type ResearchGuardDecision,
+  type ResearchWorkspace,
+  ZesResearchCycleManager,
+} from "./research-cycle.js";
+import { registerZesResearchCycleTools } from "./research-cycle-tools.js";
+import {
   clientAttestationFromHeaders,
   type ClientCatalogAttestation,
 } from "./tool-surface-freshness.js";
@@ -267,11 +273,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function appendToolNotice(
-  response: unknown,
+function appendToolNotice<T>(
+  response: T,
   notice: string | undefined,
   metadataKey: string,
-): unknown {
+): T {
   if (!notice || !isRecord(response)) return response;
   const content = Array.isArray(response.content)
     ? [...response.content, { type: "text", text: notice }]
@@ -292,7 +298,7 @@ function appendToolNotice(
     content,
     _meta: metadata,
     ...(structuredContent === undefined ? {} : { structuredContent }),
-  };
+  } as T;
 }
 
 function appendExecutionMailboxNotice(
@@ -479,6 +485,9 @@ function serverInstructions(config: ServerConfig): string {
     " To inspect the allowlisted AOQ Codex executor adapter, use codex_session_status, codex_session_tail, or codex_session_audit. These tools report adapter transport health separately from the Codex thread lifecycle and never represent DevSpace, VPS, workspace, or ZES product health. To inspect the exact live AOQ worktree, use codex_workspace_git_status, codex_workspace_tree, codex_workspace_read, codex_workspace_search, or codex_workspace_diff. These brokered commands are read-only and independent from the Codex thread lifecycle.";
   const zesContinuationInstruction =
     " Before governed-main integration or repository publication, use zes_continuation_preflight with the matching intent instead of passing DSN, credential, thread, repository, or filesystem paths through exec_command. The tool invokes the fixed host-owned ZES product route and returns its action disposition. publication_disposition=not_required means there is no unpublished commit, not that publication is blocked. Runtime reconciliation findings apply to runtime takeover, effect retry, or reliance on runtime state and do not by themselves block unrelated repository source actions. The result never creates writer, publication, takeover, or effect authority.";
+  const zesResearchCycleInstruction = config.zesResearchCycle.mode === "off"
+    ? ""
+    : " For a workspace containing the ZES control-kernel marker, use zes_research_cycle_open before material design or mutation, then prepare exact action bindings and obtain a native ZES Research Reflex v2 admission with zes_research_cycle_assess. Reopen judgment with zes_research_cycle_invalidate when evidence, scope, architecture, dependencies, currentness, owner direction, or failure causality changes. Before commit, use zes_research_cycle_verify_pre_commit; close the episode after the exact commit or terminal no-change/deferred/abandoned outcome. observe mode reports lifecycle drift without blocking; enforce mode holds source mutation, commit preparation, commit, and publication when the exact current lifecycle is absent or stale. These executor-local tools verify native receipts but never create semantic, writer, publication, release, activation, runtime, or effect authority.";
   const executionScopeInstruction = config.executionObservability.enabled
     ? " Use execution_scope_list to discover recent DevSpace execution scopes. When a target explicitly recorded a recovery capsule, the list includes a compact capsule-derived semantic label/frontier hint; it is not a host chat title and absent capsule means unknown mission. Use execution_scope_status for linked workspaces, live processes, explicit semantic recovery state, and the observation gap since the last MCP/tool event. Scope inspection also returns the current backend runtime instance and an exact fingerprint of the registered model-facing tool surface. The server cannot see the host's cached tools/list result; when a tool is registered by the backend but absent from the host catalog, refresh or reconnect the MCP connector rather than rebuilding that capability. A no-tool interval does not reveal whether the model is reasoning, queued, generating, or hung; model progress and provider generation remain unobservable between MCP calls. Use execution_scope_audit for bounded metadata-only tool lifecycle. Semantic state is never inferred from filenames or tool events, cross-scope authority freshness remains unverified, and the recorded exact action is historical until current canonical/runtime/writer/effect owners are rehydrated. These views never replace Git, canonical product state, runtime/effect readback, or writer/lease reconciliation, and they do not contain transcripts, prompts, private reasoning, tool outputs, patches, credentials, or raw commands."
     : "";
@@ -505,7 +514,7 @@ function serverInstructions(config: ServerConfig): string {
     const codexInspectionInstruction = config.codexNavigationTools
       ? ` Use ${toolNames.read} for direct file reads and prefer the native ${toolNames.grep}, ${toolNames.glob}, and ${toolNames.ls} tools for bounded workspace search and navigation. Use exec_command for tests, builds, Git inspection, package scripts, and commands that genuinely require a shell.`
       : ` Use ${toolNames.read} for direct file reads and exec_command for inspection, tests, builds, and other commands.`;
-    return `Use DevSpace for coding work. Call ${toolNames.openWorkspace} once for each project folder or isolated worktree, then keep using its workspaceId. During continued work in the same project or worktree, do not call ${toolNames.openWorkspace} again. Open another workspace only when changing projects, switching checkout/worktree mode, creating another isolated worktree, or when the current workspaceId is rejected.${codexInspectionInstruction} Use apply_patch for all file modifications and write_stdin to poll or interact with running processes. Follow instructions returned by ${toolNames.openWorkspace}; read applicable instruction and skill files before working in their scope.${workspaceLifecycleInstruction}${artifactInstruction}${showChangesInstruction}${codexSessionInstruction}${zesContinuationInstruction}${executionScopeInstruction}${executionMailboxInstruction}${turnContinuityInstruction}${localAgentInstruction}`;
+    return `Use DevSpace for coding work. Call ${toolNames.openWorkspace} once for each project folder or isolated worktree, then keep using its workspaceId. During continued work in the same project or worktree, do not call ${toolNames.openWorkspace} again. Open another workspace only when changing projects, switching checkout/worktree mode, creating another isolated worktree, or when the current workspaceId is rejected.${codexInspectionInstruction} Use apply_patch for all file modifications and write_stdin to poll or interact with running processes. Follow instructions returned by ${toolNames.openWorkspace}; read applicable instruction and skill files before working in their scope.${workspaceLifecycleInstruction}${artifactInstruction}${showChangesInstruction}${codexSessionInstruction}${zesContinuationInstruction}${zesResearchCycleInstruction}${executionScopeInstruction}${executionMailboxInstruction}${turnContinuityInstruction}${localAgentInstruction}`;
   }
 
   const inspection = config.toolMode !== "full"
@@ -518,7 +527,7 @@ function serverInstructions(config: ServerConfig): string {
 
   const agentsMd = `Follow instructions returned by ${toolNames.openWorkspace}. Before working under a path listed in availableAgentsFiles, use ${toolNames.read} to inspect that instruction file and follow it. `;
 
-  return `Use DevSpace for coding work. Call ${toolNames.openWorkspace} once for each project folder or isolated worktree, then keep using its workspaceId. During continued work in the same project or worktree, do not call ${toolNames.openWorkspace} again. Open another workspace only when changing projects, switching checkout/worktree mode, creating another isolated worktree, or when the current workspaceId is rejected. ${agentsMd}${skills}${inspection}Prefer ${toolNames.edit} for targeted modifications, ${toolNames.write} only for new files or complete rewrites, and ${toolNames.shell} for tests, builds, git inspection, package scripts, and commands that are better executed by the shell. Do not create or modify files with ${toolNames.shell}; avoid shell redirection, heredocs, tee, sed -i, perl -i, node/python/ruby scripts, or any command whose purpose is to write project files.${workspaceLifecycleInstruction}${artifactInstruction}${showChangesInstruction}${codexSessionInstruction}${zesContinuationInstruction}${executionScopeInstruction}${executionMailboxInstruction}${turnContinuityInstruction}${localAgentInstruction}`;
+  return `Use DevSpace for coding work. Call ${toolNames.openWorkspace} once for each project folder or isolated worktree, then keep using its workspaceId. During continued work in the same project or worktree, do not call ${toolNames.openWorkspace} again. Open another workspace only when changing projects, switching checkout/worktree mode, creating another isolated worktree, or when the current workspaceId is rejected. ${agentsMd}${skills}${inspection}Prefer ${toolNames.edit} for targeted modifications, ${toolNames.write} only for new files or complete rewrites, and ${toolNames.shell} for tests, builds, git inspection, package scripts, and commands that are better executed by the shell. Do not create or modify files with ${toolNames.shell}; avoid shell redirection, heredocs, tee, sed -i, perl -i, node/python/ruby scripts, or any command whose purpose is to write project files.${workspaceLifecycleInstruction}${artifactInstruction}${showChangesInstruction}${codexSessionInstruction}${zesContinuationInstruction}${zesResearchCycleInstruction}${executionScopeInstruction}${executionMailboxInstruction}${turnContinuityInstruction}${localAgentInstruction}`;
 }
 
 function formatVisibleAgent(agent: {
@@ -894,6 +903,56 @@ function processToolResponse(
       outputComplete: snapshot.outputComplete,
     },
   };
+}
+
+function researchWorkspace(
+  workspaces: WorkspaceRegistry,
+  workspaceId: string,
+): ResearchWorkspace {
+  const workspace = workspaces.getWorkspace(workspaceId);
+  return { workspaceId: workspace.id, root: workspace.root };
+}
+
+function researchGuardFailure(decision: ResearchGuardDecision) {
+  const data = {
+    status: "held",
+    code: "ZES_RESEARCH_CYCLE_GUARD_HELD",
+    classification: decision.classification,
+    reasons: decision.reasons,
+    cycleRef: decision.cycleRef,
+    phase: decision.phase,
+    policy: {
+      authority:
+        "executor_local_lifecycle_and_native_receipt_verification_only",
+      semanticJudgmentAuthority: false,
+      writerAuthority: false,
+      publicationAuthority: false,
+      runtimeOrEffectAuthority: false,
+      retryWithoutReconciliation: false,
+    },
+  };
+  return {
+    isError: true,
+    content: [textBlock(JSON.stringify(data, null, 2))],
+  };
+}
+
+async function researchObservationNotice(
+  config: ServerConfig,
+  operation: string,
+  observe: () => Promise<void>,
+): Promise<string | undefined> {
+  try {
+    await observe();
+    return undefined;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    logEvent(config.logging, "warn", "zes_research_cycle_observation_failed", {
+      operation,
+      error: message.slice(0, 500),
+    });
+    return `[zes-research-cycle] The ${operation} effect completed, but executor-local research-cycle observation failed: ${message.slice(0, 500)}. Do not replay the effect blindly; inspect the workspace and reconcile the cycle first.`;
+  }
 }
 
 function jsonToolResponse(data: unknown) {
@@ -1799,6 +1858,7 @@ function registerCodexProcessTools(
   workspaces: WorkspaceRegistry,
   processSessions: ProcessSessionManager,
   executionMailbox: ExecutionMailboxManager,
+  researchCycle: ZesResearchCycleManager,
 ): void {
   registerAppTool(
     server,
@@ -1847,6 +1907,12 @@ function registerCodexProcessTools(
     ) => {
       const startedAt = performance.now();
       const workspace = workspaces.getWorkspace(workspaceId);
+      const researchTarget = {
+        workspaceId: workspace.id,
+        root: workspace.root,
+      };
+      const guard = await researchCycle.guardCommand(researchTarget, cmd);
+      if (!guard.allowed) return researchGuardFailure(guard);
       const cwd = workspaces.resolveWorkingDirectory(workspace, workingDirectory);
       const snapshot = await processSessions.start({
         workspaceId,
@@ -1860,6 +1926,15 @@ function registerCodexProcessTools(
         yieldTimeMs,
         maxOutputTokens,
       });
+      const researchNotice = await researchObservationNotice(
+        config,
+        "exec_command",
+        () => researchCycle.observeCommandSnapshot(
+          researchTarget,
+          cmd,
+          snapshot,
+        ),
+      );
 
       logToolCall(config, {
         tool: "exec_command",
@@ -1871,13 +1946,17 @@ function registerCodexProcessTools(
         durationMs: Math.round(performance.now() - startedAt),
       });
 
-      return processToolResponse("exec_command", workspaceId, snapshot, {
-        command: cmd,
-        workingDirectory: workingDirectory ?? ".",
-        running: snapshot.running,
-        exitCode: snapshot.exitCode,
-        wallTimeMs: snapshot.wallTimeMs,
-      });
+      return appendToolNotice(
+        processToolResponse("exec_command", workspaceId, snapshot, {
+          command: cmd,
+          workingDirectory: workingDirectory ?? ".",
+          running: snapshot.running,
+          exitCode: snapshot.exitCode,
+          wallTimeMs: snapshot.wallTimeMs,
+        }),
+        researchNotice,
+        "zesResearchCycleNotice",
+      );
     },
   );
 
@@ -1920,7 +1999,14 @@ function registerCodexProcessTools(
       { _meta },
     ) => {
       const startedAt = performance.now();
-      workspaces.getWorkspace(workspaceId);
+      const researchTarget = researchWorkspace(workspaces, workspaceId);
+      if (chars && chars !== "\u0003") {
+        const guard = await researchCycle.guardProcessInput(
+          researchTarget,
+          sessionId,
+        );
+        if (!guard.allowed) return researchGuardFailure(guard);
+      }
       const identity = executionScopeIdentity(_meta);
       const purePoll = (chars ?? "") === ""
         && columns === undefined
@@ -1944,6 +2030,15 @@ function registerCodexProcessTools(
       } finally {
         waiter?.cancel();
       }
+      const researchNotice = await researchObservationNotice(
+        config,
+        "write_stdin",
+        () => researchCycle.observeProcessSnapshot(
+          researchTarget,
+          sessionId,
+          snapshot,
+        ),
+      );
 
       logToolCall(config, {
         tool: "write_stdin",
@@ -1952,14 +2047,18 @@ function registerCodexProcessTools(
         durationMs: Math.round(performance.now() - startedAt),
       });
 
-      return processToolResponse("write_stdin", workspaceId, snapshot, {
-        sessionId,
-        charactersWritten: chars?.length ?? 0,
-        running: snapshot.running,
-        exitCode: snapshot.exitCode,
-        wakeReason: snapshot.wakeReason,
-        wallTimeMs: snapshot.wallTimeMs,
-      });
+      return appendToolNotice(
+        processToolResponse("write_stdin", workspaceId, snapshot, {
+          sessionId,
+          charactersWritten: chars?.length ?? 0,
+          running: snapshot.running,
+          exitCode: snapshot.exitCode,
+          wakeReason: snapshot.wakeReason,
+          wallTimeMs: snapshot.wallTimeMs,
+        }),
+        researchNotice,
+        "zesResearchCycleNotice",
+      );
     },
   );
 }
@@ -1976,6 +2075,7 @@ export function createMcpServer(
   localAgentCoordinator?: LocalAgentCoordinator,
   turnContinuity?: TurnContinuityManager,
   runtimeCapabilities?: RuntimeCapabilityRegistry,
+  researchCycle?: ZesResearchCycleManager,
 ): McpServer {
   const ownsExecutionScopes = executionScopes === undefined;
   const ownsExecutionMailbox = executionMailbox === undefined;
@@ -1996,6 +2096,8 @@ export function createMcpServer(
   );
   const activeRuntimeCapabilities = runtimeCapabilities
     ?? new RuntimeCapabilityRegistry(config);
+  const activeResearchCycle = researchCycle
+    ?? new ZesResearchCycleManager(config.zesResearchCycle);
   const lifecycleStore = workspaces.lifecycleStore();
   const activeWorkspaceLifecycle = lifecycleStore
     ? new WorkspaceLifecycleManager(
@@ -2085,6 +2187,13 @@ export function createMcpServer(
   }
   registerZesCodexInspectionTools(server, config, registerAppTool);
   registerZesContinuationPreflightTool(server, config, registerAppTool);
+  registerZesResearchCycleTools(
+    server,
+    config,
+    activeResearchCycle,
+    (workspaceId) => researchWorkspace(workspaces, workspaceId),
+    registerAppTool,
+  );
 
   registerAppTool(
     server,
@@ -2704,6 +2813,15 @@ export function createMcpServer(
     async ({ workspaceId, ...input }) => {
       const startedAt = performance.now();
       const workspace = workspaces.getWorkspace(workspaceId);
+      const researchTarget = {
+        workspaceId: workspace.id,
+        root: workspace.root,
+      };
+      const guard = await activeResearchCycle.guardPaths(
+        researchTarget,
+        [input.path],
+      );
+      if (!guard.allowed) return researchGuardFailure(guard);
       workspaces.resolvePath(workspace, input.path);
       const response = await writeFileTool(input, {
         cwd: workspace.root,
@@ -2720,6 +2838,11 @@ export function createMcpServer(
       }
 
       const patch = newFilePatch(input.path, input.content);
+      const researchNotice = await researchObservationNotice(
+        config,
+        toolNames.write,
+        () => activeResearchCycle.observePaths(researchTarget, [input.path]),
+      );
       const stats = countDiffStats(patch);
       const summary = {
         ...stats,
@@ -2734,7 +2857,7 @@ export function createMcpServer(
         durationMs: Math.round(performance.now() - startedAt),
       });
 
-      return {
+      return appendToolNotice({
         ...response,
         _meta: {
           tool: toolNames.write,
@@ -2751,7 +2874,7 @@ export function createMcpServer(
         structuredContent: {
           result: contentText(response.content),
         },
-      };
+      }, researchNotice, "zesResearchCycleNotice");
     },
   );
 
@@ -2791,6 +2914,15 @@ export function createMcpServer(
     async ({ workspaceId, ...input }) => {
       const startedAt = performance.now();
       const workspace = workspaces.getWorkspace(workspaceId);
+      const researchTarget = {
+        workspaceId: workspace.id,
+        root: workspace.root,
+      };
+      const guard = await activeResearchCycle.guardPaths(
+        researchTarget,
+        [input.path],
+      );
+      if (!guard.allowed) return researchGuardFailure(guard);
       workspaces.resolvePath(workspace, input.path);
       const response = await editFileTool(input, {
         cwd: workspace.root,
@@ -2815,6 +2947,11 @@ export function createMcpServer(
       };
       const editResultText = `Edited ${input.path} (+${stats.additions} -${stats.removals}).`;
       const editContent = [textBlock(editResultText)];
+      const researchNotice = await researchObservationNotice(
+        config,
+        toolNames.edit,
+        () => activeResearchCycle.observePaths(researchTarget, [input.path]),
+      );
       logToolCall(config, {
         tool: toolNames.edit,
         workspaceId,
@@ -2823,7 +2960,7 @@ export function createMcpServer(
         durationMs: Math.round(performance.now() - startedAt),
       });
 
-      return {
+      return appendToolNotice({
         content: editContent,
         _meta: {
           tool: toolNames.edit,
@@ -2841,7 +2978,7 @@ export function createMcpServer(
           status: "applied",
           result: contentText(editContent),
         },
-      };
+      }, researchNotice, "zesResearchCycleNotice");
     },
   );
   }
@@ -2879,7 +3016,27 @@ export function createMcpServer(
       async ({ workspaceId, patch }) => {
         const startedAt = performance.now();
         const workspace = workspaces.getWorkspace(workspaceId);
+        const researchTarget = {
+          workspaceId: workspace.id,
+          root: workspace.root,
+        };
+        const guard = await activeResearchCycle.guardPatch(
+          researchTarget,
+          patch,
+        );
+        if (!guard.allowed) return researchGuardFailure(guard);
         const applied = await applyPatch(workspace.root, patch);
+        const researchNotice = await researchObservationNotice(
+          config,
+          "apply_patch",
+          () => activeResearchCycle.observePaths(
+            researchTarget,
+            applied.files.flatMap((file) => [
+              ...(file.previousPath ? [file.previousPath] : []),
+              file.path,
+            ]),
+          ),
+        );
         const paths = applied.files.map((file) => file.path).join(", ");
         const result = `Applied patch to ${applied.files.length} file(s): ${paths}`;
         const content = [textBlock(result)];
@@ -2894,7 +3051,7 @@ export function createMcpServer(
           durationMs: Math.round(performance.now() - startedAt),
         });
 
-        return {
+        return appendToolNotice({
           content,
           _meta: {
             tool: "apply_patch",
@@ -2916,7 +3073,7 @@ export function createMcpServer(
             removals: applied.removals,
             files: applied.files,
           },
-        };
+        }, researchNotice, "zesResearchCycleNotice");
       },
     );
   }
@@ -3228,6 +3385,15 @@ export function createMcpServer(
     async ({ workspaceId, workingDirectory, ...input }) => {
       const startedAt = performance.now();
       const workspace = workspaces.getWorkspace(workspaceId);
+      const researchTarget = {
+        workspaceId: workspace.id,
+        root: workspace.root,
+      };
+      const guard = await activeResearchCycle.guardCommand(
+        researchTarget,
+        input.command,
+      );
+      if (!guard.allowed) return researchGuardFailure(guard);
       const cwd = workspaces.resolveWorkingDirectory(
         workspace,
         workingDirectory,
@@ -3236,6 +3402,18 @@ export function createMcpServer(
         cwd,
         root: workspace.root,
       });
+      const researchNotice = await researchObservationNotice(
+        config,
+        toolNames.shell,
+        () => activeResearchCycle.observeCommandSnapshot(
+          researchTarget,
+          input.command,
+          {
+            running: false,
+            exitCode: response.isError ? 1 : 0,
+          },
+        ),
+      );
 
       if (response.isError) {
         logFailedToolResponse(config, {
@@ -3245,7 +3423,11 @@ export function createMcpServer(
           command: input.command,
           commandLength: input.command.length,
         }, response.content, startedAt);
-        return response;
+        return appendToolNotice(
+          response,
+          researchNotice,
+          "zesResearchCycleNotice",
+        );
       }
 
       const summary = {
@@ -3263,7 +3445,7 @@ export function createMcpServer(
         durationMs: Math.round(performance.now() - startedAt),
       });
 
-      return {
+      return appendToolNotice({
         ...response,
         _meta: {
           tool: toolNames.shell,
@@ -3277,7 +3459,7 @@ export function createMcpServer(
         structuredContent: {
           result: contentText(response.content),
         },
-      };
+      }, researchNotice, "zesResearchCycleNotice");
     },
   );
   }
@@ -3289,6 +3471,7 @@ export function createMcpServer(
       workspaces,
       processSessions,
       activeExecutionMailbox,
+      activeResearchCycle,
     );
   }
 
@@ -3358,6 +3541,7 @@ export function createServer(
   const reviewCheckpoints = createReviewCheckpointManager();
   const processSessions = new ProcessSessionManager();
   const runtimeCapabilities = new RuntimeCapabilityRegistry(config);
+  const researchCycle = new ZesResearchCycleManager(config.zesResearchCycle);
   const executionScopes = new ExecutionScopeManager(
     config.executionObservability,
     config.stateDir,
@@ -3402,6 +3586,7 @@ export function createServer(
     localAgentCoordinator,
     turnContinuity,
     runtimeCapabilities,
+    researchCycle,
   );
 
   const logSessionCloseResults = (
@@ -3577,6 +3762,7 @@ export function createServer(
           localAgentCoordinator,
           turnContinuity,
           runtimeCapabilities,
+          researchCycle,
         );
         await server.connect(transport);
         res.on("close", () => {
@@ -3624,6 +3810,7 @@ export function createServer(
           localAgentCoordinator,
           turnContinuity,
           runtimeCapabilities,
+          researchCycle,
         );
         await server.connect(transport);
       } else if (req.method === "POST") {
@@ -3645,6 +3832,7 @@ export function createServer(
           localAgentCoordinator,
           turnContinuity,
           runtimeCapabilities,
+          researchCycle,
         );
         await server.connect(transport);
         res.on("close", () => {

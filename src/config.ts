@@ -16,6 +16,16 @@ import { DEFAULT_DEVSPACE_MCP_SERVER_VERSION } from "./version.js";
 
 export type ToolMode = "minimal" | "full" | "codex";
 export type WidgetMode = "off" | "changes" | "full";
+export type ZesResearchCycleMode = "off" | "observe" | "enforce";
+
+export interface ZesResearchCycleConfig {
+  mode: ZesResearchCycleMode;
+  repositoryRoot: string;
+  stateRoot: string;
+  timeoutMs: number;
+  trustedTraceRoots: string[];
+}
+
 export interface ToolSurfaceFreshnessConfig {
   deploymentManifestPath?: string;
   deploymentManifestDigestSha256?: string;
@@ -77,6 +87,7 @@ export interface ServerConfig {
   turnContinuity: TurnContinuityConfig;
   localAgentBilling: LocalAgentBillingConfig;
   localAgentQueue: LocalAgentQueueConfig;
+  zesResearchCycle: ZesResearchCycleConfig;
   toolSurfaceFreshness: ToolSurfaceFreshnessConfig;
   logging: LoggingConfig;
 }
@@ -471,6 +482,16 @@ function parseWidgetMode(value: string | undefined): WidgetMode {
   throw new Error(`Invalid DEVSPACE_WIDGETS: ${value}`);
 }
 
+function parseZesResearchCycleMode(
+  value: string | undefined,
+): ZesResearchCycleMode {
+  if (value === undefined || value.trim() === "" || value === "off") {
+    return "off";
+  }
+  if (value === "observe" || value === "enforce") return value;
+  throw new Error(`Invalid DEVSPACE_ZES_RESEARCH_CYCLE_MODE: ${value}`);
+}
+
 function parseRequiredSecret(value: string | undefined, name: string): string {
   const secret = value?.trim();
   if (!secret) {
@@ -531,6 +552,18 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     new URL(publicBaseUrl).hostname,
     ...(files.config.allowedHosts ?? []),
   ];
+  const stateDir = resolve(
+    expandHomePath(
+      env.DEVSPACE_STATE_DIR ?? files.config.stateDir ?? defaultStateDir(),
+    ),
+  );
+  const zesRepositoryRoot = resolve(
+    expandHomePath(
+      env.DEVSPACE_ZES_RESEARCH_REPOSITORY_ROOT
+        ?? env.DEVSPACE_ZES_REPOSITORY_ROOT
+        ?? "/srv/zes-codex/ZES-SYSTEM-BLUEPRINT",
+    ),
+  );
 
   return {
     host,
@@ -551,7 +584,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
         ? files.config.codexNavigationTools === true
         : parseBoolean(env.DEVSPACE_CODEX_NAVIGATION_TOOLS),
     widgets: parseWidgetMode(env.DEVSPACE_WIDGETS),
-    stateDir: resolve(expandHomePath(env.DEVSPACE_STATE_DIR ?? files.config.stateDir ?? defaultStateDir())),
+    stateDir,
     worktreeRoot: resolve(expandHomePath(env.DEVSPACE_WORKTREE_ROOT ?? files.config.worktreeRoot ?? defaultWorktreeRoot())),
     artifactsEnabled:
       env.DEVSPACE_ARTIFACTS === undefined
@@ -578,6 +611,27 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
       mode: parseLocalAgentBillingMode(env.DEVSPACE_LOCAL_AGENT_BILLING_MODE),
     },
     localAgentQueue: parseLocalAgentQueueConfig(env),
+    zesResearchCycle: {
+      mode: parseZesResearchCycleMode(
+        env.DEVSPACE_ZES_RESEARCH_CYCLE_MODE,
+      ),
+      repositoryRoot: zesRepositoryRoot,
+      stateRoot: resolve(
+        expandHomePath(
+          env.DEVSPACE_ZES_RESEARCH_STATE_ROOT
+            ?? join(stateDir, "zes-research-cycles"),
+        ),
+      ),
+      timeoutMs: parsePositiveInteger(
+        env.DEVSPACE_ZES_RESEARCH_TIMEOUT_SECONDS,
+        60,
+        "DEVSPACE_ZES_RESEARCH_TIMEOUT_SECONDS",
+        300,
+      ) * 1_000,
+      trustedTraceRoots: parsePathList(
+        env.DEVSPACE_ZES_RESEARCH_TRUSTED_TRACE_ROOTS,
+      ),
+    },
     toolSurfaceFreshness: parseToolSurfaceFreshnessConfig(env),
     logging: parseLoggingConfig(env),
   };

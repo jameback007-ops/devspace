@@ -62,6 +62,35 @@ DEVSPACE_COMMAND_ENV_PASSTHROUGH="UV_CACHE_DIR PANTS_LOCAL_STORE_DIR PANTS_NAMED
 This boundary reduces accidental credential propagation. It is not a shell
 sandbox: commands still run with the configured operating-system identity.
 
+## Optional ZES Research Reflex Lifecycle
+
+DevSpace can bind material work in a ZES checkout to the native ZES Research
+Reflex v2 admission and episode contracts. The feature is disabled by default
+and activates only for opened workspaces containing
+`packages/zes-control-kernel/pyproject.toml`.
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `DEVSPACE_ZES_RESEARCH_CYCLE_MODE` | `off` | `off`, advisory `observe`, or fail-closed `enforce`. |
+| `DEVSPACE_ZES_RESEARCH_REPOSITORY_ROOT` | `/srv/zes-codex/ZES-SYSTEM-BLUEPRINT` | Fixed repository providing the native `zes-research-reflex` application port. `DEVSPACE_ZES_REPOSITORY_ROOT` is accepted as a compatibility fallback. |
+| `DEVSPACE_ZES_RESEARCH_STATE_ROOT` | `<DEVSPACE_STATE_DIR>/zes-research-cycles` | Owner-local lifecycle, receipt, and evidence state. |
+| `DEVSPACE_ZES_RESEARCH_TIMEOUT_SECONDS` | `60` | Native Research Reflex command timeout; maximum 300 seconds. |
+| `DEVSPACE_ZES_RESEARCH_TRUSTED_TRACE_ROOTS` | empty | Comma-separated additional roots for exact provider trace receipts. |
+
+`observe` reports guard findings but allows the operation, while recording
+scope, dependency, failure, and lifecycle drift for reassessment. `enforce`
+holds ZES source mutation, commit preparation, commit, and publication unless
+the exact current native receipt, action scope, lease, pre-commit checkpoint,
+commit, and closure state permit the requested operation. Runtime effects are
+never authorized by research admission. Shell source/dependency mutation must
+also match an exact command supplied during `zes_research_cycle_prepare`; raw
+commands are not persisted, only their SHA-256 digests.
+
+The adapter is executor-local and does not grant task, semantic, writer,
+publication, release, activation, runtime, or effect authority. See
+[ZES Research Reflex Execution Cycle](research-execution-cycle.md) for the tool
+flow, native bindings, and failure semantics.
+
 ## Workspace Lifecycle and Worktree Garbage Collection
 
 DevSpace persists checkout and managed-worktree sessions. Use

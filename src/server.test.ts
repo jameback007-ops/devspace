@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
@@ -187,6 +187,71 @@ test("codex mode can opt into the upstream native navigation tools", async (t) =
     arguments: { workspaceId, path: "." },
   });
   assert.match(responseText(ls), /README\.md/);
+});
+
+test("enforced ZES research cycle is registered and holds mutation before admission", async (t) => {
+  const context = await fixture(t, {
+    toolMode: "codex",
+    git: true,
+    zesResearchCycleMode: "enforce",
+    runtimeCapabilities: true,
+  });
+  const tools = await context.client.listTools();
+  const researchTools = tools.tools
+    .map((tool) => tool.name)
+    .filter((name) => name.startsWith("zes_research_cycle_"))
+    .sort();
+  assert.deepEqual(researchTools, [
+    "zes_research_cycle_assess",
+    "zes_research_cycle_close",
+    "zes_research_cycle_invalidate",
+    "zes_research_cycle_open",
+    "zes_research_cycle_prepare",
+    "zes_research_cycle_status",
+    "zes_research_cycle_verify_pre_commit",
+  ]);
+
+  const runtime = context.runtimeCapabilities!.snapshot();
+  const surface = runtime.toolSurface as Record<string, unknown>;
+  const groups = surface.criticalToolGroups as Record<
+    string,
+    Record<string, unknown>
+  >;
+  assert.equal(groups.zesResearchCycle?.configured, true);
+  assert.equal(groups.zesResearchCycle?.registeredComplete, true);
+  assert.equal(groups.zesResearchCycle?.available, true);
+
+  const opened = await callOpen(
+    context.client,
+    context.project,
+    "research-cycle-enforce",
+  );
+  const workspaceId = String(structuredContent(opened).workspaceId);
+  const blocked = await context.client.callTool({
+    name: "apply_patch",
+    arguments: {
+      workspaceId,
+      patch: [
+        "*** Begin Patch",
+        "*** Update File: README.md",
+        "@@",
+        "-hello",
+        "+mutated",
+        "*** End Patch",
+      ].join("\n"),
+    },
+  });
+  assert.equal(blocked.isError, true);
+  assert.match(responseText(blocked), /ZES_RESEARCH_CYCLE_GUARD_HELD/);
+  assert.match(responseText(blocked), /research_cycle_not_opened/);
+  assert.equal(await readFile(join(context.project, "README.md"), "utf8"), "hello\n");
+
+  const status = await context.client.callTool({
+    name: "zes_research_cycle_status",
+    arguments: { workspaceId },
+  });
+  assert.equal(structuredData(status).managed, true);
+  assert.equal(structuredData(status).stateExists, false);
 });
 
 test("turn continuity is advisory-only and recovery capsules detect later workspace changes", async (t) => {
@@ -1403,6 +1468,7 @@ async function fixture(
     codexNavigationTools?: boolean;
     localAgentCoordinatorOptions?: LocalAgentCoordinatorOptions;
     runtimeCapabilities?: boolean;
+    zesResearchCycleMode?: ServerConfig["zesResearchCycle"]["mode"];
   } = {},
 ): Promise<ServerFixture> {
   const root = await mkdtemp(join(tmpdir(), "devspace-server-test-"));
@@ -1422,6 +1488,14 @@ async function fixture(
     "---",
     "Review changes.",
   ].join("\n"));
+  if (options.zesResearchCycleMode && options.zesResearchCycleMode !== "off") {
+    const controlKernel = join(project, "packages", "zes-control-kernel");
+    await mkdir(controlKernel, { recursive: true });
+    await writeFile(
+      join(controlKernel, "pyproject.toml"),
+      "[project]\nname = \"zes-control-kernel\"\nversion = \"0.0.0\"\n",
+    );
+  }
   let hostSkillPath: string | undefined;
   if (options.skillFixtures) {
     const projectSkillDir = join(project, ".agents", "skills", "project-helper");
@@ -1473,6 +1547,16 @@ async function fixture(
     DEVSPACE_CODEX_NAVIGATION_TOOLS: options.codexNavigationTools ? "1" : "0",
     DEVSPACE_SKILLS: options.skillsEnabled === false ? "0" : "1",
     DEVSPACE_SUBAGENTS: options.subagents ? "1" : "0",
+    ...(options.zesResearchCycleMode
+      ? {
+          DEVSPACE_ZES_RESEARCH_CYCLE_MODE: options.zesResearchCycleMode,
+          DEVSPACE_ZES_RESEARCH_REPOSITORY_ROOT: project,
+          DEVSPACE_ZES_RESEARCH_STATE_ROOT: join(
+            stateDir,
+            "zes-research-cycles",
+          ),
+        }
+      : {}),
     DEVSPACE_OAUTH_OWNER_TOKEN: "test-owner-token-that-is-long-enough",
     PORT: "1",
   });

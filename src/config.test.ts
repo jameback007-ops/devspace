@@ -105,6 +105,46 @@ assert.deepEqual(loadConfig(baseEnv).turnContinuity, {
 assert.deepEqual(loadConfig(baseEnv).localAgentBilling, {
   mode: "subscription_only",
 });
+assert.deepEqual(loadConfig(baseEnv).zesResearchCycle, {
+  mode: "off",
+  repositoryRoot: "/srv/zes-codex/ZES-SYSTEM-BLUEPRINT",
+  stateRoot: join(
+    loadConfig(baseEnv).stateDir,
+    "zes-research-cycles",
+  ),
+  timeoutMs: 60_000,
+  trustedTraceRoots: [],
+});
+assert.deepEqual(
+  loadConfig({
+    ...baseEnv,
+    DEVSPACE_ZES_RESEARCH_CYCLE_MODE: "enforce",
+    DEVSPACE_ZES_RESEARCH_REPOSITORY_ROOT: join(emptyConfigDir, "zes"),
+    DEVSPACE_ZES_RESEARCH_STATE_ROOT: join(emptyConfigDir, "research-state"),
+    DEVSPACE_ZES_RESEARCH_TIMEOUT_SECONDS: "90",
+    DEVSPACE_ZES_RESEARCH_TRUSTED_TRACE_ROOTS: [
+      join(emptyConfigDir, "traces-a"),
+      join(emptyConfigDir, "traces-b"),
+    ].join(","),
+  }).zesResearchCycle,
+  {
+    mode: "enforce",
+    repositoryRoot: join(emptyConfigDir, "zes"),
+    stateRoot: join(emptyConfigDir, "research-state"),
+    timeoutMs: 90_000,
+    trustedTraceRoots: [
+      join(emptyConfigDir, "traces-a"),
+      join(emptyConfigDir, "traces-b"),
+    ],
+  },
+);
+assert.throws(
+  () => loadConfig({
+    ...baseEnv,
+    DEVSPACE_ZES_RESEARCH_CYCLE_MODE: "mandatory",
+  }),
+  /Invalid DEVSPACE_ZES_RESEARCH_CYCLE_MODE/,
+);
 assert.deepEqual(
   loadConfig({
     ...baseEnv,

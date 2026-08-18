@@ -140,6 +140,8 @@ DevSpace gives ChatGPT tools to:
 - receive advisory long-turn notices and persist Git-bound recovery capsules without blocking tools or forcing task completion
 - inspect independent host execution scopes without merging their conversations
 - send durable target-bound messages between execution scopes with receipts
+- optionally bind material ZES mutations to native Research Reflex v2
+  admission, reassessment, pre-commit, and episode-closure receipts
 - keep local subagents on fail-closed subscription auth unless PAYG is explicitly enabled
 - enqueue serialized follow-up turns into DevSpace-managed Codex, Claude, OpenCode, and Pi sessions
 - follow project instructions from `AGENTS.md` and `CLAUDE.md`
@@ -188,6 +190,7 @@ devspace doctor
 - [Execution-Scope Observability](https://github.com/Waishnav/devspace/blob/main/docs/execution-scope-observability.md)
 - [Execution-Scope Messaging](https://github.com/Waishnav/devspace/blob/main/docs/execution-scope-messaging.md)
 - [Local-Agent Session Continuation](https://github.com/Waishnav/devspace/blob/main/docs/local-agent-continuation.md)
+- [ZES Research Reflex Execution Cycle](docs/research-execution-cycle.md)
 - [Native File Download](https://github.com/Waishnav/devspace/blob/main/docs/artifact-exchange.md)
 - [Security Model](https://github.com/Waishnav/devspace/blob/main/docs/security.md)
 - [Troubleshooting Gotchas](https://github.com/Waishnav/devspace/blob/main/docs/gotchas.md)

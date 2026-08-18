@@ -78,6 +78,15 @@ const CRITICAL_TOOL_GROUPS = {
     "local_agent_turn_cancel",
     "local_agent_turn_resolve",
   ],
+  zesResearchCycle: [
+    "zes_research_cycle_open",
+    "zes_research_cycle_prepare",
+    "zes_research_cycle_assess",
+    "zes_research_cycle_invalidate",
+    "zes_research_cycle_verify_pre_commit",
+    "zes_research_cycle_status",
+    "zes_research_cycle_close",
+  ],
   nativeNavigation: ["grep", "glob", "ls"],
   artifactDownload: ["download_artifact"],
 } as const;
@@ -260,6 +269,7 @@ export class RuntimeCapabilityRegistry {
       executionMailboxEnabled: this.config.executionMailbox.enabled,
       turnContinuityEnabled: this.config.turnContinuity.enabled,
       localAgentContinuationEnabled: this.config.subagents,
+      zesResearchCycleMode: this.config.zesResearchCycle.mode,
       artifactDownloadConfigured: this.config.artifactsEnabled,
     };
   }
@@ -287,6 +297,10 @@ export class RuntimeCapabilityRegistry {
       localAgentContinuation: {
         configured: this.config.subagents,
         expectedTools: CRITICAL_TOOL_GROUPS.localAgentContinuation,
+      },
+      zesResearchCycle: {
+        configured: this.config.zesResearchCycle.mode !== "off",
+        expectedTools: CRITICAL_TOOL_GROUPS.zesResearchCycle,
       },
       nativeNavigation: {
         configured:
