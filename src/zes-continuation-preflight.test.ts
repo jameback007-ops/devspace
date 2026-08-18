@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import {
   continuationIntentDecision,
   isVerifiedDeepSubset,
+  ZesContinuationPreflightProjector,
+  type ZesContinuationSnapshotReadback,
 } from "./zes-continuation-preflight.js";
 
 const basePreflight = {
@@ -176,5 +178,102 @@ assert.throws(
   }),
   /Unsupported ZES continuation preflight contract/,
 );
+
+function snapshot(observedAt: string): ZesContinuationSnapshotReadback {
+  return {
+    schemaVersion: 1,
+    observedAt,
+    sourceExpiresAt: new Date(Date.parse(observedAt) + 60_000).toISOString(),
+    preflight: structuredClone(basePreflight),
+    route: {
+      route_ref: "zes-continuation-control:v2:test",
+    },
+    refresh: {
+      status: "refreshed",
+      receiptDigestSha256: "a".repeat(64),
+      snapshotSha256: "b".repeat(64),
+      sourceControlPreflight: {
+        publication_disposition: "eligible",
+      },
+    },
+  };
+}
+
+let nowMs = Date.parse("2026-08-18T07:00:00.000Z");
+let refreshCalls = 0;
+const projector = new ZesContinuationPreflightProjector({
+  now: () => nowMs,
+  cacheTtlMs: 5_000,
+  failureCacheTtlMs: 2_000,
+  refresh: async () => {
+    refreshCalls += 1;
+    await Promise.resolve();
+    return snapshot(new Date(nowMs).toISOString());
+  },
+});
+
+const concurrent = await Promise.all([
+  projector.project(),
+  projector.project(),
+  projector.project(),
+]);
+assert.equal(refreshCalls, 1, "concurrent projections must share one fixed refresh");
+assert.deepEqual(concurrent[0], concurrent[1]);
+assert.deepEqual(concurrent[1], concurrent[2]);
+assert.equal(concurrent[0].status, "refreshing");
+await projector.warm();
+const available = await projector.project();
+assert.equal(available.status, "available");
+if (available.status === "available") {
+  assert.equal(available.route, "execution_scope_status_embedded_control_plane");
+  assert.equal(available.directToolName, "zes_continuation_preflight");
+  assert.equal(available.policy.directToolDiscoveryRequired, false);
+  assert.equal(available.policy.clientCatalogFreshnessRequiredForReadback, false);
+  assert.equal(available.policy.catalogStalenessDoesNotEstablishWriterUncertainty, true);
+  assert.equal(available.decisions.publish_repository.disposition, "allowed");
+  assert.equal(available.decisions.publish_repository.actionAllowed, true);
+  assert.deepEqual(
+    Object.keys(available.decisions).sort(),
+    [
+      "inspect",
+      "mutate_governed_checkout",
+      "prepare_isolated_candidate",
+      "publish_repository",
+      "runtime_takeover_or_effect_retry",
+    ],
+  );
+}
+
+await projector.project();
+assert.equal(refreshCalls, 1, "projection must reuse the bounded success cache");
+nowMs += 5_000;
+await projector.project();
+assert.equal(refreshCalls, 2, "projection must refresh at the cache boundary");
+
+let failureCalls = 0;
+const failingProjector = new ZesContinuationPreflightProjector({
+  now: () => nowMs,
+  failureCacheTtlMs: 2_000,
+  refresh: async () => {
+    failureCalls += 1;
+    throw new Error("PRIVATE-RUNTIME-DETAIL-MUST-NOT-LEAK");
+  },
+});
+const refreshingFailure = await failingProjector.project();
+assert.equal(refreshingFailure.status, "refreshing");
+await failingProjector.warm();
+const unavailable = await failingProjector.project();
+assert.equal(unavailable.status, "unavailable");
+assert.equal(
+  JSON.stringify(unavailable).includes("PRIVATE-RUNTIME-DETAIL-MUST-NOT-LEAK"),
+  false,
+);
+assert.match(unavailable.error.diagnosticDigestSha256, /^[a-f0-9]{64}$/);
+await failingProjector.project();
+assert.equal(failureCalls, 1, "projection must damp repeated failed refreshes");
+nowMs += 2_000;
+assert.equal((await failingProjector.project()).status, "refreshing");
+await failingProjector.warm();
+assert.equal(failureCalls, 2, "failed refresh must become retryable after its hold");
 
 console.log("zes continuation preflight tests passed");

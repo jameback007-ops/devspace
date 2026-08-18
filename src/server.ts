@@ -84,8 +84,18 @@ import {
   clientAttestationFromHeaders,
   type ClientCatalogAttestation,
 } from "./tool-surface-freshness.js";
+import {
+  ZesScopePublicationPreflightAssessor,
+  type ScopePublicationPreflight,
+  type ScopePublicationPreflightSource,
+} from "./scope-publication-preflight.js";
 import { registerZesCodexInspectionTools } from "./zes-codex-inspection.js";
-import { registerZesContinuationPreflightTool } from "./zes-continuation-preflight.js";
+import {
+  registerZesContinuationPreflightTool,
+  ZesContinuationPreflightProjector,
+  type ZesContinuationPreflightProjection,
+  type ZesContinuationPreflightProjectionSource,
+} from "./zes-continuation-preflight.js";
 import { createWorkspaceStore } from "./workspace-store.js";
 import { WorkspaceLifecycleManager } from "./workspace-lifecycle.js";
 import {
@@ -484,12 +494,12 @@ function serverInstructions(config: ServerConfig): string {
   const codexSessionInstruction =
     " To inspect the allowlisted AOQ Codex executor adapter, use codex_session_status, codex_session_tail, or codex_session_audit. These tools report adapter transport health separately from the Codex thread lifecycle and never represent DevSpace, VPS, workspace, or ZES product health. To inspect the exact live AOQ worktree, use codex_workspace_git_status, codex_workspace_tree, codex_workspace_read, codex_workspace_search, or codex_workspace_diff. These brokered commands are read-only and independent from the Codex thread lifecycle.";
   const zesContinuationInstruction =
-    " Before governed-main integration or repository publication, use zes_continuation_preflight with the matching intent instead of passing DSN, credential, thread, repository, or filesystem paths through exec_command. The tool invokes the fixed host-owned ZES product route and returns its action disposition. publication_disposition=not_required means there is no unpublished commit, not that publication is blocked. Runtime reconciliation findings apply to runtime takeover, effect retry, or reliance on runtime state and do not by themselves block unrelated repository source actions. The result never creates writer, publication, takeover, or effect authority.";
+    " Before governed-main integration or repository publication, use zes_continuation_preflight with the matching intent when that direct tool is present. If a frozen host catalog does not expose it, call the already-known execution_scope_status tool and read stableControlPlane.capabilities.continuationPreflight plus stableControlPlane.capabilities.scopePublicationPreflight instead of passing DSN, credential, thread, repository, or filesystem paths through exec_command. The fixed product preflight reports global rightful-owner state; the scope-publication projection joins it with the exact linked candidate worktree and its fresh HEAD-bound validation capsule. publication_disposition=not_required on the governed checkout means that checkout has no unpublished commit and is not a denial of a separately assessed candidate. Runtime reconciliation findings apply to runtime takeover, effect retry, or reliance on runtime state and do not by themselves block unrelated repository source actions. Catalog staleness is a discovery condition and must not be translated into writer uncertainty or missing publication controls. Neither route creates writer, publication, takeover, or effect authority; any publication still requires the exact compare-and-swap binding and remote readback returned by the candidate assessment.";
   const zesResearchCycleInstruction = config.zesResearchCycle.mode === "off"
     ? ""
     : " For a workspace containing the ZES control-kernel marker, use zes_research_cycle_open before material design or mutation, then prepare exact action bindings and obtain a native ZES Research Reflex v2 admission with zes_research_cycle_assess. Reopen judgment with zes_research_cycle_invalidate when evidence, scope, architecture, dependencies, currentness, owner direction, or failure causality changes. Before commit, use zes_research_cycle_verify_pre_commit; close the episode after the exact commit or terminal no-change/deferred/abandoned outcome. observe mode reports lifecycle drift without blocking; enforce mode holds source mutation, commit preparation, commit, and publication when the exact current lifecycle is absent or stale. These executor-local tools verify native receipts but never create semantic, writer, publication, release, activation, runtime, or effect authority.";
   const executionScopeInstruction = config.executionObservability.enabled
-    ? " Use execution_scope_list to discover recent DevSpace execution scopes. When a target explicitly recorded a recovery capsule, the list includes a compact capsule-derived semantic label/frontier hint; it is not a host chat title and absent capsule means unknown mission. Use execution_scope_status for linked workspaces, live processes, explicit semantic recovery state, and the observation gap since the last MCP/tool event. Scope inspection also returns the current backend runtime instance and an exact fingerprint of the registered model-facing tool surface. The server cannot see the host's cached tools/list result; when a tool is registered by the backend but absent from the host catalog, refresh or reconnect the MCP connector rather than rebuilding that capability. A no-tool interval does not reveal whether the model is reasoning, queued, generating, or hung; model progress and provider generation remain unobservable between MCP calls. Use execution_scope_audit for bounded metadata-only tool lifecycle. Semantic state is never inferred from filenames or tool events, cross-scope authority freshness remains unverified, and the recorded exact action is historical until current canonical/runtime/writer/effect owners are rehydrated. These views never replace Git, canonical product state, runtime/effect readback, or writer/lease reconciliation, and they do not contain transcripts, prompts, private reasoning, tool outputs, patches, credentials, or raw commands."
+    ? " Use execution_scope_list to discover recent DevSpace execution scopes. When a target explicitly recorded a recovery capsule, the list includes a compact capsule-derived semantic label/frontier hint; it is not a host chat title and absent capsule means unknown mission. Use execution_scope_status for linked workspaces, live processes, explicit semantic recovery state, the observation gap since the last MCP/tool event, and additive read-only stable control-plane projections. Scope inspection also returns the current backend runtime instance and an exact fingerprint of the registered model-facing tool surface. The server cannot see the host's cached tools/list result. A frozen catalog may still consume compatible additive control state through execution_scope_status; refresh or reconnect is needed only when the task genuinely requires a newer top-level tool or changed input schema rather than a compatible stable projection. A no-tool interval does not reveal whether the model is reasoning, queued, generating, or hung; model progress and provider generation remain unobservable between MCP calls. Use execution_scope_audit for bounded metadata-only tool lifecycle. Semantic state is never inferred from filenames or tool events, cross-scope authority freshness remains unverified unless a fixed rightful-owner projection explicitly revalidates it, and a recorded exact action remains historical until current canonical/runtime/writer/effect owners are rehydrated. These views never replace Git, canonical product state, runtime/effect readback, or writer/lease reconciliation, and they do not contain transcripts, prompts, private reasoning, tool outputs, patches, credentials, or raw commands."
     : "";
   const executionMailboxInstruction = config.executionMailbox.enabled
     ? " Use execution_scope_message_send to leave a durable message for another known scope, reusing one idempotencyKey for retries. Acceptance means stored, not observed. When a tool result reports pending mail, call execution_scope_message_inbox before opening a new major frontier, then record acknowledged or acted state with execution_scope_message_receipt. Use execution_scope_message_status to inspect a message you sent or received. The mailbox is executor-local coordination, not task, decision, effect, writer, or canonical-memory authority, and it cannot wake or inject text directly into an inactive WebChat transcript."
@@ -1009,6 +1019,36 @@ function scopeRuntimeRelation(
   };
 }
 
+function stableControlPlaneProjection(
+  continuationPreflight: ZesContinuationPreflightProjection,
+  scopePublicationPreflight?: ScopePublicationPreflight,
+) {
+  const capabilities = {
+    continuationPreflight,
+    ...(scopePublicationPreflight === undefined
+      ? {}
+      : { scopePublicationPreflight }),
+  };
+  return {
+    schemaVersion: 1,
+    route: "execution_scope_status",
+    capabilityRefs: Object.values(capabilities).map(
+      (capability) => capability.capabilityRef,
+    ),
+    capabilities,
+    policy: {
+      authority: "read_only_additive_projection_of_fixed_server_owned_capabilities",
+      additiveProjection: true,
+      stableBootstrapTool: "execution_scope_status",
+      frozenClientCatalogCompatible: true,
+      newTopLevelToolDiscoveryRequired: false,
+      clientCatalogAttestationRequiredForControlPlaneReadback: false,
+      unknownClientCatalogDoesNotEstablishWriterUncertainty: true,
+      canonicalTaskDecisionWriterEffectOrPublicationAuthorityGranted: false,
+    },
+  } as const;
+}
+
 function setRuntimeCapabilityHeaders(
   res: Response,
   runtimeCapabilities: RuntimeCapabilityRegistry,
@@ -1039,6 +1079,8 @@ function registerExecutionScopeTools(
   executionScopes: ExecutionScopeManager,
   turnContinuity: TurnContinuityManager,
   runtimeCapabilities: RuntimeCapabilityRegistry,
+  continuationPreflightProjector?: ZesContinuationPreflightProjectionSource,
+  scopePublicationPreflight?: ScopePublicationPreflightSource,
 ): void {
   const scopeRefSchema = z
     .string()
@@ -1153,7 +1195,7 @@ function registerExecutionScopeTools(
     {
       title: "Inspect DevSpace execution scope",
       description:
-        "Read one DevSpace execution scope by opaque scopeRef, including linked workspaces, live process sessions, the observation gap since the last MCP/tool event, the current backend runtime/tool-surface fingerprint, and—when the target explicitly recorded one—the latest bounded semantic recovery capsule joined with local workspace freshness and later activity. Omit scopeRef for the current host scope. The server reports which critical tools are currently registered but cannot observe the host's cached tools/list result. Model progress and provider generation are not observable between MCP calls, so status never claims that a silent interval is normal reasoning or a hang. Semantic state is never inferred from filenames or tool events. Raw host session IDs, prompts, private reasoning, credentials, tool outputs, patches, and raw commands are never returned; capsule state remains executor-local observation rather than task, decision, writer, effect, or publication authority.",
+        "Read one DevSpace execution scope by opaque scopeRef, including linked workspaces, live process sessions, the observation gap since the last MCP/tool event, the current backend runtime/tool-surface fingerprint, and—when the target explicitly recorded one—the latest bounded semantic recovery capsule joined with local workspace freshness and later activity. Omit scopeRef for the current host scope. This stable bootstrap route can also carry additive read-only server-owned control-plane capability projections, so a frozen client catalog does not have to discover a newer top-level tool before reading a fixed continuation preflight. The server reports which critical tools are currently registered but cannot observe the host's cached tools/list result. Model progress and provider generation are not observable between MCP calls, so status never claims that a silent interval is normal reasoning or a hang. Semantic state is never inferred from filenames or tool events. Raw host session IDs, prompts, private reasoning, credentials, tool outputs, patches, and raw commands are never returned; capsule and control-plane projections remain executor-local observation rather than task, decision, writer, effect, or publication authority.",
       inputSchema: {
         scopeRef: scopeRefSchema.optional(),
         ...clientCatalogInputSchema,
@@ -1198,6 +1240,22 @@ function registerExecutionScopeTools(
           clientObservedToolNames,
         },
       });
+      const continuationPreflight = continuationPreflightProjector
+        ? await continuationPreflightProjector.project()
+        : undefined;
+      const scopePublication = continuationPreflight && scopePublicationPreflight
+        ? await scopePublicationPreflight.assess({
+            workspaces: status.workspaces,
+            semanticRecovery,
+            continuationPreflight,
+          })
+        : undefined;
+      const stableControlPlane = continuationPreflight
+        ? stableControlPlaneProjection(
+            continuationPreflight,
+            scopePublication,
+          )
+        : undefined;
       return jsonToolResponse({
         ...status,
         backendRuntime,
@@ -1205,6 +1263,7 @@ function registerExecutionScopeTools(
           ? {}
           : { runtimeRelation: scopeRuntimeRelation(scope, backendRuntime) }),
         ...(semanticRecovery === undefined ? {} : { semanticRecovery }),
+        ...(stableControlPlane === undefined ? {} : { stableControlPlane }),
       });
     },
   );
@@ -2076,6 +2135,8 @@ export function createMcpServer(
   turnContinuity?: TurnContinuityManager,
   runtimeCapabilities?: RuntimeCapabilityRegistry,
   researchCycle?: ZesResearchCycleManager,
+  continuationPreflightProjector?: ZesContinuationPreflightProjectionSource,
+  scopePublicationPreflight?: ScopePublicationPreflightSource,
 ): McpServer {
   const ownsExecutionScopes = executionScopes === undefined;
   const ownsExecutionMailbox = executionMailbox === undefined;
@@ -2174,6 +2235,8 @@ export function createMcpServer(
     activeExecutionScopes,
     activeTurnContinuity,
     activeRuntimeCapabilities,
+    continuationPreflightProjector,
+    scopePublicationPreflight,
   );
   registerExecutionMailboxTools(server, config, activeExecutionMailbox);
   registerTurnContinuityTools(
@@ -3542,6 +3605,11 @@ export function createServer(
   const processSessions = new ProcessSessionManager();
   const runtimeCapabilities = new RuntimeCapabilityRegistry(config);
   const researchCycle = new ZesResearchCycleManager(config.zesResearchCycle);
+  const continuationPreflightProjector =
+    new ZesContinuationPreflightProjector();
+  void continuationPreflightProjector.warm();
+  const scopePublicationPreflight =
+    new ZesScopePublicationPreflightAssessor();
   const executionScopes = new ExecutionScopeManager(
     config.executionObservability,
     config.stateDir,
@@ -3587,6 +3655,8 @@ export function createServer(
     turnContinuity,
     runtimeCapabilities,
     researchCycle,
+    continuationPreflightProjector,
+    scopePublicationPreflight,
   );
 
   const logSessionCloseResults = (
@@ -3763,6 +3833,8 @@ export function createServer(
           turnContinuity,
           runtimeCapabilities,
           researchCycle,
+          continuationPreflightProjector,
+          scopePublicationPreflight,
         );
         await server.connect(transport);
         res.on("close", () => {
@@ -3811,6 +3883,8 @@ export function createServer(
           turnContinuity,
           runtimeCapabilities,
           researchCycle,
+          continuationPreflightProjector,
+          scopePublicationPreflight,
         );
         await server.connect(transport);
       } else if (req.method === "POST") {
@@ -3833,6 +3907,8 @@ export function createServer(
           turnContinuity,
           runtimeCapabilities,
           researchCycle,
+          continuationPreflightProjector,
+          scopePublicationPreflight,
         );
         await server.connect(transport);
         res.on("close", () => {

@@ -18,6 +18,8 @@ const DEFAULT_ZES_CONTINUATION_STATE_ROOT =
 const MAX_PROCESS_OUTPUT_BYTES = 2 * 1024 * 1024;
 const MAX_SNAPSHOT_BYTES = 1024 * 1024;
 const PROCESS_TIMEOUT_MS = 60_000;
+const DEFAULT_PROJECTION_CACHE_TTL_MS = 30_000;
+const DEFAULT_PROJECTION_FAILURE_CACHE_TTL_MS = 5_000;
 
 const READ_ONLY_ANNOTATIONS = {
   readOnlyHint: true,
@@ -28,12 +30,109 @@ const READ_ONLY_ANNOTATIONS = {
 
 type AppToolRegistrar = typeof registerAppToolType;
 
-export type ZesContinuationIntent =
-  | "inspect"
-  | "prepare_isolated_candidate"
-  | "mutate_governed_checkout"
-  | "publish_repository"
-  | "runtime_takeover_or_effect_retry";
+export const ZES_CONTINUATION_INTENTS = [
+  "inspect",
+  "prepare_isolated_candidate",
+  "mutate_governed_checkout",
+  "publish_repository",
+  "runtime_takeover_or_effect_retry",
+] as const;
+
+export type ZesContinuationIntent = typeof ZES_CONTINUATION_INTENTS[number];
+
+export interface ZesContinuationSnapshotReadback {
+  schemaVersion: 1;
+  observedAt: string;
+  sourceExpiresAt: string;
+  preflight: Record<string, unknown>;
+  route?: unknown;
+  refresh: {
+    status: unknown;
+    receiptDigestSha256: unknown;
+    snapshotSha256: unknown;
+    sourceControlPreflight: unknown;
+  };
+}
+
+interface ZesContinuationProjectionPolicy {
+  authority:
+    "fixed_live_ZES_continuation_readback_without_new_tool_discovery";
+  readOnly: true;
+  fixedRoute: true;
+  arbitraryCredentialPathAccepted: false;
+  arbitraryRepositoryPathAccepted: false;
+  directToolDiscoveryRequired: false;
+  clientCatalogFreshnessRequiredForReadback: false;
+  catalogStalenessDoesNotEstablishWriterUncertainty: true;
+  cacheIsReadOptimizationOnly: true;
+  cacheDoesNotGrantAuthority: true;
+  downstreamEffectGateMustRevalidate: true;
+  canonicalOrProviderStateMutated: false;
+  newWriterPublicationTakeoverOrEffectAuthorityGranted: false;
+}
+
+export interface ZesContinuationPreflightAvailableProjection {
+  schemaVersion: 1;
+  capabilityRef: "zes.continuation.preflight.v2";
+  status: "available";
+  projectionRef: string;
+  route: "execution_scope_status_embedded_control_plane";
+  directToolName: "zes_continuation_preflight";
+  observedAt: string;
+  freshUntil: string;
+  sourceExpiresAt: string;
+  preflight: Record<string, unknown>;
+  productRoute?: unknown;
+  decisions: Record<ZesContinuationIntent, Record<string, unknown>>;
+  refresh: ZesContinuationSnapshotReadback["refresh"];
+  policy: ZesContinuationProjectionPolicy;
+}
+
+export interface ZesContinuationPreflightRefreshingProjection {
+  schemaVersion: 1;
+  capabilityRef: "zes.continuation.preflight.v2";
+  status: "refreshing";
+  projectionRef: string;
+  route: "execution_scope_status_embedded_control_plane";
+  directToolName: "zes_continuation_preflight";
+  refreshStartedAt: string;
+  retryAfter: string;
+  previousProjectionRef?: string;
+  policy: ZesContinuationProjectionPolicy;
+}
+
+export interface ZesContinuationPreflightUnavailableProjection {
+  schemaVersion: 1;
+  capabilityRef: "zes.continuation.preflight.v2";
+  status: "unavailable";
+  projectionRef: string;
+  route: "execution_scope_status_embedded_control_plane";
+  directToolName: "zes_continuation_preflight";
+  observedAt: string;
+  retryAfter: string;
+  error: {
+    code: "fixed_continuation_preflight_unavailable";
+    diagnosticDigestSha256: string;
+  };
+  policy: ZesContinuationProjectionPolicy;
+}
+
+export type ZesContinuationPreflightProjection =
+  | ZesContinuationPreflightAvailableProjection
+  | ZesContinuationPreflightRefreshingProjection
+  | ZesContinuationPreflightUnavailableProjection;
+
+export interface ZesContinuationPreflightProjectionSource {
+  project(): Promise<ZesContinuationPreflightProjection>;
+  warm?(): Promise<void>;
+}
+
+export interface ZesContinuationPreflightProjectorOptions {
+  now?: () => number;
+  cacheTtlMs?: number;
+  failureCacheTtlMs?: number;
+  refresh?: () => Promise<ZesContinuationSnapshotReadback>;
+}
 
 interface ProcessResult {
   stdout: string;
@@ -48,6 +147,27 @@ interface ContinuationRefreshReceipt {
   source_control_preflight?: unknown;
   receipt_digest_sha256?: unknown;
 }
+
+interface CachedProjection {
+  expiresAtMs: number;
+  value: ZesContinuationPreflightProjection;
+}
+
+const PROJECTION_POLICY: ZesContinuationProjectionPolicy = {
+  authority: "fixed_live_ZES_continuation_readback_without_new_tool_discovery",
+  readOnly: true,
+  fixedRoute: true,
+  arbitraryCredentialPathAccepted: false,
+  arbitraryRepositoryPathAccepted: false,
+  directToolDiscoveryRequired: false,
+  clientCatalogFreshnessRequiredForReadback: false,
+  catalogStalenessDoesNotEstablishWriterUncertainty: true,
+  cacheIsReadOptimizationOnly: true,
+  cacheDoesNotGrantAuthority: true,
+  downstreamEffectGateMustRevalidate: true,
+  canonicalOrProviderStateMutated: false,
+  newWriterPublicationTakeoverOrEffectAuthorityGranted: false,
+};
 
 function record(value: unknown): Record<string, unknown> | undefined {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -73,6 +193,33 @@ function canonicalJson(value: unknown): string {
     );
   };
   return JSON.stringify(normalize(value));
+}
+
+function sha256(value: unknown): string {
+  return createHash("sha256").update(canonicalJson(value)).digest("hex");
+}
+
+function positiveBoundedMilliseconds(
+  value: number | undefined,
+  fallback: number,
+  name: string,
+): number {
+  const resolved = value ?? fallback;
+  if (!Number.isFinite(resolved) || resolved <= 0 || resolved > 60_000) {
+    throw new Error(`${name} must be between 1 and 60000 milliseconds`);
+  }
+  return Math.trunc(resolved);
+}
+
+function continuationDecisions(
+  preflight: Record<string, unknown>,
+): Record<ZesContinuationIntent, Record<string, unknown>> {
+  return Object.fromEntries(
+    ZES_CONTINUATION_INTENTS.map((intent) => [
+      intent,
+      continuationIntentDecision(intent, preflight),
+    ]),
+  ) as Record<ZesContinuationIntent, Record<string, unknown>>;
 }
 
 export function isVerifiedDeepSubset(
@@ -103,6 +250,13 @@ function fixedPath(
   return resolve(configured || fallback);
 }
 
+export function fixedZesRepositoryRoot(): string {
+  return fixedPath(
+    "DEVSPACE_ZES_REPOSITORY_ROOT",
+    DEFAULT_ZES_REPOSITORY_ROOT,
+  );
+}
+
 function isInside(path: string, root: string): boolean {
   const resolvedPath = resolve(path);
   const resolvedRoot = resolve(root);
@@ -115,10 +269,7 @@ async function sha256File(path: string): Promise<string> {
 }
 
 async function runFixedContinuationRefresh(): Promise<ProcessResult> {
-  const repositoryRoot = fixedPath(
-    "DEVSPACE_ZES_REPOSITORY_ROOT",
-    DEFAULT_ZES_REPOSITORY_ROOT,
-  );
+  const repositoryRoot = fixedZesRepositoryRoot();
   const python = fixedPath(
     "DEVSPACE_ZES_CONTINUATION_PYTHON",
     DEFAULT_ZES_CONTINUATION_PYTHON,
@@ -278,6 +429,7 @@ export function continuationIntentDecision(
 
 async function loadFreshContinuationEnvelope(
   receipt: ContinuationRefreshReceipt,
+  nowMs = Date.now(),
 ): Promise<Record<string, unknown>> {
   const snapshotPath = typeof receipt.snapshot_path === "string"
     ? resolve(receipt.snapshot_path)
@@ -310,15 +462,15 @@ async function loadFreshContinuationEnvelope(
   const expiresAt = typeof value.expires_at_UTC === "string"
     ? Date.parse(value.expires_at_UTC)
     : Number.NaN;
-  if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
+  if (!Number.isFinite(expiresAt) || expiresAt <= nowMs) {
     throw new Error("ZES continuation snapshot is stale or has no valid expiry");
   }
   return value;
 }
 
-export async function invokeZesContinuationPreflight(
-  intent: ZesContinuationIntent,
-) {
+export async function refreshZesContinuationSnapshot(): Promise<
+  ZesContinuationSnapshotReadback
+> {
   const processResult = await runFixedContinuationRefresh();
   if (processResult.exitCode !== 0) {
     const detail = processResult.stderr || processResult.stdout || "no output";
@@ -343,6 +495,12 @@ export async function invokeZesContinuationPreflight(
     );
   }
   const envelope = await loadFreshContinuationEnvelope(receipt);
+  const sourceExpiresAt = typeof envelope.expires_at_UTC === "string"
+    ? envelope.expires_at_UTC
+    : undefined;
+  if (!sourceExpiresAt) {
+    throw new Error("ZES continuation snapshot has no source expiry");
+  }
   const payload = record(envelope.payload);
   const control = record(payload?.product_control_plane_preflight);
   const preflight = record(control?.preflight);
@@ -358,13 +516,11 @@ export async function invokeZesContinuationPreflight(
       "ZES continuation refresh receipt is not an exact subset of the snapshot preflight",
     );
   }
-  const decision = continuationIntentDecision(intent, preflight);
-  const data = {
+  return {
     schemaVersion: 1,
-    scope: "fixed-live-zes-continuation-preflight",
-    intent,
-    decision,
-    preflight,
+    observedAt: new Date().toISOString(),
+    sourceExpiresAt,
+    preflight: structuredClone(preflight),
     route: control?.route,
     refresh: {
       status: receipt.status,
@@ -372,6 +528,173 @@ export async function invokeZesContinuationPreflight(
       snapshotSha256: receipt.snapshot_sha256,
       sourceControlPreflight: receipt.source_control_preflight,
     },
+  };
+}
+
+export class ZesContinuationPreflightProjector
+implements ZesContinuationPreflightProjectionSource {
+  private readonly now: () => number;
+  private readonly cacheTtlMs: number;
+  private readonly failureCacheTtlMs: number;
+  private readonly refresh: () => Promise<ZesContinuationSnapshotReadback>;
+  private cached?: CachedProjection;
+  private inFlight?: Promise<CachedProjection>;
+  private refreshStartedAtMs?: number;
+
+  constructor(options: ZesContinuationPreflightProjectorOptions = {}) {
+    this.now = options.now ?? Date.now;
+    this.cacheTtlMs = positiveBoundedMilliseconds(
+      options.cacheTtlMs,
+      DEFAULT_PROJECTION_CACHE_TTL_MS,
+      "cacheTtlMs",
+    );
+    this.failureCacheTtlMs = positiveBoundedMilliseconds(
+      options.failureCacheTtlMs,
+      DEFAULT_PROJECTION_FAILURE_CACHE_TTL_MS,
+      "failureCacheTtlMs",
+    );
+    this.refresh = options.refresh ?? refreshZesContinuationSnapshot;
+  }
+
+  async project(): Promise<ZesContinuationPreflightProjection> {
+    const nowMs = this.now();
+    if (this.cached && nowMs < this.cached.expiresAtMs) {
+      return structuredClone(this.cached.value);
+    }
+    void this.warm();
+    const refreshStartedAtMs = this.refreshStartedAtMs ?? nowMs;
+    const value: ZesContinuationPreflightRefreshingProjection = {
+      schemaVersion: 1,
+      capabilityRef: "zes.continuation.preflight.v2",
+      status: "refreshing",
+      projectionRef:
+        `zes-control-plane://continuation/refreshing/${sha256({
+          refreshStartedAtMs,
+          previousProjectionRef: this.cached?.value.projectionRef,
+        })}`,
+      route: "execution_scope_status_embedded_control_plane",
+      directToolName: "zes_continuation_preflight",
+      refreshStartedAt: new Date(refreshStartedAtMs).toISOString(),
+      retryAfter: new Date(nowMs + 1_000).toISOString(),
+      ...(this.cached
+        ? { previousProjectionRef: this.cached.value.projectionRef }
+        : {}),
+      policy: PROJECTION_POLICY,
+    };
+    return structuredClone(value);
+  }
+
+  async warm(): Promise<void> {
+    const nowMs = this.now();
+    if (this.cached && nowMs < this.cached.expiresAtMs) return;
+    if (this.inFlight) {
+      await this.inFlight;
+      return;
+    }
+
+    this.refreshStartedAtMs = nowMs;
+    const refresh = this.refreshProjection();
+    this.inFlight = refresh;
+    try {
+      this.cached = await refresh;
+    } finally {
+      if (this.inFlight === refresh) {
+        this.inFlight = undefined;
+        this.refreshStartedAtMs = undefined;
+      }
+    }
+  }
+
+  private async refreshProjection(): Promise<CachedProjection> {
+    try {
+      const snapshot = await this.refresh();
+      if (snapshot.schemaVersion !== 1) {
+        throw new Error("unsupported_continuation_snapshot_readback_schema");
+      }
+      const observedAtMs = Date.parse(snapshot.observedAt);
+      if (!Number.isFinite(observedAtMs)) {
+        throw new Error("invalid_continuation_snapshot_observed_at");
+      }
+      const completedAtMs = this.now();
+      const sourceExpiresAtMs = Date.parse(snapshot.sourceExpiresAt);
+      if (!Number.isFinite(sourceExpiresAtMs) || sourceExpiresAtMs <= completedAtMs) {
+        throw new Error("invalid_or_expired_continuation_snapshot_source_expiry");
+      }
+      const freshUntilMs = Math.min(
+        completedAtMs + this.cacheTtlMs,
+        sourceExpiresAtMs,
+      );
+      const decisions = continuationDecisions(snapshot.preflight);
+      const projectionBasis = {
+        capabilityRef: "zes.continuation.preflight.v2",
+        observedAt: snapshot.observedAt,
+        preflight: snapshot.preflight,
+        decisions,
+        refresh: snapshot.refresh,
+      };
+      const value: ZesContinuationPreflightAvailableProjection = {
+        schemaVersion: 1,
+        capabilityRef: "zes.continuation.preflight.v2",
+        status: "available",
+        projectionRef:
+          `zes-control-plane://continuation/${sha256(projectionBasis)}`,
+        route: "execution_scope_status_embedded_control_plane",
+        directToolName: "zes_continuation_preflight",
+        observedAt: snapshot.observedAt,
+        freshUntil: new Date(freshUntilMs).toISOString(),
+        sourceExpiresAt: snapshot.sourceExpiresAt,
+        preflight: structuredClone(snapshot.preflight),
+        ...(snapshot.route === undefined
+          ? {}
+          : { productRoute: structuredClone(snapshot.route) }),
+        decisions,
+        refresh: structuredClone(snapshot.refresh),
+        policy: PROJECTION_POLICY,
+      };
+      return { expiresAtMs: freshUntilMs, value };
+    } catch (error) {
+      const observedAtMs = this.now();
+      const retryAtMs = observedAtMs + this.failureCacheTtlMs;
+      const diagnostic = error instanceof Error
+        ? `${error.name}:${error.message}`
+        : String(error);
+      const diagnosticDigestSha256 = createHash("sha256")
+        .update(diagnostic)
+        .digest("hex");
+      const value: ZesContinuationPreflightUnavailableProjection = {
+        schemaVersion: 1,
+        capabilityRef: "zes.continuation.preflight.v2",
+        status: "unavailable",
+        projectionRef:
+          `zes-control-plane://continuation/unavailable/${diagnosticDigestSha256}`,
+        route: "execution_scope_status_embedded_control_plane",
+        directToolName: "zes_continuation_preflight",
+        observedAt: new Date(observedAtMs).toISOString(),
+        retryAfter: new Date(retryAtMs).toISOString(),
+        error: {
+          code: "fixed_continuation_preflight_unavailable",
+          diagnosticDigestSha256,
+        },
+        policy: PROJECTION_POLICY,
+      };
+      return { expiresAtMs: retryAtMs, value };
+    }
+  }
+}
+
+export async function invokeZesContinuationPreflight(
+  intent: ZesContinuationIntent,
+) {
+  const snapshot = await refreshZesContinuationSnapshot();
+  const decision = continuationIntentDecision(intent, snapshot.preflight);
+  const data = {
+    schemaVersion: 1,
+    scope: "fixed-live-zes-continuation-preflight",
+    intent,
+    decision,
+    preflight: snapshot.preflight,
+    route: snapshot.route,
+    refresh: snapshot.refresh,
     policy: {
       authority:
         "invokes_the_fixed_ZES_product_preflight_and_returns_its_receipt_without_computing_new_authority",

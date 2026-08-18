@@ -43,6 +43,12 @@ mandatory `AGENTS.md`; it does not replace it.
   tools actually registered by the current DevSpace backend, including their
   model-facing schemas and safe configuration. It does not expose or attest the
   MCP client's cached tool catalog.
+- **Stable control-plane projection** — an additive read-only capability
+  envelope returned inside the existing `execution_scope_status` data payload.
+  It lets a client with a frozen tool catalog read fixed server-owned control
+  state without first discovering a newer top-level tool. It does not refresh
+  the host catalog or grant task, writer, effect, publication, or takeover
+  authority.
 - **Local-agent turn** — one queued provider prompt serialized by a worker
   lease. It is not canonical work or effect authority.
 - **Worker lease** — an executor-local single-worker claim. Expiry after
@@ -119,6 +125,39 @@ observe client catalog freshness directly. For OpenAI's stateless request path,
 assume discovery and execution may be separated across backend restarts: avoid
 repeated deployment restarts, expose no-store/fingerprint/epoch evidence, and
 refresh or reconnect the host when required sentinel tools are missing.
+
+Critical read-only control state must not depend exclusively on discovery of a
+new top-level tool. Project it through the stable `execution_scope_status`
+bootstrap envelope when all of the following hold: the route is fixed and
+server-owned, accepts no arbitrary path or credentials, has a bounded typed
+result, and cannot itself perform the governed effect. Keep the direct tool for
+fresh clients, but treat the embedded projection as the compatibility path for
+older catalogs. Add fields only inside the existing open `data` payload, return
+explicit `available` or `unavailable` state, suppress raw runtime diagnostics,
+deduplicate concurrent refreshes, and keep any cache short and advisory. A
+missing or stale client catalog is a transport/discovery condition; it must not
+be converted into evidence that a writer exists, that publication controls are
+absent, or that any governed action is authorized.
+
+Repository publication needs two distinct readbacks. The fixed ZES continuation
+projection supplies global rightful-owner state and the authoritative remote
+`main` commit; it may correctly report `publication_disposition=not_required`
+for the governed checkout even when another linked worktree contains an
+unpublished candidate. The scope-publication projection must separately bind
+that global state to an internally registered execution-scope workspace, verify
+repository identity, exact branch/remote/merge target, candidate ancestry,
+cleanliness, fail-closed publication controls, and a fresh recovery capsule whose
+passed validation is bound to the exact candidate HEAD. Only that combined
+assessment may describe the candidate as eligible, and even then it returns a
+compare-and-swap expectation plus remote-readback requirement rather than
+performing the push or granting publication authority. The capsule validation
+claim is executor-local evidence, not publication authority; the effect gate
+must rerun or independently revalidate the required validation and all Git,
+writer, authority, hook-identity, and remote-main bindings immediately before
+the push. Never accept an arbitrary model-supplied workspace path for this
+projection, and never treat a local `origin/main` ref as remote authority
+without the fixed product readback.
+
 For UI or artifacts, inspect rendered output rather than inferring success from
 the producing command. State clearly when only a narrower proxy was verified.
 

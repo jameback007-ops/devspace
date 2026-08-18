@@ -20,6 +20,12 @@ import { createMcpServer } from "./server.js";
 import { createToolSurfaceIdentity } from "./tool-surface-freshness.js";
 import { SqliteWorkspaceStore } from "./workspace-store.js";
 import { WorkspaceRegistry } from "./workspaces.js";
+import type {
+  ZesContinuationPreflightProjectionSource,
+} from "./zes-continuation-preflight.js";
+import type {
+  ScopePublicationPreflightSource,
+} from "./scope-publication-preflight.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -500,6 +506,209 @@ test("a fresh current host scope can inspect status before any audited executor 
   const auditData = structuredData(audit);
   assert.equal(auditData.currentScopeMaterialized, false);
   assert.deepEqual(auditData.events, []);
+});
+
+test("execution-scope status carries the stable continuation control plane without new tool discovery", async (t) => {
+  let projectionCalls = 0;
+  let scopePublicationCalls = 0;
+  const continuationPreflightProjector: ZesContinuationPreflightProjectionSource = {
+    project: async () => {
+      projectionCalls += 1;
+      return {
+        schemaVersion: 1,
+        capabilityRef: "zes.continuation.preflight.v2",
+        status: "available",
+        projectionRef: "zes-control-plane://continuation/test",
+        route: "execution_scope_status_embedded_control_plane",
+        directToolName: "zes_continuation_preflight",
+        observedAt: "2026-08-18T07:00:00.000Z",
+        freshUntil: "2026-08-18T07:00:05.000Z",
+        sourceExpiresAt: "2026-08-18T07:01:00.000Z",
+        preflight: {
+          schema_version: "zes.continuation-control-preflight.v2",
+          publication_disposition: "eligible",
+          safe_to_publish: true,
+        },
+        decisions: {
+          inspect: {
+            intent: "inspect",
+            disposition: "allowed",
+            actionAllowed: true,
+          },
+          prepare_isolated_candidate: {
+            intent: "prepare_isolated_candidate",
+            disposition: "allowed",
+            actionAllowed: true,
+          },
+          mutate_governed_checkout: {
+            intent: "mutate_governed_checkout",
+            disposition: "allowed",
+            actionAllowed: true,
+          },
+          publish_repository: {
+            intent: "publish_repository",
+            disposition: "allowed",
+            actionAllowed: true,
+          },
+          runtime_takeover_or_effect_retry: {
+            intent: "runtime_takeover_or_effect_retry",
+            disposition: "reconciliation_clear",
+            actionAllowed: false,
+          },
+        },
+        refresh: {
+          status: "refreshed",
+          receiptDigestSha256: "a".repeat(64),
+          snapshotSha256: "b".repeat(64),
+          sourceControlPreflight: {
+            publication_disposition: "eligible",
+          },
+        },
+        policy: {
+          authority:
+            "fixed_live_ZES_continuation_readback_without_new_tool_discovery",
+          readOnly: true,
+          fixedRoute: true,
+          arbitraryCredentialPathAccepted: false,
+          arbitraryRepositoryPathAccepted: false,
+          directToolDiscoveryRequired: false,
+          clientCatalogFreshnessRequiredForReadback: false,
+          catalogStalenessDoesNotEstablishWriterUncertainty: true,
+          cacheIsReadOptimizationOnly: true,
+          cacheDoesNotGrantAuthority: true,
+          downstreamEffectGateMustRevalidate: true,
+          canonicalOrProviderStateMutated: false,
+          newWriterPublicationTakeoverOrEffectAuthorityGranted: false,
+        },
+      };
+    },
+  };
+  const scopePublicationPreflight: ScopePublicationPreflightSource = {
+    assess: async ({ continuationPreflight }) => {
+      scopePublicationCalls += 1;
+      return {
+        schemaVersion: 1,
+        capabilityRef: "zes.scope-publication.preflight.v1",
+        status: "available",
+        assessedAt: "2026-08-18T07:00:00.500Z",
+        continuationProjectionRef: continuationPreflight.projectionRef,
+        authoritativeRemoteMainSha: "1".repeat(40),
+        candidateCount: 1,
+        ignoredWorkspaceCount: 0,
+        inspectionFailureCount: 0,
+        candidates: [
+          {
+            schemaVersion: 1,
+            workspaceId: "ws_candidate",
+            disposition: "eligible",
+            safeToPublish: true,
+            publicationRequired: true,
+            candidateHeadSha: "2".repeat(40),
+            authoritativeRemoteMainSha: "1".repeat(40),
+            localOriginMainSha: "1".repeat(40),
+            branchName: "agent/candidate",
+            aheadCount: 1,
+            behindCount: 0,
+            dirtyPathCount: 0,
+            publicationControlsFailClosed: true,
+            validationBoundToCandidate: true,
+            validationEvidenceAuthority:
+              "executor_local_git_bound_recovery_capsule",
+            validationEvidenceRevalidationRequired: true,
+            blockingFactors: [],
+            evidenceRefs: ["test:scope-publication"],
+            expectedPublication: {
+              remoteName: "origin",
+              remoteRef: "refs/heads/main",
+              refspec: "HEAD:refs/heads/main",
+              expectedOldSha: "1".repeat(40),
+              compareAndSwapRequired: true,
+              remoteReadbackRequired: true,
+              effectGateMustRevalidateCandidateAndAuthority: true,
+              validationMustBeRevalidatedBeforeEffect: true,
+              prePushGuard: {
+                hookDigestSha256: "3".repeat(64),
+                environment: {
+                  ZES_CHECKPOINT_PUBLICATION_GUARD: "1",
+                  ZES_CHECKPOINT_PUBLICATION_COMMIT: "2".repeat(40),
+                  ZES_CHECKPOINT_PUBLICATION_EXPECTED_OLD: "1".repeat(40),
+                },
+              },
+            },
+          },
+        ],
+        policy: {
+          authority:
+            "scope_linked_git_readback_combined_with_fixed_ZES_product_preflight",
+          inputWorkspaceSource: "execution_scope_registry_only",
+          arbitraryWorkspacePathAccepted: false,
+          remoteMainAuthoritySource:
+            "fixed_product_preflight_safe_checkpoint_commit_ref",
+          localOriginTrackingIsRemoteAuthority: false,
+          runtimeReconciliationBlocksUnrelatedSourcePublication: false,
+          candidateValidationCheckpointRequired: true,
+          capsuleValidationIsPublicationAuthority: false,
+          effectGateMustRevalidateValidationAndGit: true,
+          publicationEffectPerformed: false,
+          publicationAuthorityGranted: false,
+          compareAndSwapAndRemoteReadbackRequired: true,
+        },
+      };
+    },
+  };
+  const context = await fixture(t, {
+    toolMode: "codex",
+    continuationPreflightProjector,
+    scopePublicationPreflight,
+  });
+
+  const tools = await context.client.listTools();
+  assert.ok(
+    tools.tools.some((tool) => tool.name === "execution_scope_status"),
+    "the stable bootstrap tool must remain registered",
+  );
+  assert.ok(
+    tools.tools.some((tool) => tool.name === "zes_continuation_preflight"),
+    "the ergonomic direct tool remains available to fresh catalogs",
+  );
+
+  const status = await context.client.callTool({
+    name: "execution_scope_status",
+    arguments: {},
+    _meta: { "openai/session": "frozen-catalog-compatible-session" },
+  } as Parameters<Client["callTool"]>[0]);
+  assert.equal(status.isError, undefined, responseText(status));
+  assert.equal(projectionCalls, 1);
+  assert.equal(scopePublicationCalls, 1);
+  const stable = structuredData(status).stableControlPlane as Record<string, any>;
+  assert.equal(stable.route, "execution_scope_status");
+  assert.equal(stable.policy.stableBootstrapTool, "execution_scope_status");
+  assert.equal(stable.policy.frozenClientCatalogCompatible, true);
+  assert.equal(stable.policy.newTopLevelToolDiscoveryRequired, false);
+  assert.equal(
+    stable.capabilities.continuationPreflight.status,
+    "available",
+  );
+  assert.equal(
+    stable.capabilities.continuationPreflight
+      .policy.clientCatalogFreshnessRequiredForReadback,
+    false,
+  );
+  assert.equal(
+    stable.capabilities.continuationPreflight
+      .decisions.publish_repository.disposition,
+    "allowed",
+  );
+  assert.equal(
+    stable.capabilities.scopePublicationPreflight
+      .candidates[0].disposition,
+    "eligible",
+  );
+  assert.equal(
+    stable.capabilities.scopePublicationPreflight
+      .policy.arbitraryWorkspacePathAccepted,
+    false,
+  );
 });
 
 test("one host scope can inspect another through bounded execution-scope tools", async (t) => {
@@ -1469,6 +1678,8 @@ async function fixture(
     localAgentCoordinatorOptions?: LocalAgentCoordinatorOptions;
     runtimeCapabilities?: boolean;
     zesResearchCycleMode?: ServerConfig["zesResearchCycle"]["mode"];
+    continuationPreflightProjector?: ZesContinuationPreflightProjectionSource;
+    scopePublicationPreflight?: ScopePublicationPreflightSource;
   } = {},
 ): Promise<ServerFixture> {
   const root = await mkdtemp(join(tmpdir(), "devspace-server-test-"));
@@ -1592,6 +1803,9 @@ async function fixture(
         localAgentCoordinator,
         undefined,
         runtimeCapabilities,
+        undefined,
+        options.continuationPreflightProjector,
+        options.scopePublicationPreflight,
       )
     : createMcpServer(
         config,
@@ -1605,6 +1819,9 @@ async function fixture(
         localAgentCoordinator,
         undefined,
         runtimeCapabilities,
+        undefined,
+        options.continuationPreflightProjector,
+        options.scopePublicationPreflight,
       );
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: "devspace-test-client", version: "1.0.0" });
