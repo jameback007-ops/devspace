@@ -127,6 +127,11 @@ the model-facing result, provider receipt, logs, bind process, and arbitrary
 `exec_command` environment receive neither the value nor its digest. Context7
 may similarly consume an optional `CONTEXT7_API_KEY`; the public pinned CLI
 route remains usable without it when the upstream permits anonymous access.
+The generic command-environment passthrough also rejects both reserved names.
+Provider timeouts and output ceilings terminate the complete child process
+group, and receipt/evidence files are opened no-follow, owner-checked,
+single-link, identity-stable, and bound back to the exact requested provider,
+operation, route kind, purpose, and cycle framing before admission.
 
 ## Configuration
 

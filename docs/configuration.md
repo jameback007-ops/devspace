@@ -54,6 +54,9 @@ When a toolchain needs another service-level variable, name it explicitly in
 `DEVSPACE_COMMAND_ENV_PASSTHROUGH`. Values remain in the service environment;
 the configuration contains names only. Invalid names fail closed, duplicates
 are ignored, and `DEVSPACE_COMMAND_ENV_PASSTHROUGH` cannot pass itself.
+`EXA_API_KEY` and `CONTEXT7_API_KEY` are reserved fixed-service credentials and
+are rejected even when an operator accidentally names them here; only the typed
+research provider broker may copy those handles into its exact child process.
 
 ```bash
 DEVSPACE_COMMAND_ENV_PASSTHROUGH="UV_CACHE_DIR PANTS_LOCAL_STORE_DIR PANTS_NAMED_CACHES_DIR PANTS_PANTSD PANTS_WATCH_FILESYSTEM"

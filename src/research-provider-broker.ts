@@ -1,14 +1,15 @@
 import { createHash, randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
+import { constants } from "node:fs";
 import {
-  chmod,
   lstat,
-  readFile,
+  open,
   realpath,
   rm,
 } from "node:fs/promises";
 import { relative, resolve, sep } from "node:path";
 import type { ZesResearchCycleConfig } from "./config.js";
+import { terminateProcessTree } from "./process-platform.js";
 import { processEnvironment } from "./process-sessions.js";
 import {
   ResearchCycleError,
@@ -21,6 +22,13 @@ const MAX_PROCESS_OUTPUT_BYTES = 2 * 1024 * 1024;
 const PROVIDER_OUTPUT_BYTES = 64 * 1024;
 const DEFAULT_MAX_RESULTS = 8;
 const DEFAULT_MAX_CHARACTERS = 12_000;
+const MAX_QUERY_CHARACTERS = 20_000;
+const MAX_PROVIDER_IDENTIFIER_CHARACTERS = 2_000;
+const MAX_KNOWN_SOURCE_REASON_CHARACTERS = 4_000;
+const MAX_URL_CHARACTERS = 8_192;
+const MAX_EXA_FETCH_CHARACTERS = 20_000;
+const MAX_TARGETED_WEB_CHARACTERS = 200_000;
+const PROCESS_TERMINATION_GRACE_MS = 1_000;
 const PROVIDER_CREDENTIALS = {
   context7: "CONTEXT7_API_KEY",
   exa: "EXA_API_KEY",
@@ -121,12 +129,23 @@ function boundedPositiveInteger(
   return resolved;
 }
 
-function requiredText(value: string, label: string): string {
+function requiredText(
+  value: string,
+  label: string,
+  maxCharacters: number,
+): string {
   const normalized = value.trim();
   if (!normalized) {
     throw new ResearchCycleError(
       "RESEARCH_PROVIDER_INPUT_INVALID",
       `${label} is required`,
+    );
+  }
+  if (normalized.includes("\0") || normalized.length > maxCharacters) {
+    throw new ResearchCycleError(
+      "RESEARCH_PROVIDER_INPUT_INVALID",
+      `${label} exceeds its bounded text contract`,
+      { maxCharacters },
     );
   }
   return normalized;
@@ -151,50 +170,104 @@ function parseJsonObject(value: string, label: string): Record<string, unknown> 
   return parsed;
 }
 
-async function sha256File(path: string): Promise<string> {
-  return createHash("sha256").update(await readFile(path)).digest("hex");
-}
-
 async function readPrivateJsonFile(
   path: string,
   evidenceDirectory: string,
   label: string,
 ): Promise<{ value: Record<string, unknown>; sha256: string }> {
-  const originalMetadata = await lstat(path);
-  if (originalMetadata.isSymbolicLink()) {
-    throw new ResearchCycleError(
-      "RESEARCH_PROVIDER_FILE_INVALID",
-      `${label} cannot be a symbolic link`,
-    );
-  }
   const directory = await realpath(evidenceDirectory);
-  const file = await realpath(path);
-  if (!pathInside(file, directory)) {
+  const requestedPath = resolve(path);
+  if (!pathInside(requestedPath, directory)) {
     throw new ResearchCycleError(
       "RESEARCH_PROVIDER_FILE_OUTSIDE_EVIDENCE_DIRECTORY",
       `${label} escaped the cycle evidence directory`,
     );
   }
-  const metadata = await lstat(file);
-  if (!metadata.isFile()) {
+  const noFollow = process.platform === "win32" ? 0 : constants.O_NOFOLLOW;
+  let handle;
+  try {
+    handle = await open(requestedPath, constants.O_RDONLY | noFollow);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
     throw new ResearchCycleError(
-      "RESEARCH_PROVIDER_FILE_INVALID",
-      `${label} is not a regular file`,
+      code === "ENOENT"
+        ? "RESEARCH_PROVIDER_FILE_UNAVAILABLE"
+        : "RESEARCH_PROVIDER_FILE_INVALID",
+      code === "ENOENT"
+        ? `${label} was not produced`
+        : `${label} could not be opened as a no-follow private file`,
+      { errorCode: code },
     );
   }
-  if (metadata.size < 2 || metadata.size > MAX_PROCESS_OUTPUT_BYTES) {
-    throw new ResearchCycleError(
-      "RESEARCH_PROVIDER_FILE_INVALID",
-      `${label} has an invalid bounded size`,
-      { byteCount: metadata.size },
-    );
+  try {
+    let metadata = await handle.stat();
+    if (!metadata.isFile() || metadata.nlink !== 1) {
+      throw new ResearchCycleError(
+        "RESEARCH_PROVIDER_FILE_INVALID",
+        `${label} must be one regular, unlinked file`,
+      );
+    }
+    if (
+      typeof process.getuid === "function"
+      && metadata.uid !== process.getuid()
+    ) {
+      throw new ResearchCycleError(
+        "RESEARCH_PROVIDER_FILE_INVALID",
+        `${label} is not owned by the DevSpace service user`,
+      );
+    }
+    if (metadata.size < 2 || metadata.size > MAX_PROCESS_OUTPUT_BYTES) {
+      throw new ResearchCycleError(
+        "RESEARCH_PROVIDER_FILE_INVALID",
+        `${label} has an invalid bounded size`,
+        { byteCount: metadata.size },
+      );
+    }
+    if ((metadata.mode & 0o077) !== 0) {
+      await handle.chmod(0o600);
+      metadata = await handle.stat();
+    }
+    const bytes = await handle.readFile();
+    const afterRead = await handle.stat();
+    const pathMetadata = await lstat(requestedPath);
+    const canonicalPath = await realpath(requestedPath);
+    if (
+      !pathInside(canonicalPath, directory)
+      || pathMetadata.isSymbolicLink()
+      || pathMetadata.dev !== afterRead.dev
+      || pathMetadata.ino !== afterRead.ino
+      || metadata.dev !== afterRead.dev
+      || metadata.ino !== afterRead.ino
+      || metadata.size !== afterRead.size
+      || metadata.mtimeMs !== afterRead.mtimeMs
+      || metadata.ctimeMs !== afterRead.ctimeMs
+      || bytes.length !== afterRead.size
+    ) {
+      throw new ResearchCycleError(
+        "RESEARCH_PROVIDER_FILE_CHANGED_DURING_READ",
+        `${label} changed identity or content while being verified`,
+      );
+    }
+    return {
+      value: parseJsonObject(bytes.toString("utf8"), label),
+      sha256: createHash("sha256").update(bytes).digest("hex"),
+    };
+  } finally {
+    await handle.close();
   }
-  await chmod(file, 0o600);
-  const bytes = await readFile(file);
-  return {
-    value: parseJsonObject(bytes.toString("utf8"), label),
-    sha256: createHash("sha256").update(bytes).digest("hex"),
-  };
+}
+
+async function assertPathAbsent(path: string, label: string): Promise<void> {
+  try {
+    await lstat(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw error;
+  }
+  throw new ResearchCycleError(
+    "RESEARCH_PROVIDER_FILE_COLLISION",
+    `${label} already exists before provider execution`,
+  );
 }
 
 function appendOutput(
@@ -212,50 +285,73 @@ function appendOutput(
   chunks.push(chunk);
 }
 
-async function runFixedProcess(
+export async function runFixedResearchProviderProcess(
   invocation: ResearchProviderProcessInvocation,
 ): Promise<ResearchProviderProcessResult> {
   return await new Promise((resolveResult, reject) => {
+    const detached = process.platform !== "win32";
     const child = spawn(invocation.command, invocation.args, {
       cwd: invocation.cwd,
       env: invocation.env,
+      detached,
       shell: false,
       stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
     });
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
     const outputBytes = { value: 0 };
     let settled = false;
-    const settleError = (error: unknown) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      child.kill("SIGTERM");
-      reject(error);
+    let terminalError: unknown;
+    let timer: NodeJS.Timeout | undefined;
+    let forceTimer: NodeJS.Timeout | undefined;
+
+    const terminate = (error: unknown) => {
+      if (settled || terminalError !== undefined) return;
+      terminalError = error;
+      if (timer) clearTimeout(timer);
+      try {
+        terminateProcessTree(child, "SIGTERM", detached);
+      } catch {
+        // The close/error event below remains the terminal signal.
+      }
+      forceTimer = setTimeout(() => {
+        try {
+          terminateProcessTree(child, "SIGKILL", detached);
+        } catch {
+          // The process may already be gone.
+        }
+      }, PROCESS_TERMINATION_GRACE_MS);
     };
-    const timer = setTimeout(() => {
-      settleError(new ResearchCycleError(
+    timer = setTimeout(() => {
+      terminate(new ResearchCycleError(
         "RESEARCH_PROVIDER_PROCESS_TIMEOUT",
         "fixed provider process timed out",
       ));
     }, invocation.timeoutMs);
 
     child.stdout.on("data", (chunk: Buffer) => {
+      if (terminalError !== undefined) return;
       try {
         appendOutput(stdout, chunk, outputBytes);
       } catch (error) {
-        settleError(error);
+        terminate(error);
       }
     });
     child.stderr.on("data", (chunk: Buffer) => {
+      if (terminalError !== undefined) return;
       try {
         appendOutput(stderr, chunk, outputBytes);
       } catch (error) {
-        settleError(error);
+        terminate(error);
       }
     });
     child.on("error", (error) => {
-      settleError(new ResearchCycleError(
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      if (forceTimer) clearTimeout(forceTimer);
+      reject(new ResearchCycleError(
         "RESEARCH_PROVIDER_PROCESS_START_FAILED",
         "fixed provider process could not start",
         { errorName: error.name },
@@ -264,7 +360,12 @@ async function runFixedProcess(
     child.on("close", (code) => {
       if (settled) return;
       settled = true;
-      clearTimeout(timer);
+      if (timer) clearTimeout(timer);
+      if (forceTimer) clearTimeout(forceTimer);
+      if (terminalError !== undefined) {
+        reject(terminalError);
+        return;
+      }
       resolveResult({
         exitCode: code ?? 1,
         stdout: Buffer.concat(stdout).toString("utf8"),
@@ -329,7 +430,11 @@ function providerCredentialEnvironment(
 function providerArguments(
   request: ResearchProviderRequest,
 ): string[] {
-  const query = requiredText(request.query, "query");
+  const query = requiredText(
+    request.query,
+    "query",
+    MAX_QUERY_CHARACTERS,
+  );
   const args = [
     "provider",
     "invoke",
@@ -346,12 +451,20 @@ function providerArguments(
     if (request.operation === "resolve-library") {
       args.push(
         "--library-name",
-        requiredText(request.libraryName, "libraryName"),
+        requiredText(
+          request.libraryName,
+          "libraryName",
+          MAX_PROVIDER_IDENTIFIER_CHARACTERS,
+        ),
       );
     } else {
       args.push(
         "--library-id",
-        requiredText(request.libraryId, "libraryId"),
+        requiredText(
+          request.libraryId,
+          "libraryId",
+          MAX_PROVIDER_IDENTIFIER_CHARACTERS,
+        ),
       );
     }
   } else if (request.provider === "exa") {
@@ -366,7 +479,11 @@ function providerArguments(
         )),
       );
     } else {
-      const urls = request.urls.map((url) => requiredText(url, "url"));
+      const urls = request.urls.map((url) => requiredText(
+        url,
+        "url",
+        MAX_URL_CHARACTERS,
+      ));
       if (urls.length < 1 || urls.length > 20) {
         throw new ResearchCycleError(
           "RESEARCH_PROVIDER_INPUT_INVALID",
@@ -379,13 +496,17 @@ function providerArguments(
         String(boundedPositiveInteger(
           request.maxCharacters,
           DEFAULT_MAX_CHARACTERS,
-          200_000,
+          MAX_EXA_FETCH_CHARACTERS,
           "maxCharacters",
         )),
       );
     }
   } else {
-    const urls = request.urls.map((url) => requiredText(url, "url"));
+    const urls = request.urls.map((url) => requiredText(
+      url,
+      "url",
+      MAX_URL_CHARACTERS,
+    ));
     if (urls.length < 1 || urls.length > 5) {
       throw new ResearchCycleError(
         "RESEARCH_PROVIDER_INPUT_INVALID",
@@ -397,17 +518,70 @@ function providerArguments(
       "--target-kind",
       request.targetKind,
       "--known-source-reason",
-      requiredText(request.knownSourceReason, "knownSourceReason"),
+      requiredText(
+        request.knownSourceReason,
+        "knownSourceReason",
+        MAX_KNOWN_SOURCE_REASON_CHARACTERS,
+      ),
       "--max-characters",
       String(boundedPositiveInteger(
         request.maxCharacters,
         DEFAULT_MAX_CHARACTERS,
-        200_000,
+        MAX_TARGETED_WEB_CHARACTERS,
         "maxCharacters",
       )),
     );
   }
   return args;
+}
+
+function expectedRouteKind(
+  provider: ResearchProviderRequest["provider"],
+): string {
+  switch (provider) {
+    case "context7":
+      return "context7_upstream_documentation";
+    case "exa":
+      return "exa_open_world_research";
+    case "web":
+      return "targeted_web_search";
+  }
+}
+
+function assertProviderReceiptIdentity(
+  receipt: Record<string, unknown>,
+  request: ResearchProviderRequest,
+): Record<string, unknown> {
+  const result = receipt.result;
+  const expectedRoute = expectedRouteKind(request.provider);
+  if (
+    receipt.schema_version
+      !== "zes.repository-execution-accelerator-receipt.v1"
+    || receipt.receipt_kind !== "provider_invocation"
+    || !isRecord(result)
+    || result.schema_version !== "zes.provider-invocation-result.v1"
+    || result.provider !== request.provider
+    || result.operation !== request.operation
+    || result.research_evidence_route_kind !== expectedRoute
+    || result.no_retry_performed !== true
+    || result.secret_value_or_secret_digest_emitted !== false
+    || (
+      request.provider === "web"
+      && result.open_world_candidate_discovery_performed !== false
+    )
+  ) {
+    throw new ResearchCycleError(
+      "RESEARCH_PROVIDER_RECEIPT_IDENTITY_MISMATCH",
+      "provider receipt does not match the fixed requested provider route",
+      {
+        requestedProvider: request.provider,
+        requestedOperation: request.operation,
+        expectedRoute,
+        secretValueOrDigestExposed: false,
+      },
+    );
+  }
+  return result;
 }
 
 export class ZesResearchProviderBroker {
@@ -420,7 +594,7 @@ export class ZesResearchProviderBroker {
     private readonly manager: ZesResearchCycleManager,
     options: ResearchProviderBrokerOptions = {},
   ) {
-    this.processRunner = options.processRunner ?? runFixedProcess;
+    this.processRunner = options.processRunner ?? runFixedResearchProviderProcess;
     this.parentEnvironment = options.parentEnvironment ?? process.env;
     this.uuid = options.uuid ?? randomUUID;
   }
@@ -454,6 +628,10 @@ export class ZesResearchProviderBroker {
       `provider-evidence-${identity}.json`,
     );
     const evidenceRef = `provider-evidence:${request.provider}:${identity}`;
+    await Promise.all([
+      assertPathAbsent(receiptPath, "provider receipt path"),
+      assertPathAbsent(evidencePath, "provider evidence path"),
+    ]);
     const timeoutSeconds = Math.max(
       1,
       Math.min(180, Math.floor(this.config.timeoutMs / 1_000)),
@@ -484,14 +662,41 @@ export class ZesResearchProviderBroker {
       env: credential.env,
       timeoutMs: this.config.timeoutMs,
     });
-    const providerReceipt = await readPrivateJsonFile(
-      receiptPath,
-      evidenceDirectory,
-      "provider receipt",
+    let providerReceipt: Awaited<ReturnType<typeof readPrivateJsonFile>>;
+    try {
+      providerReceipt = await readPrivateJsonFile(
+        receiptPath,
+        evidenceDirectory,
+        "provider receipt",
+      );
+    } catch (error) {
+      if (
+        error instanceof ResearchCycleError
+        && error.code === "RESEARCH_PROVIDER_FILE_UNAVAILABLE"
+      ) {
+        throw new ResearchCycleError(
+          "RESEARCH_PROVIDER_RECEIPT_UNAVAILABLE",
+          "the fixed provider route terminated without a verifiable receipt",
+          {
+            provider: request.provider,
+            operation: request.operation,
+            providerExitCode: providerResult.exitCode,
+            stdoutPresent: providerResult.stdout.length > 0,
+            stderrPresent: providerResult.stderr.length > 0,
+            capturedOutputByteCount: Buffer.byteLength(
+              providerResult.stdout + providerResult.stderr,
+            ),
+            credentialHandle: credential.credentialHandle,
+            secretValueOrDigestExposed: false,
+          },
+        );
+      }
+      throw error;
+    }
+    const providerPayload = assertProviderReceiptIdentity(
+      providerReceipt.value,
+      request,
     );
-    const providerPayload = isRecord(providerReceipt.value.result)
-      ? providerReceipt.value.result
-      : {};
     if (
       providerResult.exitCode !== 0
       || providerReceipt.value.passed !== true
@@ -559,15 +764,22 @@ export class ZesResearchProviderBroker {
       "provider evidence",
     );
     const traceRef = providerEvidence.value.trace_source_ref;
+    const expectedRoute = expectedRouteKind(request.provider);
     if (
       providerEvidence.value.schema_version
         !== "zes.research-provider-execution-evidence.v1"
       || providerEvidence.value.evidence_ref !== evidenceRef
+      || providerEvidence.value.route_kind !== expectedRoute
+      || providerEvidence.value.purpose !== purpose
       || providerEvidence.value.owner_seeded_framing
         !== context.ownerSeededFraming
       || typeof traceRef !== "string"
       || !traceRef
     ) {
+      await Promise.all([
+        rm(receiptPath, { force: true }),
+        rm(evidencePath, { force: true }),
+      ]);
       throw new ResearchCycleError(
         "RESEARCH_PROVIDER_BINDING_IDENTITY_MISMATCH",
         "bound provider evidence does not match the active research cycle",
@@ -606,7 +818,7 @@ export class ZesResearchProviderBroker {
       },
       evidenceFile: {
         path: evidencePath,
-        sha256: await sha256File(evidencePath),
+        sha256: providerEvidence.sha256,
       },
       policy: {
         fixedProviderFacade: true,

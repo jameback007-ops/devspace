@@ -47,7 +47,10 @@ const localStateAnnotations = {
 };
 
 const externalEvidenceAnnotations = {
-  readOnlyHint: true,
+  // Provider acquisition is externally read-only but it writes bounded
+  // executor-local receipt/evidence files, so it must not advertise a fully
+  // read-only environment contract to the host.
+  readOnlyHint: false,
   destructiveHint: false,
   idempotentHint: false,
   openWorldHint: true,
@@ -84,39 +87,46 @@ const providerTraceSchema = z.object({
 });
 
 const providerPurposeSchema = z.enum(RESEARCH_PROVIDER_PURPOSES);
+const providerQuerySchema = z.string().min(1).max(20_000);
+const providerIdentifierSchema = z.string().min(1).max(2_000);
+const providerUrlSchema = z.string().url().max(8_192);
+const targetedWebUrlSchema = providerUrlSchema.refine(
+  (value) => new URL(value).protocol === "https:",
+  "Targeted Web requires an HTTPS URL.",
+);
 const providerRequestSchema = z.union([
   z.object({
     provider: z.literal("context7"),
     operation: z.literal("resolve-library"),
-    query: z.string().min(1),
-    libraryName: z.string().min(1),
+    query: providerQuerySchema,
+    libraryName: providerIdentifierSchema,
   }),
   z.object({
     provider: z.literal("context7"),
     operation: z.literal("docs"),
-    query: z.string().min(1),
-    libraryId: z.string().min(1),
+    query: providerQuerySchema,
+    libraryId: providerIdentifierSchema,
   }),
   z.object({
     provider: z.literal("exa"),
     operation: z.literal("search"),
-    query: z.string().min(1),
+    query: providerQuerySchema,
     maxResults: z.number().int().min(1).max(20).optional(),
   }),
   z.object({
     provider: z.literal("exa"),
     operation: z.literal("fetch"),
-    query: z.string().min(1),
-    urls: z.array(z.string().url()).min(1).max(20),
-    maxCharacters: z.number().int().min(1).max(200_000).optional(),
+    query: providerQuerySchema,
+    urls: z.array(providerUrlSchema).min(1).max(20),
+    maxCharacters: z.number().int().min(1).max(20_000).optional(),
   }),
   z.object({
     provider: z.literal("web"),
     operation: z.literal("fetch"),
-    query: z.string().min(1),
-    urls: z.array(z.string().url()).min(1).max(5),
+    query: providerQuerySchema,
+    urls: z.array(targetedWebUrlSchema).min(1).max(5),
     targetKind: z.enum(["exact_fact", "named_document", "official_source"]),
-    knownSourceReason: z.string().min(12),
+    knownSourceReason: z.string().min(12).max(4_000),
     maxCharacters: z.number().int().min(1).max(200_000).optional(),
   }),
 ]);

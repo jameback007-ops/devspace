@@ -81,6 +81,20 @@ assert.throws(
   }),
   /cannot pass itself/,
 );
+assert.throws(
+  () => processEnvironment(undefined, {
+    EXA_API_KEY: "must-remain-service-held",
+    [COMMAND_ENV_PASSTHROUGH_VARIABLE]: "EXA_API_KEY",
+  }),
+  /cannot expose fixed service credential EXA_API_KEY/,
+);
+assert.throws(
+  () => processEnvironment(undefined, {
+    CONTEXT7_API_KEY: "must-remain-service-held",
+    [COMMAND_ENV_PASSTHROUGH_VARIABLE]: "CONTEXT7_API_KEY",
+  }),
+  /cannot expose fixed service credential CONTEXT7_API_KEY/,
+);
 
 const foreground = await manager.start({
   workspaceId: "workspace-a",

@@ -1,14 +1,24 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  stat,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import test, { type TestContext } from "node:test";
 import { promisify } from "node:util";
 import type { ZesResearchCycleConfig } from "./config.js";
 import {
   type ResearchProviderProcessInvocation,
   type ResearchProviderProcessResult,
+  runFixedResearchProviderProcess,
   ZesResearchProviderBroker,
 } from "./research-provider-broker.js";
 import {
@@ -126,6 +136,9 @@ function fakeRunner(
           no_retry_performed: true,
           research_evidence_route_kind: routeKind,
           secret_value_or_secret_digest_emitted: false,
+          ...(provider === "web"
+            ? { open_world_candidate_discovery_performed: false }
+            : {}),
         },
       };
       await writeFile(receiptPath, `${JSON.stringify(receipt)}\n`);
@@ -144,6 +157,7 @@ function fakeRunner(
       schema_version: "zes.research-provider-execution-evidence.v1",
       evidence_ref: evidenceRef,
       route_kind: receipt.result.research_evidence_route_kind,
+      purpose: argument(invocation.args, "--purpose"),
       trace_source_ref:
         `trace:provider-invocation:${receipt.receipt_digest_sha256}`,
       owner_seeded_framing:
@@ -287,4 +301,306 @@ test("targeted Web remains credentialless and explicitly non-open-world", async 
       .targetedWebSubstitutesForOpenWorldDiscovery,
     false,
   );
+});
+
+test("Context7 credential remains optional and broker-confined", async (t) => {
+  const current = await fixture(t);
+  const invocations: ResearchProviderProcessInvocation[] = [];
+  const secret = "context7-test-secret-that-must-not-be-returned";
+  const broker = new ZesResearchProviderBroker(
+    current.config,
+    current.manager,
+    {
+      processRunner: fakeRunner(invocations),
+      parentEnvironment: {
+        PATH: process.env.PATH,
+        HOME: process.env.HOME,
+        CONTEXT7_API_KEY: secret,
+      },
+      uuid: () => "00000000-0000-4000-8000-000000000004",
+    },
+  );
+
+  const result = await broker.invoke(
+    current.workspace,
+    "currentness_or_delta_check",
+    {
+      provider: "context7",
+      operation: "resolve-library",
+      query: "Resolve the exact upstream package identity",
+      libraryName: "model-context-protocol",
+    },
+  );
+
+  assert.equal(invocations[0]?.env.CONTEXT7_API_KEY, secret);
+  assert.equal(invocations[1]?.env.CONTEXT7_API_KEY, undefined);
+  assert.equal(JSON.stringify(result).includes(secret), false);
+  assert.deepEqual(result.credentialHandle, {
+    kind: "service_environment_handle",
+    name: "CONTEXT7_API_KEY",
+    present: true,
+    secretValueOrDigestExposed: false,
+  });
+});
+
+test("provider receipt identity cannot be substituted across routes", async (t) => {
+  const current = await fixture(t);
+  const invocations: ResearchProviderProcessInvocation[] = [];
+  const baseRunner = fakeRunner(invocations);
+  const runner = async (invocation: ResearchProviderProcessInvocation) => {
+    const result = await baseRunner(invocation);
+    if (invocation.args.includes("zes-accelerate")) {
+      const receiptPath = argument(invocation.args, "--receipt");
+      const receipt = JSON.parse(await readFile(receiptPath, "utf8")) as {
+        result: Record<string, unknown>;
+      };
+      receipt.result.provider = "web";
+      receipt.result.research_evidence_route_kind = "targeted_web_search";
+      await writeFile(receiptPath, `${JSON.stringify(receipt)}\n`);
+      await chmod(receiptPath, 0o600);
+    }
+    return result;
+  };
+  const broker = new ZesResearchProviderBroker(
+    current.config,
+    current.manager,
+    {
+      processRunner: runner,
+      parentEnvironment: {
+        PATH: process.env.PATH,
+        HOME: process.env.HOME,
+        EXA_API_KEY: "service-held",
+      },
+      uuid: () => "00000000-0000-4000-8000-000000000005",
+    },
+  );
+
+  await assert.rejects(
+    () => broker.invoke(
+      current.workspace,
+      "fresh_acquisition",
+      {
+        provider: "exa",
+        operation: "search",
+        query: "Find competing open-world evidence",
+      },
+    ),
+    (error: unknown) => error instanceof ResearchCycleError
+      && error.code === "RESEARCH_PROVIDER_RECEIPT_IDENTITY_MISMATCH",
+  );
+  assert.equal(invocations.length, 1);
+});
+
+test("provider evidence paths must be fresh before process execution", async (t) => {
+  const current = await fixture(t);
+  const invocations: ResearchProviderProcessInvocation[] = [];
+  const identity = "00000000000040008000000000000006";
+  const context = await current.manager.providerEvidenceContext(current.workspace);
+  const occupied = join(
+    context.evidenceDirectory,
+    `provider-receipt-${identity}.json`,
+  );
+  await writeFile(occupied, "{}\n", { mode: 0o600 });
+  const broker = new ZesResearchProviderBroker(
+    current.config,
+    current.manager,
+    {
+      processRunner: fakeRunner(invocations),
+      parentEnvironment: {
+        PATH: process.env.PATH,
+        HOME: process.env.HOME,
+        EXA_API_KEY: "service-held",
+      },
+      uuid: () => "00000000-0000-4000-8000-000000000006",
+    },
+  );
+
+  await assert.rejects(
+    () => broker.invoke(
+      current.workspace,
+      "fresh_acquisition",
+      {
+        provider: "exa",
+        operation: "search",
+        query: "Find open-world evidence",
+      },
+    ),
+    (error: unknown) => error instanceof ResearchCycleError
+      && error.code === "RESEARCH_PROVIDER_FILE_COLLISION",
+  );
+  assert.equal(invocations.length, 0);
+});
+
+test("provider receipt symlink substitution is rejected", async (t) => {
+  const current = await fixture(t);
+  const invocations: ResearchProviderProcessInvocation[] = [];
+  const runner = async (invocation: ResearchProviderProcessInvocation) => {
+    invocations.push(invocation);
+    const receiptPath = argument(invocation.args, "--receipt");
+    const backingPath = join(dirname(receiptPath), "receipt-backing.json");
+    await writeFile(backingPath, "{}\n", { mode: 0o600 });
+    await symlink(backingPath, receiptPath);
+    return { exitCode: 0, stdout: "", stderr: "" };
+  };
+  const broker = new ZesResearchProviderBroker(
+    current.config,
+    current.manager,
+    {
+      processRunner: runner,
+      parentEnvironment: {
+        PATH: process.env.PATH,
+        HOME: process.env.HOME,
+        EXA_API_KEY: "service-held",
+      },
+      uuid: () => "00000000-0000-4000-8000-000000000007",
+    },
+  );
+
+  await assert.rejects(
+    () => broker.invoke(
+      current.workspace,
+      "fresh_acquisition",
+      {
+        provider: "exa",
+        operation: "search",
+        query: "Find open-world evidence",
+      },
+    ),
+    (error: unknown) => error instanceof ResearchCycleError
+      && error.code === "RESEARCH_PROVIDER_FILE_INVALID",
+  );
+});
+
+test("missing receipt is typed and never returns captured secret output", async (t) => {
+  const current = await fixture(t);
+  const secret = "exa-secret-only-in-child-output";
+  const broker = new ZesResearchProviderBroker(
+    current.config,
+    current.manager,
+    {
+      processRunner: async () => ({
+        exitCode: 2,
+        stdout: `provider output ${secret}`,
+        stderr: `provider error ${secret}`,
+      }),
+      parentEnvironment: {
+        PATH: process.env.PATH,
+        HOME: process.env.HOME,
+        EXA_API_KEY: secret,
+      },
+      uuid: () => "00000000-0000-4000-8000-000000000008",
+    },
+  );
+
+  await assert.rejects(
+    () => broker.invoke(
+      current.workspace,
+      "fresh_acquisition",
+      {
+        provider: "exa",
+        operation: "search",
+        query: "Find open-world evidence",
+      },
+    ),
+    (error: unknown) => {
+      assert.ok(error instanceof ResearchCycleError);
+      assert.equal(error.code, "RESEARCH_PROVIDER_RECEIPT_UNAVAILABLE");
+      assert.equal(JSON.stringify(error.details).includes(secret), false);
+      return true;
+    },
+  );
+});
+
+test("broker input bounds reject oversized provider requests before execution", async (t) => {
+  const current = await fixture(t);
+  const invocations: ResearchProviderProcessInvocation[] = [];
+  const broker = new ZesResearchProviderBroker(
+    current.config,
+    current.manager,
+    {
+      processRunner: fakeRunner(invocations),
+      parentEnvironment: {
+        PATH: process.env.PATH,
+        HOME: process.env.HOME,
+        EXA_API_KEY: "service-held",
+      },
+      uuid: () => "00000000-0000-4000-8000-000000000009",
+    },
+  );
+
+  await assert.rejects(
+    () => broker.invoke(
+      current.workspace,
+      "fresh_acquisition",
+      {
+        provider: "exa",
+        operation: "search",
+        query: "x".repeat(20_001),
+      },
+    ),
+    (error: unknown) => error instanceof ResearchCycleError
+      && error.code === "RESEARCH_PROVIDER_INPUT_INVALID",
+  );
+  await assert.rejects(
+    () => broker.invoke(
+      current.workspace,
+      "fresh_acquisition",
+      {
+        provider: "exa",
+        operation: "fetch",
+        query: "Fetch exact open-world candidate evidence",
+        urls: ["https://example.test/evidence"],
+        maxCharacters: 20_001,
+      },
+    ),
+    (error: unknown) => error instanceof ResearchCycleError
+      && error.code === "RESEARCH_PROVIDER_INPUT_INVALID",
+  );
+  assert.equal(invocations.length, 0);
+});
+
+test("fixed provider timeout terminates its descendant process group", async (t) => {
+  if (process.platform === "win32") {
+    t.skip("POSIX process-group assertion");
+    return;
+  }
+  const root = await mkdtemp(join(tmpdir(), "devspace-provider-timeout-"));
+  const pidPath = join(root, "descendant.pid");
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const script = [
+    "const { spawn } = require('node:child_process');",
+    "const { writeFileSync } = require('node:fs');",
+    "const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });",
+    "writeFileSync(process.argv[1], String(child.pid));",
+    "setInterval(() => {}, 1000);",
+  ].join(" ");
+
+  await assert.rejects(
+    () => runFixedResearchProviderProcess({
+      command: process.execPath,
+      args: ["-e", script, pidPath],
+      cwd: root,
+      env: { PATH: process.env.PATH ?? "" },
+      timeoutMs: 150,
+    }),
+    (error: unknown) => error instanceof ResearchCycleError
+      && error.code === "RESEARCH_PROVIDER_PROCESS_TIMEOUT",
+  );
+
+  const descendantPid = Number((await readFile(pidPath, "utf8")).trim());
+  assert.ok(Number.isInteger(descendantPid) && descendantPid > 1);
+  let alive = true;
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    try {
+      process.kill(descendantPid, 0);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ESRCH") {
+        alive = false;
+        break;
+      }
+      throw error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  assert.equal(alive, false, "descendant process survived provider timeout");
 });

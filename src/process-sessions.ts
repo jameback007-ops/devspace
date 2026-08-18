@@ -16,6 +16,14 @@ const DEFAULT_COLUMNS = 80;
 const DEFAULT_ROWS = 24;
 export const COMMAND_ENV_PASSTHROUGH_VARIABLE = "DEVSPACE_COMMAND_ENV_PASSTHROUGH";
 
+// These credentials belong to fixed, typed DevSpace service routes. Allowing
+// them through the generic command passthrough would collapse the broker
+// boundary and make them visible to arbitrary exec_command payloads.
+const FIXED_SERVICE_CREDENTIAL_KEYS = new Set([
+  "CONTEXT7_API_KEY",
+  "EXA_API_KEY",
+]);
+
 const SAFE_PARENT_ENVIRONMENT_KEYS = [
   "PATH",
   "HOME",
@@ -180,6 +188,11 @@ function validatedEnvironmentKey(value: string): string {
   }
   if (value === COMMAND_ENV_PASSTHROUGH_VARIABLE) {
     throw new Error(`${COMMAND_ENV_PASSTHROUGH_VARIABLE} cannot pass itself to command processes.`);
+  }
+  if (FIXED_SERVICE_CREDENTIAL_KEYS.has(value)) {
+    throw new Error(
+      `${COMMAND_ENV_PASSTHROUGH_VARIABLE} cannot expose fixed service credential ${value} to command processes.`,
+    );
   }
   return value;
 }
