@@ -27,12 +27,22 @@ test("fixed self-repository preflight and effect publish one validated zero-behi
   assert.equal(preflight.mergeCommitCount, 0);
   assert.equal(preflight.remoteUrlIdentityMatches, true);
   assert.equal(preflight.expectedPublication?.expectedOldSha, fixture.remoteBaseSha);
+  assert.equal(preflight.receiptReuse?.validationReceipt, "reused_exact_head_bound");
+  assert.equal(preflight.receiptReuse?.fullValidationRerunRequired, false);
+  assert.equal(preflight.publicationFreeze?.mode, "publication_only_terminal");
+  assert.equal(
+    preflight.publicationFreeze?.newResearchOrFeatureExpansionAllowed,
+    false,
+  );
+  assert.ok((preflight.stageTimingsMs?.total ?? -1) >= 0);
 
   const result = await fixture.manager.execute({
     workspaceId: fixture.session.id,
     planIdSha256: preflight.planIdSha256,
   });
   assert.equal(result.outcome, "published");
+  assert.equal(result.publicationEffectTerminal, true);
+  assert.equal(result.deploymentFollowUpRequired, true);
   assert.equal(await remoteHead(fixture.remote), fixture.candidateHeadSha);
   assert.equal(
     await gitOutput(fixture.repository, ["rev-parse", "refs/remotes/owner/main"]),
@@ -84,21 +94,59 @@ test("fixed remote identity mismatch blocks self-publication", async (t) => {
   assert.equal(preflight.safeToPublish, false);
 });
 
-test("self-publication fails closed without explicit writer, effect, and safety attestations", async (t) => {
+test("source publication does not require self-authored writer, effect, or safety attestations", async (t) => {
   const fixture = await publicationFixture(t, {
     effectsEnabled: false,
     includePublicationAttestations: false,
+    candidateRelativePath: ".agents/skills/example/SKILL.md",
+  });
+  const preflight = await fixture.manager.preflight({ workspaceId: fixture.session.id });
+
+  assert.equal(preflight.status, "eligible");
+  assert.equal(preflight.publicationProfile?.riskClass, "source_only_fast_path");
+  assert.equal(preflight.policy.explicitWriterReleaseRequired, false);
+  assert.equal(preflight.policy.explicitEffectTerminalityRequired, false);
+  assert.equal(preflight.policy.explicitPublicationSafetyAttestationRequired, false);
+});
+
+test("a declared unresolved material effect blocks repository publication", async (t) => {
+  const fixture = await publicationFixture(t, {
+    effectsEnabled: false,
+    includePublicationAttestations: false,
+    effectState: "in_flight",
+    effectKeys: ["deploy:nexus:test"],
+    candidateRelativePath: "docs/effect.md",
   });
   const preflight = await fixture.manager.preflight({ workspaceId: fixture.session.id });
 
   assert.equal(preflight.status, "blocked");
-  assert.ok(preflight.blockingFactors.includes("candidate_writer_state_missing"));
-  assert.ok(preflight.blockingFactors.includes("candidate_effect_state_missing"));
+  assert.equal(
+    preflight.publicationProfile?.materialEffectReconciliationRequired,
+    true,
+  );
   assert.ok(
     preflight.blockingFactors.includes(
-      "candidate_publication_safety_not_attested",
+      "declared_material_effect_requires_reconciliation",
     ),
   );
+});
+
+test("a terminal declared material effect does not block repository publication", async (t) => {
+  const fixture = await publicationFixture(t, {
+    effectsEnabled: false,
+    includePublicationAttestations: false,
+    effectState: "terminal",
+    effectKeys: ["deploy:nexus:test"],
+    candidateRelativePath: "docs/effect.md",
+  });
+  const preflight = await fixture.manager.preflight({ workspaceId: fixture.session.id });
+
+  assert.equal(preflight.status, "eligible");
+  assert.equal(
+    preflight.publicationProfile?.materialEffectReconciliationRequired,
+    false,
+  );
+  assert.equal(preflight.publicationProfile?.riskClass, "source_only_fast_path");
 });
 
 test("branch-only retained candidate publishes the exact candidate object instead of checkout HEAD", async (t) => {
@@ -123,6 +171,24 @@ test("branch-only retained candidate publishes the exact candidate object instea
     await gitOutput(fixture.repository, ["rev-parse", "refs/remotes/owner/main"]),
     fixture.candidateHeadSha,
   );
+});
+
+test("replaying a completed publication plan returns the terminal receipt without pushing again", async (t) => {
+  const fixture = await publicationFixture(t, { effectsEnabled: true });
+  const preflight = await fixture.manager.preflight({ workspaceId: fixture.session.id });
+  const first = await fixture.manager.execute({
+    workspaceId: fixture.session.id,
+    planIdSha256: preflight.planIdSha256,
+  });
+  const second = await fixture.manager.execute({
+    workspaceId: fixture.session.id,
+    planIdSha256: preflight.planIdSha256,
+  });
+
+  assert.equal(first.outcome, "published");
+  assert.equal(second.outcome, "published");
+  assert.equal(second.idempotentReplay, true);
+  assert.equal(await remoteHead(fixture.remote), fixture.candidateHeadSha);
 });
 
 test("scope projection never imports a missing remote authority object", async (t) => {
@@ -177,6 +243,9 @@ async function publicationFixture(
     effectsEnabled: boolean;
     expectedRemoteUrl?: string;
     includePublicationAttestations?: boolean;
+    effectState?: string;
+    effectKeys?: string[];
+    candidateRelativePath?: string;
   },
 ): Promise<{
   repository: string;
@@ -206,7 +275,10 @@ async function publicationFixture(
   const remoteBaseSha = await gitOutput(repository, ["rev-parse", "HEAD"]);
 
   await git(repository, ["worktree", "add", "-b", "candidate", worktree, "main"]);
-  await writeFile(join(worktree, "candidate.txt"), "candidate\n");
+  const candidateRelativePath = options.candidateRelativePath ?? "candidate.txt";
+  const candidatePath = join(worktree, candidateRelativePath);
+  await mkdir(dirname(candidatePath), { recursive: true });
+  await writeFile(candidatePath, "candidate\n");
   await git(worktree, ["add", "."]);
   await git(worktree, ["commit", "-m", "Candidate"]);
   const candidateHeadSha = await gitOutput(worktree, ["rev-parse", "HEAD"]);
@@ -229,11 +301,17 @@ async function publicationFixture(
       semantic: {
         validationState: "passed",
         validationRefs: ["test:self-repository-publication"],
+        ...(options.effectState === undefined
+          ? {}
+          : { effectState: options.effectState }),
+        ...(options.effectKeys === undefined
+          ? {}
+          : { effectKeys: options.effectKeys }),
         ...(options.includePublicationAttestations === false
           ? {}
           : {
               writerState: "released",
-              effectState: "none",
+              effectState: options.effectState ?? "none",
               safeToPublish: true,
             }),
       },

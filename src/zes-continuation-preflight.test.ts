@@ -212,6 +212,21 @@ const projector = new ZesContinuationPreflightProjector({
   },
 });
 
+const deferred = await projector.project({
+  refresh: false,
+  deferReason:
+    "repository_publication_fast_path_does_not_require_global_runtime_refresh",
+});
+assert.equal(deferred.status, "deferred");
+assert.equal(refreshCalls, 0, "repository fast path must not start a global refresh");
+if (deferred.status === "deferred") {
+  assert.equal(
+    deferred.nextAction,
+    "invoke_direct_tool_only_for_governed_checkout_runtime_or_effect_intent",
+  );
+  assert.equal(deferred.policy.repositoryFastPathMayDeferAutomaticRefresh, true);
+}
+
 const concurrent = await Promise.all([
   projector.project(),
   projector.project(),

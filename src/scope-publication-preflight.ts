@@ -1,8 +1,6 @@
 import { createHash } from "node:crypto";
-import { constants as fsConstants } from "node:fs";
-import { access, readFile, realpath } from "node:fs/promises";
+import { realpath } from "node:fs/promises";
 import { execFile } from "node:child_process";
-import { isAbsolute, resolve } from "node:path";
 import {
   fixedZesRepositoryRoot,
   type ZesContinuationPreflightProjection,
@@ -34,7 +32,7 @@ export interface ScopePublicationGitObservation {
   headSha?: string;
   originMainSha?: string;
   authoritativeRemoteMainPresentLocally: boolean;
-  remoteTrackingMatchesAuthority: boolean;
+  remoteTrackingMatchesAuthority?: boolean;
   candidateDescendsFromAuthority: boolean;
   aheadCount?: number;
   behindCount?: number;
@@ -42,16 +40,21 @@ export interface ScopePublicationGitObservation {
   dirtyPathCount: number;
   worktreeClean: boolean;
   pushDefault?: string;
-  hooksPathConfigured: boolean;
-  prePushHookExecutable: boolean;
+  hooksPathConfigured?: boolean;
+  prePushHookExecutable?: boolean;
   prePushHookDigestSha256?: string;
   expectedPrePushHookDigestSha256?: string;
-  prePushHookIdentityMatches: boolean;
-  publicationControlsFailClosed: boolean;
+  prePushHookIdentityMatches?: boolean;
+  publicationControlsFailClosed?: boolean;
   evidenceRefs: string[];
 }
 
 export interface ScopePublicationGitPort {
+  authoritativeRemoteMain(): Promise<{
+    sha: string;
+    repositoryIdentityDigestSha256: string;
+    evidenceRefs: string[];
+  }>;
   inspect(
     workspace: ScopeLinkedWorkspace,
     authoritativeRemoteMainSha: string,
@@ -77,6 +80,14 @@ export interface ScopePublicationCandidateAssessment {
   validationEvidenceAuthority:
     "executor_local_git_bound_recovery_capsule";
   validationEvidenceRevalidationRequired: true;
+  fullValidationRerunRequired: false;
+  evidenceProfile: {
+    requiredEvidence: string[];
+    skippedEvidence: Array<{
+      evidence: string;
+      reasonCode: string;
+    }>;
+  };
   blockingFactors: string[];
   evidenceRefs: string[];
   expectedPublication?: {
@@ -88,13 +99,12 @@ export interface ScopePublicationCandidateAssessment {
     remoteReadbackRequired: true;
     effectGateMustRevalidateCandidateAndAuthority: true;
     validationMustBeRevalidatedBeforeEffect: true;
-    prePushGuard: {
-      hookDigestSha256: string;
-      environment: {
-        ZES_CHECKPOINT_PUBLICATION_GUARD: "1";
-        ZES_CHECKPOINT_PUBLICATION_COMMIT: string;
-        ZES_CHECKPOINT_PUBLICATION_EXPECTED_OLD: string;
-      };
+    validationReceiptMayBeReusedWhenHeadUnchanged: true;
+    fullValidationRerunRequired: false;
+    localPrePushHookRequired: false;
+    optionalLocalDefense?: {
+      prePushHookDigestSha256?: string;
+      pushDefault?: string;
     };
   };
 }
@@ -113,22 +123,31 @@ export interface ScopePublicationPreflight {
   ignoredWorkspaceCount: number;
   inspectionFailureCount: number;
   candidates: ScopePublicationCandidateAssessment[];
+  stageTimingsMs?: {
+    remoteAuthority: number;
+    candidateInspection: number;
+    candidateAssessment: number;
+    total: number;
+  };
   error?: {
     code: "scope_publication_preflight_unavailable";
     diagnosticDigestSha256: string;
   };
   policy: {
     authority:
-      "scope_linked_git_readback_combined_with_fixed_ZES_product_preflight";
+      "scope_linked_git_readback_with_fixed_remote_authority";
     inputWorkspaceSource: "execution_scope_registry_only";
     arbitraryWorkspacePathAccepted: false;
     remoteMainAuthoritySource:
-      "fixed_product_preflight_safe_checkpoint_commit_ref";
+      "fresh_fixed_repository_git_ls_remote";
     localOriginTrackingIsRemoteAuthority: false;
     runtimeReconciliationBlocksUnrelatedSourcePublication: false;
     candidateValidationCheckpointRequired: true;
     capsuleValidationIsPublicationAuthority: false;
     effectGateMustRevalidateValidationAndGit: true;
+    unrelatedRuntimeWriterStateIsAdvisoryOnly: true;
+    branchTrackingAndLocalHookAreNotPublicationAuthority: true;
+    exactHeadBoundValidationReceiptMayBeReused: true;
     publicationEffectPerformed: false;
     publicationAuthorityGranted: false;
     compareAndSwapAndRemoteReadbackRequired: true;
@@ -149,21 +168,26 @@ interface GitCommandResult {
 }
 
 interface FixedRepositoryIdentity {
+  root: string;
+  originUrl: string;
   originDigestSha256: string;
-  prePushHookDigestSha256: string;
+  repositoryIdentityDigestSha256: string;
 }
 
 const POLICY = {
-  authority: "scope_linked_git_readback_combined_with_fixed_ZES_product_preflight",
+  authority: "scope_linked_git_readback_with_fixed_remote_authority",
   inputWorkspaceSource: "execution_scope_registry_only",
   arbitraryWorkspacePathAccepted: false,
   remoteMainAuthoritySource:
-    "fixed_product_preflight_safe_checkpoint_commit_ref",
+    "fresh_fixed_repository_git_ls_remote",
   localOriginTrackingIsRemoteAuthority: false,
   runtimeReconciliationBlocksUnrelatedSourcePublication: false,
   candidateValidationCheckpointRequired: true,
   capsuleValidationIsPublicationAuthority: false,
   effectGateMustRevalidateValidationAndGit: true,
+  unrelatedRuntimeWriterStateIsAdvisoryOnly: true,
+  branchTrackingAndLocalHookAreNotPublicationAuthority: true,
+  exactHeadBoundValidationReceiptMayBeReused: true,
   publicationEffectPerformed: false,
   publicationAuthorityGranted: false,
   compareAndSwapAndRemoteReadbackRequired: true,
@@ -179,6 +203,10 @@ function sha256(value: string): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
+function elapsedMs(startedAt: number): number {
+  return Math.max(0, Math.round((performance.now() - startedAt) * 10) / 10);
+}
+
 function sortedUnique(values: string[]): string[] {
   return [...new Set(values)].sort();
 }
@@ -187,14 +215,6 @@ function normalizedSha(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
   const normalized = value.trim().toLowerCase();
   return GIT_SHA_PATTERN.test(normalized) ? normalized : undefined;
-}
-
-function commitRefSha(value: unknown): string | undefined {
-  if (typeof value !== "string") return undefined;
-  const matched = /^git:commit:([a-f0-9]{40}(?:[a-f0-9]{24})?)$/.exec(
-    value.trim().toLowerCase(),
-  );
-  return matched?.[1];
 }
 
 function linkedWorkspaces(value: unknown): ScopeLinkedWorkspace[] {
@@ -261,42 +281,16 @@ function recoveryBinding(value: unknown): {
   };
 }
 
-function authoritativeRemoteMainSha(
-  projection: ZesContinuationPreflightProjection,
-): string | undefined {
-  if (projection.status !== "available") return undefined;
-  const safeCheckpoint = record(projection.preflight.safe_checkpoint);
-  return commitRefSha(safeCheckpoint?.commit_ref);
-}
-
 function globalPublicationBlockers(
-  projection: ZesContinuationPreflightProjection,
+  _projection: ZesContinuationPreflightProjection,
 ): string[] {
-  if (projection.status !== "available") {
-    return ["continuation_control_plane_not_available"];
-  }
-  const preflight = projection.preflight;
-  const blockers: string[] = [];
-  if (preflight.active_writer_detected === true) {
-    blockers.push("active_writer_detected");
-  } else if (preflight.active_writer_detected !== false) {
-    blockers.push("active_writer_state_unobserved");
-  }
-  if (preflight.writer_state_uncertain === true) {
-    blockers.push("writer_state_uncertain");
-  } else if (preflight.writer_state_uncertain !== false) {
-    blockers.push("writer_uncertainty_state_unobserved");
-  }
-  if (preflight.publication_authority_valid !== true) {
-    blockers.push("publication_authority_invalid_or_unobserved");
-  }
-  if (preflight.publication_controls_fail_closed !== true) {
-    blockers.push("governed_publication_controls_not_fail_closed");
-  }
-  if (preflight.safe_to_mutate_live !== true) {
-    blockers.push("governed_checkout_mutation_not_eligible");
-  }
-  return blockers;
+  // The global ZES continuation projection describes the governed checkout
+  // and runtime. It remains useful advisory evidence, but it cannot prove that
+  // a separate clean candidate worktree has an active repository writer or an
+  // unresolved effect. Repository publication is instead guarded by exact
+  // candidate validation, fixed remote identity, fresh remote authority, a
+  // compare-and-swap effect, and authoritative post-effect readback.
+  return [];
 }
 
 function gitCommand(
@@ -332,21 +326,73 @@ function gitCommand(
   });
 }
 
-async function executable(path: string): Promise<boolean> {
-  try {
-    await access(path, fsConstants.X_OK);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 export class NativeScopePublicationGitPort implements ScopePublicationGitPort {
   private fixedIdentity?: Promise<FixedRepositoryIdentity>;
 
   constructor(
     private readonly fixedRepositoryRoot = fixedZesRepositoryRoot(),
   ) {}
+
+  async authoritativeRemoteMain(): Promise<{
+    sha: string;
+    repositoryIdentityDigestSha256: string;
+    evidenceRefs: string[];
+  }> {
+    const fixed = await this.fixedRepositoryIdentity();
+    const remoteRef = "refs/heads/main";
+    const listed = await gitCommand(fixed.root, [
+      "ls-remote",
+      "--exit-code",
+      fixed.originUrl,
+      remoteRef,
+    ]);
+    const line = listed.stdout
+      .split(/\r?\n/)
+      .find((entry) => entry.endsWith(`\t${remoteRef}`));
+    const sha = normalizedSha(line?.split(/\s+/)[0]);
+    if (!sha) {
+      throw new Error("fixed_ZES_remote_main_readback_invalid");
+    }
+    const available = await gitCommand(
+      fixed.root,
+      ["cat-file", "-e", `${sha}^{commit}`],
+      [0, 1, 128],
+    );
+    if (available.exitCode !== 0) {
+      const fetched = await gitCommand(
+        fixed.root,
+        [
+          "fetch",
+          "--no-tags",
+          "--no-write-fetch-head",
+          fixed.originUrl,
+          remoteRef,
+        ],
+        [0, 1, 128],
+      );
+      if (fetched.exitCode !== 0) {
+        throw new Error("fixed_ZES_remote_main_fetch_failed");
+      }
+    }
+    const verified = await gitCommand(
+      fixed.root,
+      ["cat-file", "-e", `${sha}^{commit}`],
+      [0, 1, 128],
+    );
+    if (verified.exitCode !== 0) {
+      throw new Error("fixed_ZES_remote_main_object_unavailable");
+    }
+    return {
+      sha,
+      repositoryIdentityDigestSha256:
+        fixed.repositoryIdentityDigestSha256,
+      evidenceRefs: [
+        `git:authoritative-remote-main:${sha}`,
+        `git-fixed-repository-identity-sha256:${fixed.repositoryIdentityDigestSha256}`,
+        `git-origin-identity-sha256:${fixed.originDigestSha256}`,
+      ],
+    };
+  }
 
   async inspect(
     workspace: ScopeLinkedWorkspace,
@@ -368,15 +414,9 @@ export class NativeScopePublicationGitPort implements ScopePublicationGitPort {
         repositoryIdentityMatches,
         workspaceRootVerified,
         authoritativeRemoteMainPresentLocally: false,
-        remoteTrackingMatchesAuthority: false,
         candidateDescendsFromAuthority: false,
         dirtyPathCount: 0,
         worktreeClean: false,
-        hooksPathConfigured: false,
-        prePushHookExecutable: false,
-        expectedPrePushHookDigestSha256: fixed.prePushHookDigestSha256,
-        prePushHookIdentityMatches: false,
-        publicationControlsFailClosed: false,
         evidenceRefs: [
           `git-workspace-root-sha256:${sha256(root)}`,
           `git-origin-identity-sha256:${repositoryIdentityDigestSha256}`,
@@ -384,32 +424,16 @@ export class NativeScopePublicationGitPort implements ScopePublicationGitPort {
       };
     }
 
-    const branch = await gitCommand(
-      root,
-      ["symbolic-ref", "--short", "-q", "HEAD"],
-      [0, 1],
-    );
-    const branchName = branch.exitCode === 0 && branch.stdout
-      ? branch.stdout
-      : undefined;
     const [
       head,
-      originMain,
       status,
-      pushDefault,
-      hooksPath,
       remoteMainPresent,
       ancestor,
       aheadBehind,
-      branchRemote,
-      branchMerge,
       mergeCommits,
     ] = await Promise.all([
       gitCommand(root, ["rev-parse", "HEAD"]),
-      gitCommand(root, ["rev-parse", "refs/remotes/origin/main"], [0, 128]),
       gitCommand(root, ["status", "--porcelain=v1", "-z"]),
-      gitCommand(root, ["config", "--get", "push.default"], [0, 1]),
-      gitCommand(root, ["config", "--path", "--get", "core.hooksPath"], [0, 1]),
       gitCommand(
         root,
         ["cat-file", "-e", `${authoritativeRemoteMainSha}^{commit}`],
@@ -425,12 +449,6 @@ export class NativeScopePublicationGitPort implements ScopePublicationGitPort {
         ["rev-list", "--left-right", "--count", `${authoritativeRemoteMainSha}...HEAD`],
         [0, 128],
       ),
-      branchName
-        ? gitCommand(root, ["config", "--get", `branch.${branchName}.remote`], [0, 1])
-        : Promise.resolve({ stdout: "", exitCode: 1 }),
-      branchName
-        ? gitCommand(root, ["config", "--get", `branch.${branchName}.merge`], [0, 1])
-        : Promise.resolve({ stdout: "", exitCode: 1 }),
       gitCommand(
         root,
         [
@@ -442,38 +460,15 @@ export class NativeScopePublicationGitPort implements ScopePublicationGitPort {
       ),
     ]);
     const headSha = normalizedSha(head.stdout);
-    const originMainSha = normalizedSha(originMain.stdout);
     const statusEntries = status.stdout.length === 0
       ? []
       : status.stdout.split("\0").filter(Boolean);
     const dirtyPathCount = statusEntries.length;
-    const configuredHooksPath = hooksPath.exitCode === 0 && hooksPath.stdout
-      ? hooksPath.stdout
-      : undefined;
-    const prePushHookPath = configuredHooksPath
-      ? resolve(
-          isAbsolute(configuredHooksPath) ? "/" : root,
-          configuredHooksPath,
-          "pre-push",
-        )
-      : undefined;
-    const prePushHookExecutable = prePushHookPath
-      ? await executable(prePushHookPath)
-      : false;
-    const prePushHookDigestSha256 = prePushHookExecutable && prePushHookPath
-      ? sha256(await readFile(prePushHookPath, "utf8"))
-      : undefined;
-    const prePushHookIdentityMatches =
-      prePushHookDigestSha256 === fixed.prePushHookDigestSha256;
     const counts = aheadBehind.exitCode === 0
       ? aheadBehind.stdout.split(/\s+/).map((item) => Number.parseInt(item, 10))
       : [];
     const behindCount = Number.isInteger(counts[0]) ? counts[0] : undefined;
     const aheadCount = Number.isInteger(counts[1]) ? counts[1] : undefined;
-    const publicationControlsFailClosed =
-      pushDefault.stdout === "nothing"
-      && prePushHookExecutable
-      && prePushHookIdentityMatches;
     const mergeCommitCount = mergeCommits.exitCode === 0
       ? mergeCommits.stdout.split("\n").filter(Boolean).length
       : undefined;
@@ -483,39 +478,18 @@ export class NativeScopePublicationGitPort implements ScopePublicationGitPort {
       repositoryIdentityDigestSha256,
       repositoryIdentityMatches: true,
       workspaceRootVerified: true,
-      ...(branchName ? { branchName } : {}),
-      ...(branchRemote.stdout ? { branchRemote: branchRemote.stdout } : {}),
-      ...(branchMerge.stdout ? { branchMergeRef: branchMerge.stdout } : {}),
       ...(headSha ? { headSha } : {}),
-      ...(originMainSha ? { originMainSha } : {}),
       authoritativeRemoteMainPresentLocally: remoteMainPresent.exitCode === 0,
-      remoteTrackingMatchesAuthority: originMainSha === authoritativeRemoteMainSha,
       candidateDescendsFromAuthority: ancestor.exitCode === 0,
       ...(aheadCount === undefined ? {} : { aheadCount }),
       ...(behindCount === undefined ? {} : { behindCount }),
       ...(mergeCommitCount === undefined ? {} : { mergeCommitCount }),
       dirtyPathCount,
       worktreeClean: dirtyPathCount === 0,
-      ...(pushDefault.stdout ? { pushDefault: pushDefault.stdout } : {}),
-      hooksPathConfigured: Boolean(configuredHooksPath),
-      prePushHookExecutable,
-      ...(prePushHookDigestSha256
-        ? { prePushHookDigestSha256 }
-        : {}),
-      expectedPrePushHookDigestSha256: fixed.prePushHookDigestSha256,
-      prePushHookIdentityMatches,
-      publicationControlsFailClosed,
       evidenceRefs: [
         `git-workspace-root-sha256:${sha256(root)}`,
         `git-origin-identity-sha256:${repositoryIdentityDigestSha256}`,
         ...(headSha ? [`git:commit:${headSha}`] : []),
-        ...(originMainSha ? [`git:origin-main:${originMainSha}`] : []),
-        ...(prePushHookPath
-          ? [`git-pre-push-hook-path-sha256:${sha256(prePushHookPath)}`]
-          : []),
-        ...(prePushHookDigestSha256
-          ? [`git-pre-push-hook-sha256:${prePushHookDigestSha256}`]
-          : []),
       ],
     };
   }
@@ -525,23 +499,16 @@ export class NativeScopePublicationGitPort implements ScopePublicationGitPort {
     const pending = (async () => {
       const root = await realpath(this.fixedRepositoryRoot);
       const origin = await gitCommand(root, ["remote", "get-url", "origin"]);
-      const hooksPath = await gitCommand(
-        root,
-        ["config", "--path", "--get", "core.hooksPath"],
-      );
-      const prePushHookPath = resolve(
-        isAbsolute(hooksPath.stdout) ? "/" : root,
-        hooksPath.stdout,
-        "pre-push",
-      );
-      if (!await executable(prePushHookPath)) {
-        throw new Error("fixed_ZES_pre_push_hook_missing_or_not_executable");
-      }
+      const originUrl = origin.stdout;
       return {
-        originDigestSha256: sha256(origin.stdout),
-        prePushHookDigestSha256: sha256(
-          await readFile(prePushHookPath, "utf8"),
-        ),
+        root,
+        originUrl,
+        originDigestSha256: sha256(originUrl),
+        repositoryIdentityDigestSha256: sha256([
+          root,
+          originUrl,
+          "refs/heads/main",
+        ].join("\0")),
       };
     })();
     this.fixedIdentity = pending;
@@ -567,31 +534,9 @@ implements ScopePublicationPreflightSource {
     semanticRecovery?: unknown;
     continuationPreflight: ZesContinuationPreflightProjection;
   }): Promise<ScopePublicationPreflight> {
+    const totalStartedAt = performance.now();
     const assessedAt = new Date(this.now()).toISOString();
     const continuation = input.continuationPreflight;
-    if (continuation.status !== "available") {
-      return {
-        schemaVersion: 1,
-        capabilityRef: "zes.scope-publication.preflight.v1",
-        status: "awaiting_continuation_control_plane",
-        assessedAt,
-        continuationProjectionRef: continuation.projectionRef,
-        candidateCount: 0,
-        ignoredWorkspaceCount: linkedWorkspaces(input.workspaces).length,
-        inspectionFailureCount: 0,
-        candidates: [],
-        policy: POLICY,
-      };
-    }
-    const remoteMainSha = authoritativeRemoteMainSha(continuation);
-    if (!remoteMainSha) {
-      return this.unavailable(
-        assessedAt,
-        continuation.projectionRef,
-        new Error("fixed_product_preflight_remote_main_missing"),
-      );
-    }
-
     const workspaces = linkedWorkspaces(input.workspaces);
     const generallyInspectableWorkspaces = workspaces.filter((workspace) =>
       workspace.managed === true
@@ -603,8 +548,45 @@ implements ScopePublicationPreflightSource {
           (workspace) => workspace.workspaceId === recovery.sourceWorkspaceId,
         )
       : [];
+    if (inspectableWorkspaces.length === 0) {
+      return {
+        schemaVersion: 1,
+        capabilityRef: "zes.scope-publication.preflight.v1",
+        status: "available",
+        assessedAt,
+        continuationProjectionRef: continuation.projectionRef,
+        candidateCount: 0,
+        ignoredWorkspaceCount: workspaces.length,
+        inspectionFailureCount: 0,
+        candidates: [],
+        stageTimingsMs: {
+          remoteAuthority: 0,
+          candidateInspection: 0,
+          candidateAssessment: 0,
+          total: elapsedMs(totalStartedAt),
+        },
+        policy: POLICY,
+      };
+    }
+
+    let remoteAuthority: Awaited<
+      ReturnType<ScopePublicationGitPort["authoritativeRemoteMain"]>
+    >;
+    const remoteAuthorityStartedAt = performance.now();
+    try {
+      remoteAuthority = await this.gitPort.authoritativeRemoteMain();
+    } catch (error) {
+      return this.unavailable(
+        assessedAt,
+        continuation.projectionRef,
+        error,
+      );
+    }
+    const remoteAuthorityMs = elapsedMs(remoteAuthorityStartedAt);
+    const remoteMainSha = remoteAuthority.sha;
     const globalBlockers = globalPublicationBlockers(continuation);
     try {
+      const candidateInspectionStartedAt = performance.now();
       const results = await Promise.all(
         inspectableWorkspaces.map(async (workspace) => {
           try {
@@ -623,6 +605,7 @@ implements ScopePublicationPreflightSource {
           }
         }),
       );
+      const candidateInspectionMs = elapsedMs(candidateInspectionStartedAt);
       const observations = results.filter(
         (result): result is Extract<typeof result, { observation: ScopePublicationGitObservation }> =>
           "observation" in result,
@@ -645,6 +628,7 @@ implements ScopePublicationPreflightSource {
       const matching = observations.filter(
         ({ observation }) => observation.repositoryIdentityMatches,
       );
+      const candidateAssessmentStartedAt = performance.now();
       const candidates = matching.map(({ workspace, observation }) =>
         this.assessCandidate(
           workspace,
@@ -652,7 +636,9 @@ implements ScopePublicationPreflightSource {
           remoteMainSha,
           globalBlockers,
           recovery,
+          remoteAuthority.evidenceRefs,
         ));
+      const candidateAssessmentMs = elapsedMs(candidateAssessmentStartedAt);
       return {
         schemaVersion: 1,
         capabilityRef: "zes.scope-publication.preflight.v1",
@@ -664,6 +650,12 @@ implements ScopePublicationPreflightSource {
         ignoredWorkspaceCount: workspaces.length - candidates.length,
         inspectionFailureCount,
         candidates,
+        stageTimingsMs: {
+          remoteAuthority: remoteAuthorityMs,
+          candidateInspection: candidateInspectionMs,
+          candidateAssessment: candidateAssessmentMs,
+          total: elapsedMs(totalStartedAt),
+        },
         policy: POLICY,
       };
     } catch (error) {
@@ -681,35 +673,20 @@ implements ScopePublicationPreflightSource {
     remoteMainSha: string,
     globalBlockers: string[],
     recovery: ReturnType<typeof recoveryBinding>,
+    remoteAuthorityEvidenceRefs: string[],
   ): ScopePublicationCandidateAssessment {
     const blockers = [...globalBlockers];
     if (!observation.workspaceRootVerified) {
       blockers.push("workspace_root_not_verified");
     }
     if (!observation.headSha) blockers.push("candidate_head_missing");
-    if (!observation.originMainSha) blockers.push("origin_main_tracking_ref_missing");
     if (!observation.authoritativeRemoteMainPresentLocally) {
       blockers.push("authoritative_remote_main_commit_missing_locally");
-    }
-    if (!observation.remoteTrackingMatchesAuthority) {
-      blockers.push("local_origin_main_differs_from_authoritative_remote_main");
     }
     if (!observation.candidateDescendsFromAuthority) {
       blockers.push("candidate_not_descended_from_authoritative_remote_main");
     }
     if (!observation.worktreeClean) blockers.push("dirty_candidate_worktree");
-    if (observation.branchRemote !== "origin") {
-      blockers.push("candidate_branch_remote_not_origin");
-    }
-    if (observation.branchMergeRef !== "refs/heads/main") {
-      blockers.push("candidate_branch_merge_target_not_main");
-    }
-    if (!observation.publicationControlsFailClosed) {
-      blockers.push("candidate_publication_controls_not_fail_closed");
-    }
-    if (!observation.prePushHookIdentityMatches) {
-      blockers.push("candidate_pre_push_hook_identity_mismatch");
-    }
     if (observation.mergeCommitCount === undefined) {
       blockers.push("candidate_merge_commit_count_unobserved");
     } else if (observation.mergeCommitCount > 0) {
@@ -739,16 +716,44 @@ implements ScopePublicationPreflightSource {
     const evidenceRefs = sortedUnique([
       ...observation.evidenceRefs,
       ...recovery.evidenceRefs,
+      ...remoteAuthorityEvidenceRefs,
       `git:authoritative-remote-main:${remoteMainSha}`,
     ]).slice(0, 100);
+    const evidenceProfile = {
+      requiredEvidence: [
+        "fixed_repository_identity",
+        "fresh_remote_main_readback",
+        "exact_candidate_sha_and_cleanliness",
+        "candidate_descends_from_remote_main_and_is_zero_behind",
+        "no_merge_commit_candidate_range",
+        "validation_receipt_bound_to_exact_candidate",
+        "compare_and_swap_effect_and_post_push_readback",
+      ],
+      skippedEvidence: [
+        {
+          evidence: "global_Codex_or_AOQ_runtime_writer_state",
+          reasonCode: "unrelated_runtime_state_is_not_repository_writer_authority",
+        },
+        {
+          evidence: "candidate_branch_tracking_configuration",
+          reasonCode: "effect_uses_fixed_remote_branch_and_exact_sha_refspec",
+        },
+        {
+          evidence: "candidate_local_pre_push_hook_identity",
+          reasonCode: "fixed_effect_gate_revalidates_CAS_and_remote_readback",
+        },
+        {
+          evidence: "full_validation_rerun",
+          reasonCode: "immutable_validation_receipt_is_bound_to_unchanged_HEAD",
+        },
+      ],
+    };
     let expectedPublication:
       | ScopePublicationCandidateAssessment["expectedPublication"]
       | undefined;
     if (safeToPublish) {
-      if (!observation.headSha || !observation.prePushHookDigestSha256) {
-        throw new Error(
-          "eligible_scope_publication_missing_checkpoint_or_hook_identity",
-        );
+      if (!observation.headSha) {
+        throw new Error("eligible_scope_publication_missing_checkpoint");
       }
       expectedPublication = {
         remoteName: "origin",
@@ -759,14 +764,24 @@ implements ScopePublicationPreflightSource {
         remoteReadbackRequired: true,
         effectGateMustRevalidateCandidateAndAuthority: true,
         validationMustBeRevalidatedBeforeEffect: true,
-        prePushGuard: {
-          hookDigestSha256: observation.prePushHookDigestSha256,
-          environment: {
-            ZES_CHECKPOINT_PUBLICATION_GUARD: "1",
-            ZES_CHECKPOINT_PUBLICATION_COMMIT: observation.headSha,
-            ZES_CHECKPOINT_PUBLICATION_EXPECTED_OLD: remoteMainSha,
-          },
-        },
+        validationReceiptMayBeReusedWhenHeadUnchanged: true,
+        fullValidationRerunRequired: false,
+        localPrePushHookRequired: false,
+        ...(observation.prePushHookDigestSha256 || observation.pushDefault
+          ? {
+              optionalLocalDefense: {
+                ...(observation.prePushHookDigestSha256
+                  ? {
+                      prePushHookDigestSha256:
+                        observation.prePushHookDigestSha256,
+                    }
+                  : {}),
+                ...(observation.pushDefault
+                  ? { pushDefault: observation.pushDefault }
+                  : {}),
+              },
+            }
+          : {}),
       };
     }
     return {
@@ -793,12 +808,18 @@ implements ScopePublicationPreflightSource {
         ? {}
         : { mergeCommitCount: observation.mergeCommitCount }),
       dirtyPathCount: observation.dirtyPathCount,
-      publicationControlsFailClosed:
-        observation.publicationControlsFailClosed,
+      ...(observation.publicationControlsFailClosed === undefined
+        ? {}
+        : {
+            publicationControlsFailClosed:
+              observation.publicationControlsFailClosed,
+          }),
       validationBoundToCandidate,
       validationEvidenceAuthority:
         "executor_local_git_bound_recovery_capsule",
       validationEvidenceRevalidationRequired: true,
+      fullValidationRerunRequired: false,
+      evidenceProfile,
       blockingFactors: uniqueBlockers,
       evidenceRefs,
       ...(expectedPublication ? { expectedPublication } : {}),

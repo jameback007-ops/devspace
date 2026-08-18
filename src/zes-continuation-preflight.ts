@@ -18,8 +18,11 @@ const DEFAULT_ZES_CONTINUATION_STATE_ROOT =
 const MAX_PROCESS_OUTPUT_BYTES = 2 * 1024 * 1024;
 const MAX_SNAPSHOT_BYTES = 1024 * 1024;
 const PROCESS_TIMEOUT_MS = 60_000;
-const DEFAULT_PROJECTION_CACHE_TTL_MS = 30_000;
-const DEFAULT_PROJECTION_FAILURE_CACHE_TTL_MS = 5_000;
+// The embedded projection is advisory and every material effect must revalidate
+// through the direct route. A longer bounded cache avoids repeatedly paying a
+// multi-owner refresh cost for ordinary execution-scope inspection.
+const DEFAULT_PROJECTION_CACHE_TTL_MS = 60_000;
+const DEFAULT_PROJECTION_FAILURE_CACHE_TTL_MS = 30_000;
 
 const READ_ONLY_ANNOTATIONS = {
   readOnlyHint: true,
@@ -67,6 +70,7 @@ interface ZesContinuationProjectionPolicy {
   cacheIsReadOptimizationOnly: true;
   cacheDoesNotGrantAuthority: true;
   downstreamEffectGateMustRevalidate: true;
+  repositoryFastPathMayDeferAutomaticRefresh: true;
   canonicalOrProviderStateMutated: false;
   newWriterPublicationTakeoverOrEffectAuthorityGranted: false;
 }
@@ -117,13 +121,37 @@ export interface ZesContinuationPreflightUnavailableProjection {
   policy: ZesContinuationProjectionPolicy;
 }
 
+export interface ZesContinuationPreflightDeferredProjection {
+  schemaVersion: 1;
+  capabilityRef: "zes.continuation.preflight.v2";
+  status: "deferred";
+  projectionRef: string;
+  route: "execution_scope_status_embedded_control_plane";
+  directToolName: "zes_continuation_preflight";
+  reason:
+    | "repository_publication_fast_path_does_not_require_global_runtime_refresh"
+    | "automatic_refresh_not_requested";
+  previousProjectionRef?: string;
+  nextAction:
+    "invoke_direct_tool_only_for_governed_checkout_runtime_or_effect_intent";
+  policy: ZesContinuationProjectionPolicy;
+}
+
 export type ZesContinuationPreflightProjection =
   | ZesContinuationPreflightAvailableProjection
   | ZesContinuationPreflightRefreshingProjection
-  | ZesContinuationPreflightUnavailableProjection;
+  | ZesContinuationPreflightUnavailableProjection
+  | ZesContinuationPreflightDeferredProjection;
+
+export interface ZesContinuationProjectionRequest {
+  refresh?: boolean;
+  deferReason?: ZesContinuationPreflightDeferredProjection["reason"];
+}
 
 export interface ZesContinuationPreflightProjectionSource {
-  project(): Promise<ZesContinuationPreflightProjection>;
+  project(
+    request?: ZesContinuationProjectionRequest,
+  ): Promise<ZesContinuationPreflightProjection>;
   warm?(): Promise<void>;
 }
 
@@ -165,6 +193,7 @@ const PROJECTION_POLICY: ZesContinuationProjectionPolicy = {
   cacheIsReadOptimizationOnly: true,
   cacheDoesNotGrantAuthority: true,
   downstreamEffectGateMustRevalidate: true,
+  repositoryFastPathMayDeferAutomaticRefresh: true,
   canonicalOrProviderStateMutated: false,
   newWriterPublicationTakeoverOrEffectAuthorityGranted: false,
 };
@@ -556,10 +585,36 @@ implements ZesContinuationPreflightProjectionSource {
     this.refresh = options.refresh ?? refreshZesContinuationSnapshot;
   }
 
-  async project(): Promise<ZesContinuationPreflightProjection> {
+  async project(
+    request: ZesContinuationProjectionRequest = {},
+  ): Promise<ZesContinuationPreflightProjection> {
     const nowMs = this.now();
     if (this.cached && nowMs < this.cached.expiresAtMs) {
       return structuredClone(this.cached.value);
+    }
+    if (request.refresh === false) {
+      const reason = request.deferReason
+        ?? "automatic_refresh_not_requested";
+      const value: ZesContinuationPreflightDeferredProjection = {
+        schemaVersion: 1,
+        capabilityRef: "zes.continuation.preflight.v2",
+        status: "deferred",
+        projectionRef:
+          `zes-control-plane://continuation/deferred/${sha256({
+            reason,
+            previousProjectionRef: this.cached?.value.projectionRef,
+          })}`,
+        route: "execution_scope_status_embedded_control_plane",
+        directToolName: "zes_continuation_preflight",
+        reason,
+        ...(this.cached
+          ? { previousProjectionRef: this.cached.value.projectionRef }
+          : {}),
+        nextAction:
+          "invoke_direct_tool_only_for_governed_checkout_runtime_or_effect_intent",
+        policy: PROJECTION_POLICY,
+      };
+      return structuredClone(value);
     }
     void this.warm();
     const refreshStartedAtMs = this.refreshStartedAtMs ?? nowMs;

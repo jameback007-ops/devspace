@@ -507,7 +507,7 @@ function serverInstructions(config: ServerConfig): string {
   const codexSessionInstruction =
     " To inspect the allowlisted AOQ Codex executor adapter, use codex_session_status, codex_session_tail, or codex_session_audit. These tools report adapter transport health separately from the Codex thread lifecycle and never represent DevSpace, VPS, workspace, or ZES product health. To inspect the exact live AOQ worktree, use codex_workspace_git_status, codex_workspace_tree, codex_workspace_read, codex_workspace_search, or codex_workspace_diff. These brokered commands are read-only and independent from the Codex thread lifecycle.";
   const zesContinuationInstruction =
-    " Before governed-main integration or repository publication, use zes_continuation_preflight with the matching intent when that direct tool is present. If a frozen host catalog does not expose it, call the already-known execution_scope_status tool and read stableControlPlane.capabilities.continuationPreflight plus stableControlPlane.capabilities.scopePublicationPreflight instead of passing DSN, credential, thread, repository, or filesystem paths through exec_command. The fixed product preflight reports global rightful-owner state; the scope-publication projection joins it with the exact linked candidate worktree and its fresh HEAD-bound validation capsule. publication_disposition=not_required on the governed checkout means that checkout has no unpublished commit and is not a denial of a separately assessed candidate. Runtime reconciliation findings apply to runtime takeover, effect retry, or reliance on runtime state and do not by themselves block unrelated repository source actions. Catalog staleness is a discovery condition and must not be translated into writer uncertainty or missing publication controls. Neither route creates writer, publication, takeover, or effect authority; any publication still requires the exact compare-and-swap binding and remote readback returned by the candidate assessment.";
+    " For repository publication of a linked candidate, read stableControlPlane.capabilities.scopePublicationPreflight or the fixed self_repository_publication_preflight route. Those candidate-bound routes obtain fresh fixed remote-main authority directly, verify exact clean candidate identity and unchanged HEAD-bound validation evidence, expose required versus skipped evidence with stage timings, and require compare-and-swap plus authoritative post-push readback. Do not use unrelated Codex/AOQ thread, runtime-service, material-work, local branch-tracking, or local-hook state as proxy repository-writer authority. Use zes_continuation_preflight only when the action actually mutates the governed checkout, deploys or takes over runtime, relies on runtime state, or retries/reconciles a declared material effect. Once a candidate is eligible, treat it as publication-only terminal state: do not reopen research or feature expansion unless a reproducible defect blocks publication, and any candidate mutation invalidates the plan. A frozen catalog may consume these additive projections through execution_scope_status; catalog staleness never creates writer uncertainty. No route grants publication authority, and the fixed effect gate must still serialize publication, revalidate the plan, use an exact remote lease, and derive terminal outcome from remote readback.";
   const zesResearchCycleInstruction = config.zesResearchCycle.mode === "off"
     ? ""
     : " For a workspace containing the ZES control-kernel marker, use zes_research_cycle_open before material design or mutation, then prepare exact action bindings and obtain a native ZES Research Reflex v2 admission with zes_research_cycle_assess. Reopen judgment with zes_research_cycle_invalidate when evidence, scope, architecture, dependencies, currentness, owner direction, or failure causality changes. Before commit, use zes_research_cycle_verify_pre_commit; close the episode after the exact commit or terminal no-change/deferred/abandoned outcome. observe mode reports lifecycle drift without blocking; enforce mode holds source mutation, commit preparation, commit, and publication when the exact current lifecycle is absent or stale. These executor-local tools verify native receipts but never create semantic, writer, publication, release, activation, runtime, or effect authority.";
@@ -1265,19 +1265,35 @@ function registerExecutionScopeTools(
           clientObservedToolNames,
         },
       });
-      const continuationPreflight = continuationPreflightProjector
-        ? await continuationPreflightProjector.project()
-        : undefined;
-      const scopePublication = continuationPreflight && scopePublicationPreflight
-        ? await scopePublicationPreflight.assess({
-            workspaces: status.workspaces,
-            semanticRecovery,
-            continuationPreflight,
+      const repositoryFastPathContinuation = continuationPreflightProjector
+        ? await continuationPreflightProjector.project({
+            refresh: false,
+            deferReason:
+              "repository_publication_fast_path_does_not_require_global_runtime_refresh",
           })
         : undefined;
-      const selfRepositoryPublicationPreflight = selfRepositoryPublication
-        ? await selfRepositoryPublication.scopeProjection(status.workspaces)
-        : undefined;
+      const [scopePublication, selfRepositoryPublicationPreflight] =
+        await Promise.all([
+          repositoryFastPathContinuation && scopePublicationPreflight
+            ? scopePublicationPreflight.assess({
+                workspaces: status.workspaces,
+                semanticRecovery,
+                continuationPreflight: repositoryFastPathContinuation,
+              })
+            : Promise.resolve(undefined),
+          selfRepositoryPublication
+            ? selfRepositoryPublication.scopeProjection(status.workspaces)
+            : Promise.resolve(undefined),
+        ]);
+      const repositoryCandidatePresent =
+        (scopePublication?.candidateCount ?? 0) > 0
+        || scopePublication?.status === "unavailable"
+        || (selfRepositoryPublicationPreflight?.candidateCount ?? 0) > 0;
+      const continuationPreflight = continuationPreflightProjector
+        && !repositoryCandidatePresent
+        && repositoryFastPathContinuation?.status === "deferred"
+        ? await continuationPreflightProjector.project()
+        : repositoryFastPathContinuation;
       const stableControlPlane = continuationPreflight || selfRepositoryPublicationPreflight
         ? stableControlPlaneProjection({
             continuationPreflight,
@@ -2780,7 +2796,7 @@ export function createMcpServer(
       {
         title: "Preflight DevSpace self-publication",
         description:
-          "Assess one registered managed worktree against the fixed DevSpace self-repository publication contract. The route accepts no repository path, remote, branch, URL, credential, or expected-old SHA from the model. It verifies the configured remote identity, reads fresh remote main with git ls-remote, fetches only when the remote commit object is absent locally, binds validation to the exact clean candidate HEAD, requires explicit writer release, terminal effect state, safeToPublish attestation, zero-behind/no-merge history, and returns a digest-bound compare-and-swap publication plan. It does not grant publication authority or depend on unrelated ZES runtime/writer state.",
+          "Assess one registered managed worktree against the fixed DevSpace self-repository publication contract. The route accepts no repository path, remote, branch, URL, credential, refspec, or expected-old SHA from the model. It verifies fixed remote identity, reads fresh remote main with git ls-remote, fetches only when that exact remote object is absent locally, binds an existing validation receipt to the unchanged clean candidate HEAD, requires zero-behind/no-merge history, and classifies changed paths as source-only publication, runtime deployment follow-up, or declared material-effect reconciliation. Unrelated ZES/Codex runtime writer state and self-authored safeToPublish attestations do not block source-only publication. The result exposes required and skipped evidence, per-stage timings, validation-receipt reuse, and a publication-only freeze together with one digest-bound compare-and-swap plan. It does not grant publication authority.",
         inputSchema: {
           workspaceId: z
             .string()
@@ -2816,7 +2832,7 @@ export function createMcpServer(
         {
           title: "Publish DevSpace self-repository candidate",
           description:
-            "Execute one exact self_repository_publication_preflight plan against the fixed configured owner remote/main. The effect re-runs the preflight, requires an unchanged plan digest, performs a fresh remote readback, pushes with an exact force-with-lease expected-old binding, and derives the outcome from a second remote readback. No arbitrary repository, remote, branch, URL, credential, refspec, or expected-old value is accepted.",
+            "Execute one exact self_repository_publication_preflight plan against the fixed configured owner remote/main. A repository-local publication lease serializes effects; the gate revalidates the unchanged plan and exact HEAD-bound validation receipt, performs a fresh remote readback, pushes the exact candidate SHA with force-with-lease, and derives terminal outcome from a second remote readback. Replaying a completed plan returns its terminal receipt without pushing again. Remote publication is the effect boundary; failure to mirror the local remote-tracking ref is reported only as a residual reconciliation and never makes an already verified remote publication unknown. Runtime deployment remains an explicit follow-up only when the risk profile declares it. No arbitrary repository, remote, branch, URL, credential, refspec, or expected-old value is accepted.",
           inputSchema: {
             workspaceId: z
               .string()

@@ -510,10 +510,12 @@ test("a fresh current host scope can inspect status before any audited executor 
 
 test("execution-scope status carries the stable continuation control plane without new tool discovery", async (t) => {
   let projectionCalls = 0;
+  const projectionRequests: unknown[] = [];
   let scopePublicationCalls = 0;
   const continuationPreflightProjector: ZesContinuationPreflightProjectionSource = {
-    project: async () => {
+    project: async (request) => {
       projectionCalls += 1;
+      projectionRequests.push(structuredClone(request));
       return {
         schemaVersion: 1,
         capabilityRef: "zes.continuation.preflight.v2",
@@ -577,6 +579,7 @@ test("execution-scope status carries the stable continuation control plane witho
           cacheIsReadOptimizationOnly: true,
           cacheDoesNotGrantAuthority: true,
           downstreamEffectGateMustRevalidate: true,
+          repositoryFastPathMayDeferAutomaticRefresh: true,
           canonicalOrProviderStateMutated: false,
           newWriterPublicationTakeoverOrEffectAuthorityGranted: false,
         },
@@ -615,40 +618,48 @@ test("execution-scope status carries the stable continuation control plane witho
             validationEvidenceAuthority:
               "executor_local_git_bound_recovery_capsule",
             validationEvidenceRevalidationRequired: true,
+            fullValidationRerunRequired: false,
+            evidenceProfile: {
+              requiredEvidence: ["test:required"],
+              skippedEvidence: [
+                {
+                  evidence: "test:runtime",
+                  reasonCode: "test:unrelated",
+                },
+              ],
+            },
             blockingFactors: [],
             evidenceRefs: ["test:scope-publication"],
             expectedPublication: {
               remoteName: "origin",
               remoteRef: "refs/heads/main",
-              refspec: "HEAD:refs/heads/main",
+              refspec: `${"2".repeat(40)}:refs/heads/main`,
               expectedOldSha: "1".repeat(40),
               compareAndSwapRequired: true,
               remoteReadbackRequired: true,
               effectGateMustRevalidateCandidateAndAuthority: true,
               validationMustBeRevalidatedBeforeEffect: true,
-              prePushGuard: {
-                hookDigestSha256: "3".repeat(64),
-                environment: {
-                  ZES_CHECKPOINT_PUBLICATION_GUARD: "1",
-                  ZES_CHECKPOINT_PUBLICATION_COMMIT: "2".repeat(40),
-                  ZES_CHECKPOINT_PUBLICATION_EXPECTED_OLD: "1".repeat(40),
-                },
-              },
+              validationReceiptMayBeReusedWhenHeadUnchanged: true,
+              fullValidationRerunRequired: false,
+              localPrePushHookRequired: false,
             },
           },
         ],
         policy: {
           authority:
-            "scope_linked_git_readback_combined_with_fixed_ZES_product_preflight",
+            "scope_linked_git_readback_with_fixed_remote_authority",
           inputWorkspaceSource: "execution_scope_registry_only",
           arbitraryWorkspacePathAccepted: false,
           remoteMainAuthoritySource:
-            "fixed_product_preflight_safe_checkpoint_commit_ref",
+            "fresh_fixed_repository_git_ls_remote",
           localOriginTrackingIsRemoteAuthority: false,
           runtimeReconciliationBlocksUnrelatedSourcePublication: false,
           candidateValidationCheckpointRequired: true,
           capsuleValidationIsPublicationAuthority: false,
           effectGateMustRevalidateValidationAndGit: true,
+          unrelatedRuntimeWriterStateIsAdvisoryOnly: true,
+          branchTrackingAndLocalHookAreNotPublicationAuthority: true,
+          exactHeadBoundValidationReceiptMayBeReused: true,
           publicationEffectPerformed: false,
           publicationAuthorityGranted: false,
           compareAndSwapAndRemoteReadbackRequired: true,
@@ -692,6 +703,11 @@ test("execution-scope status carries the stable continuation control plane witho
   } as Parameters<Client["callTool"]>[0]);
   assert.equal(status.isError, undefined, responseText(status));
   assert.equal(projectionCalls, 1);
+  assert.deepEqual(projectionRequests, [{
+    refresh: false,
+    deferReason:
+      "repository_publication_fast_path_does_not_require_global_runtime_refresh",
+  }]);
   assert.equal(scopePublicationCalls, 1);
   const stable = structuredData(status).stableControlPlane as Record<string, any>;
   assert.equal(stable.route, "execution_scope_status");

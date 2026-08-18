@@ -139,24 +139,48 @@ missing or stale client catalog is a transport/discovery condition; it must not
 be converted into evidence that a writer exists, that publication controls are
 absent, or that any governed action is authorized.
 
-Repository publication needs two distinct readbacks. The fixed ZES continuation
-projection supplies global rightful-owner state and the authoritative remote
-`main` commit; it may correctly report `publication_disposition=not_required`
-for the governed checkout even when another linked worktree contains an
-unpublished candidate. The scope-publication projection must separately bind
-that global state to an internally registered execution-scope workspace, verify
-repository identity, exact branch/remote/merge target, candidate ancestry,
-cleanliness, fail-closed publication controls, and a fresh recovery capsule whose
-passed validation is bound to the exact candidate HEAD. Only that combined
-assessment may describe the candidate as eligible, and even then it returns a
-compare-and-swap expectation plus remote-readback requirement rather than
-performing the push or granting publication authority. The capsule validation
-claim is executor-local evidence, not publication authority; the effect gate
-must rerun or independently revalidate the required validation and all Git,
-writer, authority, hook-identity, and remote-main bindings immediately before
-the push. Never accept an arbitrary model-supplied workspace path for this
-projection, and never treat a local `origin/main` ref as remote authority
-without the fixed product readback.
+Repository publication uses one mandatory repository-local fast gate plus
+optional consequence-specific gates. The mandatory gate reads the fixed remote
+and branch identity, obtains fresh remote `main` with `git ls-remote`, binds one
+internally registered candidate workspace or preservation ref to its exact clean
+HEAD, verifies ancestry, zero-behind/no-merge history, and checks that an
+existing validation receipt still matches that exact HEAD and dirty-state
+fingerprint. A local `origin/main` ref, branch tracking configuration,
+`push.default`, or a candidate-local hook may provide diagnostics or defense in
+depth, but none is remote authority when the fixed effect accepts no target
+inputs and pushes one exact SHA refspec. Likewise, a stale or degraded unrelated
+Codex/AOQ thread is not evidence that this repository candidate has an active
+writer. Never accept an arbitrary model-supplied workspace, repository, remote,
+branch, URL, refspec, credential, or expected-old value.
+
+Reuse an immutable HEAD-bound validation receipt while candidate identity and
+dirty state remain unchanged; do not rerun the full validation suite merely to
+recreate the same evidence. Any candidate mutation invalidates the plan and its
+receipt binding. Invoke runtime-service and deployment readiness only when the
+changed paths require a runtime or release follow-up. Invoke material-effect
+reconciliation only when the candidate declares an exact effect key and that
+effect is unresolved. Once the candidate is eligible, enter publication-only
+terminal mode: no new research or feature expansion is allowed unless a
+reproducible defect is itself publication-blocking.
+
+`execution_scope_status` may return the global continuation projection as
+`deferred` while a repository candidate is on this fast path. That state means
+no automatic multi-owner runtime refresh was started because it cannot change
+the repository publication decision. Invoke the fixed direct continuation tool
+only for governed-checkout mutation, runtime deployment/takeover, runtime-state
+reliance, or exact material-effect reconciliation. The embedded advisory cache
+is bounded and never substitutes for those pre-effect readbacks.
+
+The effect gate serializes publication with a repository-local lease, requires
+the unchanged plan digest, rereads remote `main`, pushes the exact candidate SHA
+with an expected-old force-with-lease binding, and derives terminal outcome from
+a second remote readback. The authoritative remote readback is the publication
+effect boundary. Updating local remote-tracking or governed-checkout mirrors is
+a residual reconciliation and must never turn a verified remote publication
+back into failed or unknown state. Replaying a completed plan returns its
+terminal receipt without pushing again. Preflight and effect receipts should
+report per-stage duration plus evidence that was required or deliberately
+skipped as irrelevant, so safety cost and ceremony remain inspectable.
 
 For UI or artifacts, inspect rendered output rather than inferring success from
 the producing command. State clearly when only a narrower proxy was verified.

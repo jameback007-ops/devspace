@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -80,11 +80,21 @@ async function continuationProjection(
 
 class FakeGitPort implements ScopePublicationGitPort {
   calls = 0;
+  remoteCalls = 0;
 
   constructor(
     private readonly observations: Record<string, ScopePublicationGitObservation>,
     private readonly failure?: Error,
   ) {}
+
+  async authoritativeRemoteMain() {
+    this.remoteCalls += 1;
+    return {
+      sha: REMOTE_MAIN,
+      repositoryIdentityDigestSha256: "f".repeat(64),
+      evidenceRefs: [`git:authoritative-remote-main:${REMOTE_MAIN}`],
+    };
+  }
 
   async inspect(
     workspace: ScopeLinkedWorkspace,
@@ -187,6 +197,9 @@ assert.equal(eligible.candidateCount, 1);
 assert.equal(eligible.ignoredWorkspaceCount, 1);
 assert.equal(eligible.inspectionFailureCount, 0);
 assert.equal(eligiblePort.calls, 1, "unmanaged noise must not be inspected");
+assert.ok((eligible.stageTimingsMs?.total ?? -1) >= 0);
+assert.ok((eligible.stageTimingsMs?.remoteAuthority ?? -1) >= 0);
+assert.ok((eligible.stageTimingsMs?.candidateInspection ?? -1) >= 0);
 assert.equal(eligible.candidates[0]?.disposition, "eligible");
 assert.equal(eligible.candidates[0]?.safeToPublish, true);
 assert.equal(eligible.candidates[0]?.validationBoundToCandidate, true);
@@ -198,6 +211,7 @@ assert.equal(
   eligible.candidates[0]?.validationEvidenceRevalidationRequired,
   true,
 );
+assert.equal(eligible.candidates[0]?.fullValidationRerunRequired, false);
 assert.deepEqual(eligible.candidates[0]?.blockingFactors, []);
 assert.equal(
   eligible.candidates[0]?.expectedPublication?.expectedOldSha,
@@ -213,9 +227,8 @@ assert.equal(
   "the publication effect must push the exact validated object, never checkout HEAD",
 );
 assert.equal(
-  eligible.candidates[0]?.expectedPublication?.prePushGuard.environment
-    .ZES_CHECKPOINT_PUBLICATION_COMMIT,
-  CANDIDATE_HEAD,
+  eligible.candidates[0]?.expectedPublication?.localPrePushHookRequired,
+  false,
 );
 assert.equal(
   eligible.candidates[0]?.expectedPublication
@@ -226,6 +239,10 @@ assert.equal(
   eligible.candidates[0]?.expectedPublication
     ?.validationMustBeRevalidatedBeforeEffect,
   true,
+);
+assert.equal(
+  eligible.candidates[0]?.expectedPublication?.fullValidationRerunRequired,
+  false,
 );
 assert.equal(eligible.policy.capsuleValidationIsPublicationAuthority, false);
 assert.equal(eligible.policy.effectGateMustRevalidateValidationAndGit, true);
@@ -248,6 +265,12 @@ assert.equal(
   0,
   "publication Git inspection requires an exact recovery-capsule workspace",
 );
+assert.equal(
+  noCapsulePort.remoteCalls,
+  0,
+  "a scope without a candidate must not perform remote publication readback",
+);
+assert.equal(noCapsule.stageTimingsMs?.remoteAuthority, 0);
 
 const uncertain = await assessor.assess({
   workspaces,
@@ -256,10 +279,13 @@ const uncertain = await assessor.assess({
     writer_state_uncertain: true,
   }),
 });
-assert.equal(uncertain.candidates[0]?.disposition, "blocked");
-assert.equal(uncertain.candidates[0]?.safeToPublish, false);
+assert.equal(uncertain.candidates[0]?.disposition, "eligible");
+assert.equal(uncertain.candidates[0]?.safeToPublish, true);
 assert.ok(
-  uncertain.candidates[0]?.blockingFactors.includes("writer_state_uncertain"),
+  uncertain.candidates[0]?.evidenceProfile.skippedEvidence.some(
+    (entry) => entry.reasonCode
+      === "unrelated_runtime_state_is_not_repository_writer_authority",
+  ),
 );
 
 const staleValidation = await assessor.assess({
@@ -290,12 +316,8 @@ const staleTracking = await new ZesScopePublicationPreflightAssessor(
   semanticRecovery: recovery(),
   continuationPreflight: await continuationProjection(),
 });
-assert.equal(staleTracking.candidates[0]?.disposition, "blocked");
-assert.ok(
-  staleTracking.candidates[0]?.blockingFactors.includes(
-    "local_origin_main_differs_from_authoritative_remote_main",
-  ),
-);
+assert.equal(staleTracking.candidates[0]?.disposition, "eligible");
+assert.equal(staleTracking.candidates[0]?.safeToPublish, true);
 
 const unsafeHookPort = new FakeGitPort({
   ws_candidate: candidateObservation({
@@ -313,11 +335,11 @@ const unsafeHook = await new ZesScopePublicationPreflightAssessor(
   semanticRecovery: recovery(),
   continuationPreflight: await continuationProjection(),
 });
-assert.equal(unsafeHook.candidates[0]?.disposition, "blocked");
-assert.ok(
-  unsafeHook.candidates[0]?.blockingFactors.includes(
-    "candidate_pre_push_hook_identity_mismatch",
-  ),
+assert.equal(unsafeHook.candidates[0]?.disposition, "eligible");
+assert.equal(unsafeHook.candidates[0]?.safeToPublish, true);
+assert.equal(
+  unsafeHook.candidates[0]?.expectedPublication?.localPrePushHookRequired,
+  false,
 );
 
 const mergeCommitPort = new FakeGitPort({
@@ -347,8 +369,9 @@ const awaiting = await assessor.assess({
   semanticRecovery: recovery(),
   continuationPreflight: await refreshingProjector.project(),
 });
-assert.equal(awaiting.status, "awaiting_continuation_control_plane");
-assert.equal(awaiting.candidateCount, 0);
+assert.equal(awaiting.status, "available");
+assert.equal(awaiting.candidateCount, 1);
+assert.equal(awaiting.candidates[0]?.disposition, "eligible");
 
 const failing = await new ZesScopePublicationPreflightAssessor(
   new FakeGitPort({}, new Error("PRIVATE-GIT-DETAIL-MUST-NOT-LEAK")),
@@ -388,29 +411,13 @@ try {
   await exec(candidate, "git", ["checkout", "-b", "agent/candidate", "origin/main"]);
   await exec(candidate, "git", ["config", "user.name", "Test User"]);
   await exec(candidate, "git", ["config", "user.email", "test@example.com"]);
-  await exec(candidate, "git", ["config", "push.default", "nothing"]);
-  await exec(candidate, "git", [
-    "config",
-    "branch.agent/candidate.remote",
-    "origin",
-  ]);
-  await exec(candidate, "git", [
-    "config",
-    "branch.agent/candidate.merge",
-    "refs/heads/main",
-  ]);
-  const hooks = join(integrationRoot, "hooks");
-  await exec(integrationRoot, "mkdir", ["-p", hooks]);
-  const prePush = join(hooks, "pre-push");
-  await writeFile(prePush, "#!/bin/sh\nexit 0\n", "utf8");
-  await chmod(prePush, 0o755);
-  await exec(fixed, "git", ["config", "core.hooksPath", hooks]);
-  await exec(candidate, "git", ["config", "core.hooksPath", hooks]);
   await writeFile(join(candidate, "candidate.txt"), "candidate\n", "utf8");
   await exec(candidate, "git", ["add", "candidate.txt"]);
   await exec(candidate, "git", ["commit", "-m", "candidate"]);
 
   const nativePort = new NativeScopePublicationGitPort(fixed);
+  const nativeAuthority = await nativePort.authoritativeRemoteMain();
+  assert.equal(nativeAuthority.sha, integrationRemoteMain);
   const nativeClean = await nativePort.inspect(
     {
       workspaceId: "ws_native",
@@ -425,14 +432,15 @@ try {
   );
   assert.equal(nativeClean.repositoryIdentityMatches, true);
   assert.equal(nativeClean.workspaceRootVerified, true);
-  assert.equal(nativeClean.remoteTrackingMatchesAuthority, true);
+  assert.equal(nativeClean.originMainSha, undefined);
+  assert.equal(nativeClean.remoteTrackingMatchesAuthority, undefined);
   assert.equal(nativeClean.candidateDescendsFromAuthority, true);
   assert.equal(nativeClean.aheadCount, 1);
   assert.equal(nativeClean.behindCount, 0);
   assert.equal(nativeClean.mergeCommitCount, 0);
   assert.equal(nativeClean.worktreeClean, true);
-  assert.equal(nativeClean.prePushHookIdentityMatches, true);
-  assert.equal(nativeClean.publicationControlsFailClosed, true);
+  assert.equal(nativeClean.prePushHookIdentityMatches, undefined);
+  assert.equal(nativeClean.publicationControlsFailClosed, undefined);
 
   await writeFile(join(candidate, "README.md"), "base\ndirty\n", "utf8");
   const nativeDirty = await nativePort.inspect(

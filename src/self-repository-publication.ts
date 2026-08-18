@@ -4,6 +4,10 @@ import { realpath, stat } from "node:fs/promises";
 import { resolve } from "node:path";
 import { promisify } from "node:util";
 import type { SelfRepositoryPublicationConfig } from "./config.js";
+import {
+  buildPublicationRiskProfile,
+  type PublicationRiskProfile,
+} from "./publication-risk-profile.js";
 import { assessWorkspaceCandidateLifecycle } from "./workspace-candidate-lifecycle.js";
 import type { WorkspaceStore } from "./workspace-store.js";
 
@@ -41,6 +45,24 @@ export interface SelfRepositoryPublicationCandidate {
   declaredWriterState?: string;
   declaredEffectState?: string;
   declaredSafeToPublish?: boolean;
+  publicationProfile?: PublicationRiskProfile;
+  receiptReuse?: {
+    validationReceipt: "reused_exact_head_bound" | "missing_or_stale";
+    fullValidationRerunRequired: false;
+    effectGateMustVerifyReceiptBinding: true;
+  };
+  publicationFreeze?: {
+    mode: "publication_only_terminal";
+    candidateMutationInvalidatesPlan: true;
+    newResearchOrFeatureExpansionAllowed: false;
+    exception: "reproducible_publication_blocking_defect_only";
+  };
+  stageTimingsMs?: {
+    lifecycle: number;
+    remoteAuthority: number;
+    comparisonAndProfile: number;
+    total: number;
+  };
   remoteName: string;
   remoteBranch: string;
   remoteUrlIdentityMatches: boolean;
@@ -73,9 +95,13 @@ export interface SelfRepositoryPublicationCandidate {
     remoteAuthoritySource: "fresh_git_ls_remote";
     localTrackingRefIsRemoteAuthority: false;
     exactHeadBoundValidationRequired: true;
-    explicitWriterReleaseRequired: true;
-    explicitEffectTerminalityRequired: true;
-    explicitPublicationSafetyAttestationRequired: true;
+    explicitWriterReleaseRequired: false;
+    explicitEffectTerminalityRequired: false;
+    explicitPublicationSafetyAttestationRequired: false;
+    exactDeclaredMaterialEffectReconciliationRequired: true;
+    repositoryLocalPublicationLeaseRequired: true;
+    remoteCompareAndSwapIsFinalConcurrencyGuard: true;
+    unchangedHeadBoundValidationReceiptMayBeReused: true;
     zeroBehindRequired: true;
     mergeCommitsAllowed: false;
     publicationEffectPerformed: false;
@@ -135,6 +161,13 @@ const SCOPE_POLICY = {
 } as const;
 
 export class SelfRepositoryPublicationManager {
+  private readonly completedEffects = new Map<string, Record<string, unknown>>();
+  private readonly inFlightPlans = new Set<string>();
+  private publicationLease?: {
+    workspaceId: string;
+    planIdSha256: string;
+  };
+
   constructor(
     private readonly config: SelfRepositoryPublicationConfig,
     private readonly store: PublicationStore,
@@ -161,6 +194,7 @@ export class SelfRepositoryPublicationManager {
     input: SelfRepositoryPublicationPreflightInput,
     sharedRemoteAuthority?: Promise<RemoteAuthority>,
   ): Promise<SelfRepositoryPublicationCandidate> {
+    const totalStartedAt = performance.now();
     const assessedAt = new Date(this.now()).toISOString();
     const session = this.store.getSession(input.workspaceId);
     const base = this.baseCandidate(input.workspaceId, assessedAt);
@@ -196,6 +230,7 @@ export class SelfRepositoryPublicationManager {
       });
     }
 
+    const lifecycleStartedAt = performance.now();
     const rootExists = await directoryExists(session.root);
     const activity = this.store.workspaceActivity(session.id);
     const lifecycle = await assessWorkspaceCandidateLifecycle({
@@ -210,6 +245,7 @@ export class SelfRepositoryPublicationManager {
       activeWithinHours: 0.01,
       nowMs: this.now(),
     });
+    const lifecycleMs = elapsedMs(lifecycleStartedAt);
     const candidateHead = lifecycle.git.head;
     const candidateCwd = rootExists ? session.root : repositoryRoot;
     const semantic = activity.recovery?.semantic;
@@ -237,6 +273,7 @@ export class SelfRepositoryPublicationManager {
       });
     }
 
+    const remoteAuthorityStartedAt = performance.now();
     let remote: RemoteAuthority;
     try {
       remote = sharedRemoteAuthority
@@ -279,6 +316,7 @@ export class SelfRepositoryPublicationManager {
         diagnostic: error,
       });
     }
+    const remoteAuthorityMs = elapsedMs(remoteAuthorityStartedAt);
 
     const remoteAuthorityObjectAvailableLocally = await commitAvailableLocally(
       repositoryRoot,
@@ -308,10 +346,12 @@ export class SelfRepositoryPublicationManager {
       });
     }
 
+    const comparisonStartedAt = performance.now();
     const remoteUrlIdentityMatches = remote.remoteUrl === this.config.expectedRemoteUrl;
     let counts: Awaited<ReturnType<typeof leftRightCounts>>;
     let candidateDescendsFromRemoteAuthority: boolean;
     let mergeCommitCount: number | undefined;
+    let changedPaths: string[];
     try {
       counts = await leftRightCounts(candidateCwd, remote.sha, candidateHead);
       candidateDescendsFromRemoteAuthority = await isAncestor(
@@ -325,6 +365,11 @@ export class SelfRepositoryPublicationManager {
         "--merges",
         `${remote.sha}..${candidateHead}`,
       ]);
+      changedPaths = await changedPathsBetween(
+        candidateCwd,
+        remote.sha,
+        candidateHead,
+      );
     } catch (error) {
       return finalizeCandidate({
         ...base,
@@ -347,6 +392,10 @@ export class SelfRepositoryPublicationManager {
         diagnostic: error,
       });
     }
+    const publicationProfile = buildPublicationRiskProfile({
+      changedPaths,
+      semantic,
+    });
     const publicationRequired = candidateHead !== remote.sha;
     const blockers: string[] = [];
     if (!remoteUrlIdentityMatches) blockers.push("configured_remote_identity_mismatch");
@@ -354,20 +403,8 @@ export class SelfRepositoryPublicationManager {
     if (!lifecycle.validation.boundToCurrentHead) {
       blockers.push("candidate_validation_missing_or_stale");
     }
-    if (declaredWriterState === undefined) {
-      blockers.push("candidate_writer_state_missing");
-    } else if (declaredWriterState === "held" || declaredWriterState === "unknown") {
-      blockers.push("candidate_writer_not_released");
-    }
-    if (declaredEffectState === undefined) {
-      blockers.push("candidate_effect_state_missing");
-    } else if (declaredEffectState === "in_flight" || declaredEffectState === "unknown") {
-      blockers.push("candidate_effect_not_terminal");
-    }
-    if (declaredSafeToPublish === false) {
-      blockers.push("candidate_capsule_declares_publication_unsafe");
-    } else if (declaredSafeToPublish !== true) {
-      blockers.push("candidate_publication_safety_not_attested");
+    if (publicationProfile.materialEffectReconciliationRequired) {
+      blockers.push("declared_material_effect_requires_reconciliation");
     }
     if (!candidateDescendsFromRemoteAuthority) {
       blockers.push("candidate_does_not_descend_from_remote_authority");
@@ -384,6 +421,7 @@ export class SelfRepositoryPublicationManager {
       : !publicationRequired
         ? "not_required"
         : "eligible";
+    const comparisonAndProfileMs = elapsedMs(comparisonStartedAt);
     const data = {
       ...base,
       status,
@@ -397,6 +435,14 @@ export class SelfRepositoryPublicationManager {
       declaredWriterState,
       declaredEffectState,
       declaredSafeToPublish,
+      publicationProfile,
+      receiptReuse: {
+        validationReceipt: lifecycle.validation.boundToCurrentHead
+          ? "reused_exact_head_bound" as const
+          : "missing_or_stale" as const,
+        fullValidationRerunRequired: false as const,
+        effectGateMustVerifyReceiptBinding: true as const,
+      },
       remoteUrlIdentityMatches,
       remoteUrlDigestSha256: remote.remoteUrlDigestSha256,
       repositoryIdentityDigestSha256: remote.repositoryIdentityDigestSha256,
@@ -407,8 +453,20 @@ export class SelfRepositoryPublicationManager {
       mergeCommitCount,
       candidateDescendsFromRemoteAuthority,
       blockingFactors: uniqueBlockers,
+      stageTimingsMs: {
+        lifecycle: lifecycleMs,
+        remoteAuthority: remoteAuthorityMs,
+        comparisonAndProfile: comparisonAndProfileMs,
+        total: elapsedMs(totalStartedAt),
+      },
       ...(safeToPublish
         ? {
+            publicationFreeze: {
+              mode: "publication_only_terminal" as const,
+              candidateMutationInvalidatesPlan: true as const,
+              newResearchOrFeatureExpansionAllowed: false as const,
+              exception: "reproducible_publication_blocking_defect_only" as const,
+            },
             expectedPublication: {
               remoteName: this.config.remoteName,
               remoteRef: `refs/heads/${this.config.branchName}`,
@@ -478,75 +536,225 @@ export class SelfRepositoryPublicationManager {
     if (!/^[a-f0-9]{64}$/.test(input.planIdSha256)) {
       throw new Error("planIdSha256_must_be_a_lowercase_sha256_digest");
     }
-    const preflight = await this.preflight({ workspaceId: input.workspaceId });
-    if (preflight.planIdSha256 !== input.planIdSha256) {
-      throw new Error("self_repository_publication_plan_changed_reassess_before_retry");
+    const completed = this.completedEffects.get(input.planIdSha256);
+    if (completed) {
+      return {
+        ...structuredClone(completed),
+        idempotentReplay: true,
+      };
     }
-    if (!preflight.safeToPublish || !preflight.expectedPublication || !preflight.candidateHeadSha) {
-      throw new Error("self_repository_candidate_not_eligible_for_publication");
+    if (this.inFlightPlans.has(input.planIdSha256)) {
+      throw new Error("self_repository_publication_plan_effect_in_flight");
     }
-    const session = this.store.getSession(input.workspaceId);
-    if (!session) throw new Error("workspace_session_not_found");
-    const cwd = await directoryExists(session.root)
-      ? session.root
-      : this.config.repositoryRoot!;
-    const immediatelyBefore = await this.readRemoteAuthority(this.config.repositoryRoot!);
-    if (immediatelyBefore.sha !== preflight.expectedPublication.expectedOldSha) {
-      throw new Error("remote_authority_changed_before_publication");
+    if (this.publicationLease) {
+      throw new Error("self_repository_publication_lease_held");
     }
-    const push = await gitResult(cwd, [
-      "push",
-      preflight.expectedPublication.forceWithLeaseArg,
-      this.config.expectedRemoteUrl!,
-      preflight.expectedPublication.refspec,
-    ]);
-    const after = await this.readRemoteAuthority(this.config.repositoryRoot!);
-    const published = after.sha === preflight.candidateHeadSha;
-    if (!published) {
-      throw new Error(
-        push.exitCode === 0
-          ? "remote_readback_did_not_match_published_candidate"
-          : "publication_failed_and_remote_state_did_not_advance",
+
+    this.inFlightPlans.add(input.planIdSha256);
+    this.publicationLease = {
+      workspaceId: input.workspaceId,
+      planIdSha256: input.planIdSha256,
+    };
+    const effectStartedAt = performance.now();
+    try {
+      const preflight = await this.preflight({ workspaceId: input.workspaceId });
+      if (preflight.planIdSha256 !== input.planIdSha256) {
+        if (
+          preflight.status === "not_required"
+          && preflight.candidateHeadSha
+          && preflight.authoritativeRemoteMainSha === preflight.candidateHeadSha
+        ) {
+          const reconciled = this.alreadyPublishedResult({
+            input,
+            preflight,
+            totalMs: elapsedMs(effectStartedAt),
+          });
+          this.completedEffects.set(
+            input.planIdSha256,
+            structuredClone(reconciled),
+          );
+          return reconciled;
+        }
+        throw new Error(
+          "self_repository_publication_plan_changed_reassess_before_retry",
+        );
+      }
+      if (
+        !preflight.safeToPublish
+        || !preflight.expectedPublication
+        || !preflight.candidateHeadSha
+      ) {
+        throw new Error("self_repository_candidate_not_eligible_for_publication");
+      }
+      const session = this.store.getSession(input.workspaceId);
+      if (!session) throw new Error("workspace_session_not_found");
+      const cwd = await directoryExists(session.root)
+        ? session.root
+        : this.config.repositoryRoot!;
+
+      const beforeStartedAt = performance.now();
+      const immediatelyBefore = await this.readRemoteAuthority(
+        this.config.repositoryRoot!,
       );
+      const beforeReadbackMs = elapsedMs(beforeStartedAt);
+      if (immediatelyBefore.sha === preflight.candidateHeadSha) {
+        const reconciled = this.alreadyPublishedResult({
+          input,
+          preflight,
+          totalMs: elapsedMs(effectStartedAt),
+          remote: immediatelyBefore,
+          beforeReadbackMs,
+        });
+        this.completedEffects.set(
+          input.planIdSha256,
+          structuredClone(reconciled),
+        );
+        return reconciled;
+      }
+      if (immediatelyBefore.sha !== preflight.expectedPublication.expectedOldSha) {
+        throw new Error("remote_authority_changed_before_publication");
+      }
+
+      const pushStartedAt = performance.now();
+      const push = await gitResult(cwd, [
+        "push",
+        preflight.expectedPublication.forceWithLeaseArg,
+        this.config.expectedRemoteUrl!,
+        preflight.expectedPublication.refspec,
+      ]);
+      const pushMs = elapsedMs(pushStartedAt);
+      const afterStartedAt = performance.now();
+      const after = await this.readRemoteAuthority(this.config.repositoryRoot!);
+      const afterReadbackMs = elapsedMs(afterStartedAt);
+      const published = after.sha === preflight.candidateHeadSha;
+      if (!published) {
+        throw new Error(
+          push.exitCode === 0
+            ? "remote_readback_did_not_match_published_candidate"
+            : "publication_failed_and_remote_state_did_not_advance",
+        );
+      }
+
+      const mirrorStartedAt = performance.now();
+      const localAuthorityMirror = await mirrorRemoteAuthorityLocally({
+        cwd: this.config.repositoryRoot!,
+        remoteName: this.config.remoteName,
+        branchName: this.config.branchName,
+        remoteSha: after.sha,
+      });
+      const localMirrorMs = elapsedMs(mirrorStartedAt);
+      const baseOutcome = push.exitCode === 0
+        ? "published"
+        : "published_after_indeterminate_push_transport";
+      const residuals = localAuthorityMirror.synced
+        ? []
+        : [{
+            code: "local_authority_mirror_reconciliation_required",
+            retryPolicy:
+              "reconcile_local_authority_ref_without_repeating_publication",
+          }];
+      const result = {
+        schemaVersion: 1,
+        capabilityRef: "devspace.self-repository-publication.effect.v1",
+        outcome: baseOutcome,
+        publicationEffectTerminal: true,
+        idempotentReplay: false,
+        workspaceId: input.workspaceId,
+        candidateHeadSha: preflight.candidateHeadSha,
+        expectedOldSha: preflight.expectedPublication.expectedOldSha,
+        observedRemoteSha: after.sha,
+        planIdSha256: input.planIdSha256,
+        publicationLeaseRef: sha256([
+          input.workspaceId,
+          input.planIdSha256,
+          preflight.candidateHeadSha,
+        ].join("\0")),
+        remoteName: this.config.remoteName,
+        remoteBranch: this.config.branchName,
+        remoteUrlDigestSha256: after.remoteUrlDigestSha256,
+        repositoryIdentityDigestSha256: after.repositoryIdentityDigestSha256,
+        publicationProfile: preflight.publicationProfile,
+        deploymentFollowUpRequired:
+          preflight.publicationProfile?.runtimeDeploymentRequired ?? false,
+        pushExitCode: push.exitCode,
+        pushDiagnosticDigestSha256: sha256(`${push.stdout}\n${push.stderr}`),
+        localAuthorityMirror,
+        residuals,
+        retryPolicy: residuals.length === 0
+          ? "not_required"
+          : "reconcile_local_residual_without_repeating_publication",
+        stageTimingsMs: {
+          beforeRemoteReadback: beforeReadbackMs,
+          push: pushMs,
+          afterRemoteReadback: afterReadbackMs,
+          localMirrorResidual: localMirrorMs,
+          total: elapsedMs(effectStartedAt),
+        },
+        policy: {
+          authority: "fixed_self_repository_effect_gate",
+          arbitraryRepositoryPathAccepted: false,
+          arbitraryRemoteAccepted: false,
+          arbitraryBranchAccepted: false,
+          processLocalPublicationLeaseUsed: true,
+          remoteCompareAndSwapIsFinalConcurrencyGuard: true,
+          compareAndSwapUsed: true,
+          freshRemoteReadbackBeforeAndAfterEffect: true,
+          effectOutcomeDerivedFromRemoteReadback: true,
+          remotePublicationIsTerminalEffect: true,
+          localAuthorityMirrorIsResidualOnly: true,
+        },
+      } satisfies Record<string, unknown>;
+      this.completedEffects.set(
+        input.planIdSha256,
+        structuredClone(result),
+      );
+      return result;
+    } finally {
+      this.inFlightPlans.delete(input.planIdSha256);
+      if (
+        this.publicationLease?.workspaceId === input.workspaceId
+        && this.publicationLease.planIdSha256 === input.planIdSha256
+      ) {
+        this.publicationLease = undefined;
+      }
     }
-    const localAuthorityMirror = await mirrorRemoteAuthorityLocally({
-      cwd: this.config.repositoryRoot!,
-      remoteName: this.config.remoteName,
-      branchName: this.config.branchName,
-      remoteSha: after.sha,
-    });
-    const baseOutcome = push.exitCode === 0
-      ? "published"
-      : "published_after_indeterminate_push_transport";
+  }
+
+  private alreadyPublishedResult(input: {
+    input: SelfRepositoryPublicationExecuteInput;
+    preflight: SelfRepositoryPublicationCandidate;
+    totalMs: number;
+    remote?: RemoteAuthority;
+    beforeReadbackMs?: number;
+  }): Record<string, unknown> {
     return {
       schemaVersion: 1,
       capabilityRef: "devspace.self-repository-publication.effect.v1",
-      outcome: localAuthorityMirror.synced
-        ? baseOutcome
-        : `${baseOutcome}_local_reconciliation_required`,
-      workspaceId: input.workspaceId,
-      candidateHeadSha: preflight.candidateHeadSha,
-      expectedOldSha: preflight.expectedPublication.expectedOldSha,
-      observedRemoteSha: after.sha,
-      planIdSha256: input.planIdSha256,
-      remoteName: this.config.remoteName,
-      remoteBranch: this.config.branchName,
-      remoteUrlDigestSha256: after.remoteUrlDigestSha256,
-      repositoryIdentityDigestSha256: after.repositoryIdentityDigestSha256,
-      pushExitCode: push.exitCode,
-      pushDiagnosticDigestSha256: sha256(`${push.stdout}\n${push.stderr}`),
-      localAuthorityMirror,
-      retryPolicy: localAuthorityMirror.synced
-        ? "not_required"
-        : "reconcile_local_authority_ref_without_repeating_publication",
+      outcome: "already_published_after_remote_reconciliation",
+      publicationEffectTerminal: true,
+      idempotentReplay: true,
+      workspaceId: input.input.workspaceId,
+      candidateHeadSha: input.preflight.candidateHeadSha,
+      observedRemoteSha:
+        input.remote?.sha ?? input.preflight.authoritativeRemoteMainSha,
+      planIdSha256: input.input.planIdSha256,
+      publicationProfile: input.preflight.publicationProfile,
+      deploymentFollowUpRequired:
+        input.preflight.publicationProfile?.runtimeDeploymentRequired ?? false,
+      residuals: [],
+      retryPolicy: "not_required",
+      stageTimingsMs: {
+        beforeRemoteReadback: input.beforeReadbackMs ?? 0,
+        push: 0,
+        afterRemoteReadback: 0,
+        localMirrorResidual: 0,
+        total: input.totalMs,
+      },
       policy: {
         authority: "fixed_self_repository_effect_gate",
-        arbitraryRepositoryPathAccepted: false,
-        arbitraryRemoteAccepted: false,
-        arbitraryBranchAccepted: false,
-        compareAndSwapUsed: true,
-        freshRemoteReadbackBeforeAndAfterEffect: true,
+        pushRepeated: false,
         effectOutcomeDerivedFromRemoteReadback: true,
+        remotePublicationIsTerminalEffect: true,
       },
     };
   }
@@ -579,9 +787,13 @@ export class SelfRepositoryPublicationManager {
         remoteAuthoritySource: "fresh_git_ls_remote" as const,
         localTrackingRefIsRemoteAuthority: false as const,
         exactHeadBoundValidationRequired: true as const,
-        explicitWriterReleaseRequired: true as const,
-        explicitEffectTerminalityRequired: true as const,
-        explicitPublicationSafetyAttestationRequired: true as const,
+        explicitWriterReleaseRequired: false as const,
+        explicitEffectTerminalityRequired: false as const,
+        explicitPublicationSafetyAttestationRequired: false as const,
+        exactDeclaredMaterialEffectReconciliationRequired: true as const,
+        repositoryLocalPublicationLeaseRequired: true as const,
+        remoteCompareAndSwapIsFinalConcurrencyGuard: true as const,
+        unchangedHeadBoundValidationReceiptMayBeReused: true as const,
         zeroBehindRequired: true as const,
         mergeCommitsAllowed: false as const,
         publicationEffectPerformed: false as const,
@@ -728,6 +940,7 @@ function planDigest(value: Record<string, unknown>): string {
   const {
     assessedAt: _assessedAt,
     planIdSha256: _planIdSha256,
+    stageTimingsMs: _stageTimingsMs,
     ...stable
   } = value;
   return sha256(stableJson(stable));
@@ -792,6 +1005,25 @@ async function leftRightCounts(
     behindCount: Number.isInteger(behind) ? behind : undefined,
     aheadCount: Number.isInteger(ahead) ? ahead : undefined,
   };
+}
+
+async function changedPathsBetween(
+  cwd: string,
+  authoritySha: string,
+  candidateSha: string,
+): Promise<string[]> {
+  const output = await git(cwd, [
+    "diff",
+    "--name-only",
+    "-z",
+    authoritySha,
+    candidateSha,
+  ]);
+  return output
+    .split("\0")
+    .map((value) => value.trim())
+    .filter(Boolean)
+    .slice(0, 10_000);
 }
 
 async function integerGitOutput(cwd: string, args: string[]): Promise<number | undefined> {
@@ -861,6 +1093,10 @@ async function gitResult(
 
 function sha256(value: string): string {
   return createHash("sha256").update(value).digest("hex");
+}
+
+function elapsedMs(startedAt: number): number {
+  return Math.max(0, Math.round((performance.now() - startedAt) * 10) / 10);
 }
 
 function stableJson(value: unknown): string {
