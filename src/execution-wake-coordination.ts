@@ -1049,6 +1049,7 @@ export class ExecutionWakeCoordinationManager {
         pendingWorkGeneration: pending.generation,
         pendingWorkSemanticDigestSha256: pending.semanticDigestSha256,
         correlationRef: pending.correlationRef,
+        assessmentTimeCeiling: iso(nowMs),
       });
     } catch {
       reasons.add("LOWER_PLANE_READINESS_ASSESSMENT_FAILED");
@@ -1166,6 +1167,9 @@ export class ExecutionWakeCoordinationManager {
         pendingWorkSemanticDigestSha256: pending.semanticDigestSha256,
         sessionUiBindingRef: readiness.sessionUiBindingRef,
         bindingGeneration: readiness.bindingGeneration,
+        transportId: readiness.transportId,
+        transportKind: readiness.transportKind,
+        transportRouteDigestSha256: readiness.transportRouteDigestSha256,
         attemptSequence,
       });
       const permit = {
@@ -1182,6 +1186,10 @@ export class ExecutionWakeCoordinationManager {
         readinessAssessmentRef: readiness.assessmentRef,
         sessionUiBindingRef: readiness.sessionUiBindingRef,
         bindingGeneration: readiness.bindingGeneration,
+        targetKind: readiness.targetKind,
+        transportId: readiness.transportId,
+        transportKind: readiness.transportKind,
+        transportRouteDigestSha256: readiness.transportRouteDigestSha256,
         observationRef: readiness.observationRef,
         evidenceDigestSha256: readiness.evidenceDigestSha256,
         generationBoundaryRefBefore: readiness.generationBoundaryRefBefore,

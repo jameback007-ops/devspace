@@ -38,6 +38,37 @@ assert.deepEqual(loadConfig(baseEnv).selfRepositoryPublication, {
   branchName: "main",
   expectedRemoteUrl: undefined,
 });
+assert.deepEqual(loadConfig(baseEnv).conversationTransport, {
+  enabled: false,
+  effectsEnabled: false,
+  bridgeSocketPath: "/run/zes-conversation-transport-bridge/bridge.sock",
+  bridgeTimeoutMs: 20_000,
+});
+assert.deepEqual(
+  loadConfig({
+    ...baseEnv,
+    DEVSPACE_CONVERSATION_TRANSPORT: "1",
+    DEVSPACE_CONVERSATION_TRANSPORT_EFFECTS: "1",
+    DEVSPACE_CONVERSATION_TRANSPORT_BRIDGE_SOCKET: join(
+      emptyConfigDir,
+      "conversation-bridge.sock",
+    ),
+    DEVSPACE_CONVERSATION_TRANSPORT_TIMEOUT_SECONDS: "45",
+  }).conversationTransport,
+  {
+    enabled: true,
+    effectsEnabled: true,
+    bridgeSocketPath: join(emptyConfigDir, "conversation-bridge.sock"),
+    bridgeTimeoutMs: 45_000,
+  },
+);
+assert.throws(
+  () => loadConfig({
+    ...baseEnv,
+    DEVSPACE_CONVERSATION_TRANSPORT_EFFECTS: "1",
+  }),
+  /requires DEVSPACE_CONVERSATION_TRANSPORT/,
+);
 assert.deepEqual(
   loadConfig({
     ...baseEnv,

@@ -1,4 +1,9 @@
 import type Database from "better-sqlite3";
+import {
+  EXECUTION_WAKE_COORDINATION_SCHEMA_SQL,
+  EXECUTION_WAKE_COORDINATION_SCHEMA_VERSION,
+} from "../execution-wake-coordination-schema.js";
+import { CONVERSATION_TRANSPORT_SCHEMA_SQL } from "../conversation-transport-schema.js";
 
 interface Migration {
   version: number;
@@ -61,6 +66,11 @@ const migrations: Migration[] = [
     version: 11,
     name: "workspace-preservation-refs",
     up: migrateWorkspacePreservationRefs,
+  },
+  {
+    version: 12,
+    name: "conversation-transport-and-wake-coordination",
+    up: migrateConversationTransportAndWakeCoordination,
   },
 ];
 
@@ -486,6 +496,18 @@ function migrateWorkspacePreservationRefs(
   sqlite: Database.Database,
 ): void {
   addColumnIfMissing(sqlite, "workspace_sessions", "preservation_ref", "text");
+}
+
+function migrateConversationTransportAndWakeCoordination(
+  sqlite: Database.Database,
+): void {
+  sqlite.exec(EXECUTION_WAKE_COORDINATION_SCHEMA_SQL);
+  sqlite.exec(CONVERSATION_TRANSPORT_SCHEMA_SQL);
+  sqlite.prepare(`
+    insert into execution_wake_coordination_schema_versions(version, installed_at_ms)
+    values (?, ?)
+    on conflict(version) do nothing
+  `).run(EXECUTION_WAKE_COORDINATION_SCHEMA_VERSION, Date.now());
 }
 
 function addColumnIfMissing(

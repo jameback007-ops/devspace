@@ -45,6 +45,13 @@ export interface SelfRepositoryPublicationConfig {
   branchName: string;
   expectedRemoteUrl?: string;
 }
+
+export interface ConversationTransportConfig {
+  enabled: boolean;
+  effectsEnabled: boolean;
+  bridgeSocketPath: string;
+  bridgeTimeoutMs: number;
+}
 const DEFAULT_OAUTH_ACCESS_TOKEN_TTL_SECONDS = 60 * 60;
 const DEFAULT_OAUTH_REFRESH_TOKEN_TTL_SECONDS = 30 * 24 * 60 * 60;
 const DEFAULT_ARTIFACT_MAX_FILE_BYTES = 100 * 1024 * 1024;
@@ -98,6 +105,7 @@ export interface ServerConfig {
   zesResearchCycle: ZesResearchCycleConfig;
   toolSurfaceFreshness: ToolSurfaceFreshnessConfig;
   selfRepositoryPublication: SelfRepositoryPublicationConfig;
+  conversationTransport: ConversationTransportConfig;
   logging: LoggingConfig;
 }
 
@@ -282,6 +290,35 @@ function parseSelfRepositoryPublicationConfig(
     remoteName,
     branchName,
     expectedRemoteUrl,
+  };
+}
+
+function parseConversationTransportConfig(
+  env: NodeJS.ProcessEnv,
+): ConversationTransportConfig {
+  const enabled = parseBoolean(env.DEVSPACE_CONVERSATION_TRANSPORT);
+  const effectsEnabled = parseBoolean(
+    env.DEVSPACE_CONVERSATION_TRANSPORT_EFFECTS,
+  );
+  if (effectsEnabled && !enabled) {
+    throw new Error(
+      "DEVSPACE_CONVERSATION_TRANSPORT_EFFECTS requires DEVSPACE_CONVERSATION_TRANSPORT",
+    );
+  }
+  return {
+    enabled,
+    effectsEnabled,
+    bridgeSocketPath:
+      parseOptionalAbsolutePath(
+        env.DEVSPACE_CONVERSATION_TRANSPORT_BRIDGE_SOCKET,
+        "DEVSPACE_CONVERSATION_TRANSPORT_BRIDGE_SOCKET",
+      ) ?? "/run/zes-conversation-transport-bridge/bridge.sock",
+    bridgeTimeoutMs: parsePositiveInteger(
+      env.DEVSPACE_CONVERSATION_TRANSPORT_TIMEOUT_SECONDS,
+      20,
+      "DEVSPACE_CONVERSATION_TRANSPORT_TIMEOUT_SECONDS",
+      120,
+    ) * 1_000,
   };
 }
 
@@ -703,6 +740,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     },
     toolSurfaceFreshness: parseToolSurfaceFreshnessConfig(env),
     selfRepositoryPublication: parseSelfRepositoryPublicationConfig(env),
+    conversationTransport: parseConversationTransportConfig(env),
     logging: parseLoggingConfig(env),
   };
 }

@@ -3,6 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
+import { openDatabase } from "./db/client.js";
 import {
   DEFAULT_EXECUTION_WAKE_COORDINATION_CONFIG,
   ExecutionWakeCoordinationManager,
@@ -704,14 +705,21 @@ test("wake coordination fails closed when disabled or persistence is absent", as
   const root = await mkdtemp(join(tmpdir(), "devspace-wake-coordination-missing-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const lower = new FakeLowerPlane(Date.now);
-  assert.throws(
-    () => new ExecutionWakeCoordinationManager(
-      DEFAULT_EXECUTION_WAKE_COORDINATION_CONFIG,
-      join(root, "missing"),
-      lower,
-    ),
-    /persistence is not installed/i,
-  );
+  const unmigrated = openDatabase(join(root, "missing"));
+  unmigrated.sqlite.exec("drop table execution_wake_coordination_schema_versions");
+  try {
+    assert.throws(
+      () => new ExecutionWakeCoordinationManager(
+        DEFAULT_EXECUTION_WAKE_COORDINATION_CONFIG,
+        join(root, "missing"),
+        lower,
+        { database: unmigrated },
+      ),
+      /persistence is not installed/i,
+    );
+  } finally {
+    unmigrated.close();
+  }
 
   const context = await fixture(t, { enabled: false });
   assert.throws(

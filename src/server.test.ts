@@ -8,6 +8,12 @@ import { promisify } from "node:util";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { loadConfig, type ServerConfig } from "./config.js";
+import type { ConversationTransportBridgePort } from "./conversation-transport-bridge-client.js";
+import {
+  CONVERSATION_TRANSPORT_BRIDGE_AUTHORITY,
+  type ConversationBridgeTargetStatus,
+} from "./conversation-transport-bridge-protocol.js";
+import { ConversationTransportRuntime } from "./conversation-transport-tools.js";
 import { ExecutionScopeManager } from "./execution-observability.js";
 import {
   LocalAgentCoordinator,
@@ -61,6 +67,65 @@ test("runtime fingerprint exactly matches the SDK tools/list descriptors", async
     context.client.getServerVersion()?.version,
     context.config.mcpServerVersion,
   );
+});
+
+test("conversation transport tools expose fixed aliases and direct-first status without raw targets", async (t) => {
+  const context = await fixture(t, {
+    runtimeCapabilities: true,
+    conversationTransport: {
+      bridge: fixedConversationBridge(),
+    },
+  });
+  const listed = await context.client.listTools();
+  const names = new Set(listed.tools.map((tool) => tool.name));
+  for (const name of [
+    "conversation_transport_bind",
+    "conversation_transport_status",
+    "execution_wake_pending_record",
+    "execution_wake_status",
+    "execution_wake_assess",
+    "execution_wake_execute",
+    "execution_wake_reconcile",
+  ]) {
+    assert.ok(names.has(name), `missing ${name}`);
+  }
+  const bindTool = listed.tools.find((tool) => tool.name === "conversation_transport_bind");
+  const bindSchema = JSON.stringify(bindTool?.inputSchema ?? {});
+  assert.equal(bindSchema.includes("threadId"), false);
+  assert.equal(bindSchema.includes("conversationUrl"), false);
+  assert.equal(bindSchema.includes("prompt"), false);
+
+  const bound = await context.client.callTool({
+    name: "conversation_transport_bind",
+    arguments: {
+      targetExecutionScopeRef: "1234567890abcdef",
+      missionRef: "mission:server-transport-test",
+      targetAlias: "codex-canary",
+    },
+    _meta: { "devspace/execution-scope": "server-transport-test" },
+  } as Parameters<Client["callTool"]>[0]);
+  assert.equal(structuredData(bound).binding.targetAlias, "codex-canary");
+  assert.equal("threadId" in structuredData(bound).binding, false);
+
+  const status = await context.client.callTool({
+    name: "conversation_transport_status",
+    arguments: {
+      targetExecutionScopeRef: "1234567890abcdef",
+      missionRef: "mission:server-transport-test",
+    },
+    _meta: { "devspace/execution-scope": "server-transport-test" },
+  } as Parameters<Client["callTool"]>[0]);
+  assert.equal(structuredData(status).route.state, "selected");
+  assert.equal(structuredData(status).route.selected.kind, "native_rpc");
+
+  const snapshot = context.runtimeCapabilities!.snapshot();
+  const surface = snapshot.toolSurface as Record<string, any>;
+  assert.equal(
+    surface.criticalToolGroups.conversationTransport.registrationState,
+    "complete",
+  );
+  assert.equal(surface.configuration.conversationTransportEnabled, true);
+  assert.equal(surface.configuration.conversationTransportEffectsEnabled, false);
 });
 
 test("open_workspace keeps lifecycle flags out of model output and preserves complete card metadata", async (t) => {
@@ -1745,6 +1810,48 @@ test("checkout reuse and context suppression survive a registry restart", async 
   }
 });
 
+function fixedConversationBridge(): ConversationTransportBridgePort {
+  const status: ConversationBridgeTargetStatus = {
+    schemaVersion: 1,
+    targetAlias: "codex-canary",
+    targetKind: "codex_thread",
+    targetRefDigestSha256: "a".repeat(64),
+    bindingRef: "bridge-target:codex-canary",
+    bindingGeneration: 1,
+    candidates: [{
+      transportId: "codex-app-server:codex-canary",
+      targetKind: "codex_thread",
+      kind: "native_rpc",
+      availability: "available",
+      transportHealth: "healthy",
+      directInput: "available",
+      binding: "exact",
+      reconciliation: "available",
+      surfaceTrust: "official",
+      sessionLifecycle: "idle",
+      evidenceRefs: ["codex-app-server:thread-read"],
+    }],
+    observedAt: "2026-08-18T00:00:00.000Z",
+    expiresAt: "2099-01-01T00:00:00.000Z",
+    evidenceDigestSha256: "b".repeat(64),
+    evidenceRefs: ["bridge-protocol:v1"],
+    limitationCodes: [],
+    authority: CONVERSATION_TRANSPORT_BRIDGE_AUTHORITY,
+  };
+  return {
+    status: async (targetAlias) => {
+      assert.equal(targetAlias, "codex-canary");
+      return status;
+    },
+    deliver: async () => {
+      throw new Error("not used by this test");
+    },
+    reconcile: async () => {
+      throw new Error("not used by this test");
+    },
+  };
+}
+
 interface ServerFixture {
   client: Client;
   project: string;
@@ -1752,6 +1859,7 @@ interface ServerFixture {
   stateDir: string;
   hostSkillPath?: string;
   localAgentCoordinator?: LocalAgentCoordinator;
+  conversationTransportRuntime?: ConversationTransportRuntime;
   runtimeCapabilities?: RuntimeCapabilityRegistry;
   ownerRemote?: string;
   close: () => Promise<void>;
@@ -1774,6 +1882,10 @@ async function fixture(
     scopePublicationPreflight?: ScopePublicationPreflightSource;
     selfRepositoryPublication?: {
       effectsEnabled?: boolean;
+    };
+    conversationTransport?: {
+      effectsEnabled?: boolean;
+      bridge: ConversationTransportBridgePort;
     };
   } = {},
 ): Promise<ServerFixture> {
@@ -1882,11 +1994,29 @@ async function fixture(
           DEVSPACE_SELF_REPOSITORY_EXPECTED_REMOTE_URL: ownerRemote,
         }
       : {}),
+    ...(options.conversationTransport
+      ? {
+          DEVSPACE_CONVERSATION_TRANSPORT: "1",
+          DEVSPACE_CONVERSATION_TRANSPORT_EFFECTS:
+            options.conversationTransport.effectsEnabled ? "1" : "0",
+          DEVSPACE_CONVERSATION_TRANSPORT_BRIDGE_SOCKET: join(
+            root,
+            "conversation-transport-bridge.sock",
+          ),
+        }
+      : {}),
     PORT: "1",
   });
   const store = new SqliteWorkspaceStore(stateDir);
   const workspaces = new WorkspaceRegistry(config, store);
   const processSessions = new ProcessSessionManager();
+  const conversationTransportRuntime = options.conversationTransport
+    ? new ConversationTransportRuntime(
+        config.conversationTransport,
+        stateDir,
+        { bridge: options.conversationTransport.bridge },
+      )
+    : undefined;
   const executionScopes = options.useDefaultExecutionScopes
     ? undefined
     : new ExecutionScopeManager(
@@ -1919,6 +2049,7 @@ async function fixture(
         undefined,
         options.continuationPreflightProjector,
         options.scopePublicationPreflight,
+        conversationTransportRuntime,
       )
     : createMcpServer(
         config,
@@ -1935,6 +2066,7 @@ async function fixture(
         undefined,
         options.continuationPreflightProjector,
         options.scopePublicationPreflight,
+        conversationTransportRuntime,
       );
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: "devspace-test-client", version: "1.0.0" });
@@ -1951,6 +2083,7 @@ async function fixture(
     await server.close();
     processSessions.shutdown();
     localAgentCoordinator?.close();
+    conversationTransportRuntime?.close();
     executionScopes?.close();
     store.close();
   };
@@ -1967,6 +2100,7 @@ async function fixture(
     stateDir,
     hostSkillPath,
     localAgentCoordinator,
+    conversationTransportRuntime,
     runtimeCapabilities,
     ownerRemote,
     close,

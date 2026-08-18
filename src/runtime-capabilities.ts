@@ -93,6 +93,15 @@ const CRITICAL_TOOL_GROUPS = {
     "zes_research_cycle_status",
     "zes_research_cycle_close",
   ],
+  conversationTransport: [
+    "conversation_transport_bind",
+    "conversation_transport_status",
+    "execution_wake_pending_record",
+    "execution_wake_status",
+    "execution_wake_assess",
+    "execution_wake_execute",
+    "execution_wake_reconcile",
+  ],
   nativeNavigation: ["grep", "glob", "ls"],
   artifactDownload: ["download_artifact"],
 } as const;
@@ -281,6 +290,10 @@ export class RuntimeCapabilityRegistry {
         this.config.selfRepositoryPublication.enabled,
       selfRepositoryPublicationEffectsEnabled:
         this.config.selfRepositoryPublication.effectsEnabled,
+      conversationTransportEnabled:
+        this.config.conversationTransport.enabled,
+      conversationTransportEffectsEnabled:
+        this.config.conversationTransport.effectsEnabled,
     };
   }
 
@@ -321,6 +334,10 @@ export class RuntimeCapabilityRegistry {
       zesResearchCycle: {
         configured: this.config.zesResearchCycle.mode !== "off",
         expectedTools: CRITICAL_TOOL_GROUPS.zesResearchCycle,
+      },
+      conversationTransport: {
+        configured: this.config.conversationTransport.enabled,
+        expectedTools: CRITICAL_TOOL_GROUPS.conversationTransport,
       },
       nativeNavigation: {
         configured:

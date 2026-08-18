@@ -107,6 +107,10 @@ export interface LowerPlaneWakeReadiness {
   missionRef: string;
   sessionUiBindingRef: string;
   bindingGeneration: number;
+  targetKind?: "codex_thread" | "chatgpt_chat" | "chatgpt_work" | "generic";
+  transportId?: string;
+  transportKind?: "native_rpc" | "local_agent" | "web_ui";
+  transportRouteDigestSha256?: string;
   operationalState: string;
   exactTargetVerified: boolean;
   selectorContractVerified: boolean;
@@ -156,6 +160,10 @@ export interface WakePermit {
   readinessAssessmentRef: string;
   sessionUiBindingRef: string;
   bindingGeneration: number;
+  targetKind?: "codex_thread" | "chatgpt_chat" | "chatgpt_work" | "generic";
+  transportId?: string;
+  transportKind?: "native_rpc" | "local_agent" | "web_ui";
+  transportRouteDigestSha256?: string;
   observationRef: string;
   evidenceDigestSha256: string;
   generationBoundaryRefBefore?: string;
@@ -297,6 +305,7 @@ export interface ExecutionWakeLowerPlanePort {
     pendingWorkGeneration: number;
     pendingWorkSemanticDigestSha256: string;
     correlationRef: string;
+    assessmentTimeCeiling?: string;
   }): Promise<LowerPlaneWakeReadiness>;
 
   consumeWakePermit(permit: WakePermit): Promise<WakeLowerPlaneDispatchResult>;
@@ -385,6 +394,9 @@ export function wakeKey(input: {
   pendingWorkSemanticDigestSha256: string;
   sessionUiBindingRef: string;
   bindingGeneration: number;
+  transportId?: string;
+  transportKind?: string;
+  transportRouteDigestSha256?: string;
   attemptSequence: number;
 }): string {
   return `wky_${sha256(canonicalJson(input)).slice(0, 32)}`;
@@ -422,6 +434,18 @@ export function validateLowerPlaneReadiness(
     reasons.add("READINESS_EVIDENCE_DIGEST_INVALID");
   }
   if (!readiness.lowerPlaneAuthorityRef) reasons.add("LOWER_PLANE_AUTHORITY_REF_MISSING");
+  const transportFields = [
+    readiness.transportId,
+    readiness.transportKind,
+    readiness.transportRouteDigestSha256,
+  ];
+  if (transportFields.some((value) => value !== undefined)) {
+    if (!readiness.transportId) reasons.add("TRANSPORT_ID_MISSING");
+    if (!readiness.transportKind) reasons.add("TRANSPORT_KIND_MISSING");
+    if (!/^[a-f0-9]{64}$/.test(readiness.transportRouteDigestSha256 ?? "")) {
+      reasons.add("TRANSPORT_ROUTE_DIGEST_INVALID");
+    }
+  }
   if (readiness.evidenceRefs.length === 0) {
     reasons.add("LOWER_PLANE_EVIDENCE_REFS_MISSING");
   }

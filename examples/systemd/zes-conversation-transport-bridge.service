@@ -1,0 +1,25 @@
+[Unit]
+Description=ZES bounded conversation transport bridge
+After=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+UMask=0077
+ExecStart=/usr/bin/python3 /usr/local/lib/zes-conversation-transport-bridge/bridge.py --config /etc/zes-conversation-transport-bridge.json serve
+Restart=on-failure
+RestartSec=2s
+NoNewPrivileges=true
+PrivateDevices=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ProtectControlGroups=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+RestrictAddressFamilies=AF_UNIX
+ReadWritePaths=/run/zes-conversation-transport-bridge /var/lib/zes-conversation-transport-bridge
+
+[Install]
+WantedBy=multi-user.target

@@ -128,6 +128,10 @@ import {
   type RecoveryWriterState,
   type TurnHorizonBeginReason,
 } from "./turn-continuity.js";
+import {
+  ConversationTransportRuntime,
+  registerConversationTransportTools,
+} from "./conversation-transport-tools.js";
 
 type Transport = StreamableHTTPServerTransport;
 // MCP clients can reconnect without closing the previous transport. Bound stale
@@ -2182,11 +2186,14 @@ export function createMcpServer(
   researchCycle?: ZesResearchCycleManager,
   continuationPreflightProjector?: ZesContinuationPreflightProjectionSource,
   scopePublicationPreflight?: ScopePublicationPreflightSource,
+  conversationTransportRuntime?: ConversationTransportRuntime,
 ): McpServer {
   const ownsExecutionScopes = executionScopes === undefined;
   const ownsExecutionMailbox = executionMailbox === undefined;
   const ownsLocalAgentCoordinator = config.subagents && localAgentCoordinator === undefined;
   const ownsTurnContinuity = turnContinuity === undefined;
+  const ownsConversationTransportRuntime =
+    config.conversationTransport.enabled && conversationTransportRuntime === undefined;
   const activeExecutionScopes = executionScopes ?? new ExecutionScopeManager(
     config.executionObservability,
     config.stateDir,
@@ -2204,6 +2211,12 @@ export function createMcpServer(
     ?? new RuntimeCapabilityRegistry(config);
   const activeResearchCycle = researchCycle
     ?? new ZesResearchCycleManager(config.zesResearchCycle);
+  const activeConversationTransportRuntime = config.conversationTransport.enabled
+    ? conversationTransportRuntime ?? new ConversationTransportRuntime(
+        config.conversationTransport,
+        config.stateDir,
+      )
+    : undefined;
   const lifecycleStore = workspaces.lifecycleStore();
   const activeWorkspaceLifecycle = lifecycleStore
     ? new WorkspaceLifecycleManager(
@@ -2310,6 +2323,15 @@ export function createMcpServer(
     (workspaceId) => researchWorkspace(workspaces, workspaceId),
     registerAppTool,
   );
+  if (activeConversationTransportRuntime) {
+    registerConversationTransportTools(
+      server,
+      config,
+      activeConversationTransportRuntime,
+      registerAppTool,
+      executionScopeIdentity,
+    );
+  }
 
   registerAppTool(
     server,
@@ -3741,6 +3763,7 @@ export function createMcpServer(
     || ownsExecutionMailbox
     || ownsLocalAgentCoordinator
     || ownsTurnContinuity
+    || ownsConversationTransportRuntime
   ) {
     const close = server.close.bind(server);
     let closing: Promise<void> | undefined;
@@ -3753,6 +3776,9 @@ export function createMcpServer(
           if (ownsExecutionMailbox) activeExecutionMailbox.close();
           if (ownsTurnContinuity) activeTurnContinuity.close();
           if (ownsLocalAgentCoordinator) activeLocalAgentCoordinator?.close();
+          if (ownsConversationTransportRuntime) {
+            activeConversationTransportRuntime?.close();
+          }
         }
       })();
       return closing;

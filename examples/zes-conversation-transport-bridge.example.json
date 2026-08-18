@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "effectsEnabled": false,
+  "relayModulePath": "/root/.codex/skills/codex-thread-relay/scripts/codex_thread_relay.py",
+  "appServerSocket": "/root/.codex/app-server-control/app-server-control.sock",
+  "stateDir": "/var/lib/zes-conversation-transport-bridge",
+  "socketPath": "/run/zes-conversation-transport-bridge/bridge.sock",
+  "socketMode": "0660",
+  "allowedPeerUids": [0],
+  "timeoutSeconds": 20,
+  "targets": {
+    "codex-primary": {
+      "targetKind": "codex_thread",
+      "bindingGeneration": 1,
+      "native": {
+        "threadId": "<allowlisted-codex-thread-id>"
+      }
+    },
+    "chatgpt-work-primary": {
+      "targetKind": "chatgpt_work",
+      "bindingGeneration": 1
+    }
+  }
+}

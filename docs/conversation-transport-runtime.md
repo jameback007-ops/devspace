@@ -1,0 +1,157 @@
+# Direct-first conversation transport runtime
+
+This runtime extends DevSpace execution-scope wake coordination with one
+provider-neutral transport boundary:
+
+```text
+durable pending work
+  -> exact scope/mission target binding
+  -> bridge-attested transport observations
+  -> deterministic native_rpc > local_agent > web_ui route
+  -> transport-bound wake permit
+  -> persist-before-dispatch delivery
+  -> exact admission reconciliation
+  -> fallback only after no-effect proof
+```
+
+## Proven surface boundary
+
+The installed Codex App Server is a supported bidirectional JSON-RPC control
+plane for Codex threads and turns. A fixed Codex thread target can therefore
+use `native_rpc` without browser automation. Exact admission is reconciled by
+the deterministic `clientUserMessageId` recorded in the thread turn history.
+
+ChatGPT `Chat` and `Work` are separate from the Codex thread history. The
+installed App Server schema exposes no external method to address, attach, or
+send to a Chat/Work conversation. ChatGPT authentication on the Codex App
+Server does not change that protocol boundary. Until an official or registered
+Chat/Work control protocol is attested, the native candidate is returned as:
+
+```text
+UPSTREAM_CHAT_WORK_NATIVE_CONTROL_PROTOCOL_UNATTESTED
+```
+
+This is a typed upstream constraint, not a signal to replay private web
+endpoints. Chat/Work may use the governed `web_ui` route only when an exact,
+fresh browser binding and selector contract are configured and observed.
+
+## Authority split
+
+The MCP surface accepts only:
+
+- an execution-scope reference;
+- a mission reference;
+- a fixed target alias;
+- durable work references and idempotency keys.
+
+Raw thread IDs, conversation URLs, browser profile paths, App Server socket
+paths, cookies, extension tokens, and credentials remain in the root-owned
+bridge configuration. The DevSpace database stores only target aliases,
+digests, route IDs, permit state, and receipts.
+
+The bridge delivery ledger never stores prompt text. It stores a prompt digest,
+deterministic message ID, route digest, permit reference, and reconciliation
+receipts. Prompt text exists in process memory only for the duration of a
+delivery call.
+
+## Runtime components
+
+`scripts/zes-conversation-transport-bridge.py`
+
+- root-owned allowlisted target registry;
+- local App Server RPC client through the existing relay implementation;
+- App Server-mediated access to the already registered Playwright MCP server;
+- Unix peer-credential authorization;
+- idempotent delivery ledger and reconcile-before-retry semantics;
+- no arbitrary target or socket arguments.
+
+`ConversationTransportRuntime`
+
+- executor-local scope/mission target bindings;
+- provider-neutral route selection;
+- wake scheduling and attempt throttles;
+- permit issuance with `transportId`, `transportKind`, and route digest;
+- MCP tools for bind, status, pending work, assess, execute, and reconcile.
+
+## Root-owned bridge configuration
+
+Install a `0600` JSON document based on
+`examples/zes-conversation-transport-bridge.example.json`. Each target must
+have a fixed alias and target kind.
+
+For a Codex native target:
+
+```json
+{
+  "targetKind": "codex_thread",
+  "bindingGeneration": 1,
+  "native": { "threadId": "<allowlisted-codex-thread-id>" }
+}
+```
+
+For Chat or Work, omit `native` unless a supported protocol is later attested.
+A Web UI fallback additionally requires:
+
+- the fixed Codex thread that owns the existing Playwright MCP connection;
+- the exact normalized ChatGPT conversation URL digest;
+- an expected origin;
+- bounded attestation and expiry timestamps;
+- a selector contract;
+- `webUi.effectsEnabled=true` only after read-only observation passes.
+
+The normalized URL is `scheme://host/path` with query and fragment removed.
+Only its SHA-256 digest is returned outside the bridge.
+
+## Rollout gates
+
+Use two independent effect gates:
+
+1. bridge configuration `effectsEnabled`;
+2. DevSpace `DEVSPACE_CONVERSATION_TRANSPORT_EFFECTS`.
+
+The safe rollout is:
+
+1. deploy both services with both gates off;
+2. validate bridge config and Unix peer authorization;
+3. verify Codex native status is `available/exact`;
+4. verify Chat/Work reports the typed native limitation;
+5. verify no Web UI route is eligible without an exact binding;
+6. create a disposable Codex thread and perform one native canary;
+7. prove one `clientUserMessageId` admission and one terminal attempt;
+8. enable DevSpace effects only after the bridge canary passes;
+9. enable Web UI effects separately after a reversible observation/staging
+   canary proves the current selector contract.
+
+An attempt in `accepted`, `sending`, or `indeterminate` state blocks retry and
+cross-transport fallback. Reconcile it first. Silence is never effect evidence.
+
+## Systemd hardening
+
+Use the example unit in
+`examples/systemd/zes-conversation-transport-bridge.service` and the DevSpace
+drop-in in `examples/systemd/devspace-conversation-transport.conf`.
+
+The bridge should run with:
+
+- `UMask=0077`;
+- `RestrictAddressFamilies=AF_UNIX`;
+- `NoNewPrivileges=true`;
+- read-only access to the App Server socket and relay module;
+- write access only to its `/run` and `/var/lib` directories.
+
+Do not pass browser-extension credentials on a process command line. The bridge
+does not require the Playwright extension token: it calls the Playwright MCP
+tool through the authenticated App Server connection that already owns it.
+
+## MCP tools
+
+- `conversation_transport_bind`
+- `conversation_transport_status`
+- `execution_wake_pending_record`
+- `execution_wake_status`
+- `execution_wake_assess`
+- `execution_wake_execute`
+- `execution_wake_reconcile`
+
+`execution_wake_execute` may send one prompt and remains unavailable as an
+effect while either rollout gate is off.
