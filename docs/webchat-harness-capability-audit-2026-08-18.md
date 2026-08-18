@@ -4,6 +4,7 @@ Date: 2026-08-18
 Candidate branch: `agent/webchat-harness-capability-rd-20260818`
 Candidate base: ZES Nexus/DevSpace `5d7929ac1250a913d070c2c2ec0c2e01e9b2e0fa`
 Fresh integration target reconciled and validated: `ab504b63091a7abe723b6bc9a88e31805bb164dd`
+Published DevSpace `owner/main`: `960a48e36d6f60c5e2dc5f69e50b7c7d5c0c9514`
 Live package at audit start: `1.0.7-zes.4`
 
 ## Purpose
@@ -317,8 +318,9 @@ This candidate intentionally preserves the following boundaries:
 6. Future executor context snapshots must be derived from authoritative refs
    and expose omissions/freshness; they must not become a second source of
    truth.
-7. No live service restart, deployment, main-branch mutation, or publication is
-   part of this candidate.
+7. During candidate development, no live service restart, deployment,
+   main-branch mutation, or publication was used as a substitute for isolated
+   validation.
 
 ## Validation evidence at this checkpoint
 
@@ -351,8 +353,12 @@ includes the fixed-route continuation-preflight capability. The only merge
 conflict was the shared `package.json` test command; both test registrations
 were preserved and `src/server.ts` merged without conflict. Post-rebase
 typecheck, the full test suite, production build, and diff checks all passed.
-The candidate is validated but remains isolated and is not deployed or
-published to `owner/main` by this record.
+After validation, the governed checkout was fast-forwarded from `ab504b63...`
+to `960a48e...` and published to `owner/main` with an exact lease on the old
+remote ref. Remote fetch and `ls-remote` readback both matched the published
+commit. Runtime deployment remains a separate immutable-release boundary; its
+current state must be established from the deployment manifest and live
+runtime attestation rather than inferred from this Git record.
 
 ## Highest-value follow-up work
 
@@ -407,15 +413,21 @@ identity, and evaluator feedback. Feed measured failures and repeated manual
 recovery steps into a reviewed harness backlog before attempting any automatic
 self-modification.
 
-## Integration rule
+## Integration and deployment record
 
-Before integration:
+Repository integration completed under the following evidence:
 
-1. fetch current `owner/main`;
-2. confirm the two concurrent DevSpace scopes and live deployment state;
-3. rebase/reconcile this candidate on the exact fresh main;
-4. resolve the expected mechanical `server.ts`/`package.json` overlap with
-   continuation preflight without dropping either capability;
-5. rerun typecheck, full tests, build, and diff checks;
-6. hand the validated commit to the live Nexus owner for deployment/probe, or
-   publish only under an explicitly acquired integration boundary.
+1. fresh `owner/main` was `ab504b63091a...`;
+2. active execution scopes had no running writer, tool, or process;
+3. the candidate was rebased onto that exact ref;
+4. the mechanical `package.json` overlap preserved both test registrations;
+5. typecheck, the full test suite, production build, and diff checks passed;
+6. the local governed checkout was fast-forwarded without a merge commit;
+7. `owner/main` was updated from `ab504b63...` to `960a48e...` with an exact
+   compare-and-swap lease and verified by remote readback.
+
+Deployment must continue to use an immutable, dependency-complete release,
+retain the prior release for rollback, bind an exact source tree, artifact
+digest, tool-surface fingerprint, accelerator-profile ref, and manifest digest,
+then verify the real MCP endpoint after restart. A source commit on `main` is
+not itself evidence that the live Nexus runtime changed.
