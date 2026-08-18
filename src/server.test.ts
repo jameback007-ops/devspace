@@ -658,6 +658,8 @@ test("execution-scope status carries the stable continuation control plane witho
   };
   const context = await fixture(t, {
     toolMode: "codex",
+    zesResearchCycleMode: "enforce",
+    runtimeCapabilities: true,
     continuationPreflightProjector,
     scopePublicationPreflight,
   });
@@ -670,6 +672,17 @@ test("execution-scope status carries the stable continuation control plane witho
   assert.ok(
     tools.tools.some((tool) => tool.name === "zes_continuation_preflight"),
     "the ergonomic direct tool remains available to fresh catalogs",
+  );
+  assert.ok(
+    tools.tools.some((tool) => tool.name === "zes_research_cycle_status"),
+    "research enforcement must coexist with the frozen-catalog control plane",
+  );
+  const runtime = context.runtimeCapabilities;
+  assert.ok(runtime);
+  const surface = runtime.snapshot().toolSurface as Record<string, any>;
+  assert.equal(
+    surface.criticalToolGroups.zesResearchCycle.registeredComplete,
+    true,
   );
 
   const status = await context.client.callTool({
