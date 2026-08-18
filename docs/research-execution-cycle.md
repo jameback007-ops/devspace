@@ -32,22 +32,37 @@ The model-facing flow is:
    private evidence directory. The broker exposes only typed Context7, Exa, and
    targeted-Web operations. It accepts no provider endpoint, command,
    credential, or output path from the model.
-4. `zes_research_cycle_assess` invokes the fixed native
+4. When a material claim requires experimental rather than documentary
+   evidence, `zes_research_instrument_plan` selects a bounded capability-shaped
+   route without executing it. An external optional adapter may then run a
+   notebook, property/stateful falsifier, disposable real-dependency test,
+   treatment/control agent evaluation, trace analysis, bounded counterfactual,
+   or separately authorized live canary. `zes_research_instrument_record` binds
+   exact typed results and artifact digests to the current research generation;
+   `zes_research_instrument_status` verifies their continued integrity. See
+   [Research Instrumentation Cycle](research-instrumentation-cycle.md).
+5. `zes_research_cycle_assess` invokes the fixed native
    `zes-research-reflex assess` application port. DevSpace stores and hashes the
-   returned v3 receipt and lease; it does not recompute sufficiency. Historical
-   v1/v2 receipts remain decodeable, but they cannot create a new admission
-   through this action gate.
-5. `zes_research_cycle_invalidate` reopens judgment after counterevidence,
+   returned v3 receipt and lease; it does not recompute sufficiency. Every
+   `research-instrument-evidence:*` ref in the native request is automatically
+   verified against the current research generation and artifact digests.
+   Optional `instrumentEvidenceRefs` make the intended set explicit, but cannot
+   introduce a ref that is absent from the request. Historical v1/v2 receipts
+   remain decodeable, but they cannot create a new admission through this action
+   gate.
+6. `zes_research_cycle_invalidate` reopens judgment after counterevidence,
    architecture or semantic forks, dependency/upstream changes, owner direction
    changes, repeated distinct failures, scope drift, or source-currentness
    expiry.
-6. `zes_research_cycle_verify_pre_commit` re-verifies the native receipt and
+7. `zes_research_cycle_verify_pre_commit` re-verifies the native receipt and
    binds the complete current working-content digest, validation refs,
    currentness checks, assumptions, limitations, unresolved risks, and stopping
-   reason.
-7. The normal Git commit is observed. A successful commit is accepted by the
+   reason. Instrument refs in `validationRefs` are automatically verified again
+   at the commit boundary; optional `instrumentEvidenceRefs` must be a subset of
+   that validation set.
+8. The normal Git commit is observed. A successful commit is accepted by the
    lifecycle only when it contains the complete pre-commit-verified change set.
-8. `zes_research_cycle_close` records the terminal outcome, decision delta,
+9. `zes_research_cycle_close` records the terminal outcome, decision delta,
    reusable findings, and reversal conditions. Fresh or reused external
    research must also compile a native Research Reflex episode packet for
    Task N→N+k reuse.
@@ -173,6 +188,9 @@ accepts their exact identity.
 
 - `zes_research_cycle_open`
 - `zes_research_cycle_prepare`
+- `zes_research_instrument_plan`
+- `zes_research_instrument_record`
+- `zes_research_instrument_status`
 - `zes_research_provider_invoke`
 - `zes_research_cycle_assess`
 - `zes_research_cycle_invalidate`

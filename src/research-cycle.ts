@@ -128,6 +128,25 @@ export interface ResearchProviderEvidenceContext {
   decisionBoundaryRef: string;
 }
 
+export interface ResearchInstrumentCycleContext {
+  cycleRef: string;
+  generation: number;
+  phase: ResearchCyclePhase;
+  evidenceDirectory: string;
+  ownerSeededFraming: boolean;
+  taskRef: string;
+  materialDecisionRef: string;
+  decisionBoundaryRef: string;
+  workspaceSnapshot: {
+    head: string;
+    sourceTree: string;
+    branch: string;
+    repositoryIdentityDigestSha256: string;
+    workingContentDigestSha256: string;
+    dirty: boolean;
+  };
+}
+
 export interface ResearchPreCommitChallenge {
   localAuthorityRechecked: boolean;
   externalCurrentnessRechecked: boolean;
@@ -1646,6 +1665,35 @@ export class ZesResearchCycleManager {
         taskRef: state.open.taskRef,
         materialDecisionRef: state.open.materialDecisionRef,
         decisionBoundaryRef: state.open.decisionBoundaryRef,
+      };
+    });
+  }
+
+  async instrumentContext(
+    workspace: ResearchWorkspace,
+  ): Promise<ResearchInstrumentCycleContext> {
+    this.assertManaged(workspace);
+    return await this.withLock(workspace, async () => {
+      const state = await this.requireState(workspace);
+      const snapshot = await gitSnapshot(workspace.root);
+      return {
+        cycleRef: state.cycleRef,
+        generation: state.generation,
+        phase: state.phase,
+        evidenceDirectory: state.open.evidenceDirectory,
+        ownerSeededFraming: state.open.ownerSeededFraming,
+        taskRef: state.open.taskRef,
+        materialDecisionRef: state.open.materialDecisionRef,
+        decisionBoundaryRef: state.open.decisionBoundaryRef,
+        workspaceSnapshot: {
+          head: snapshot.head,
+          sourceTree: snapshot.sourceTree,
+          branch: snapshot.branch,
+          repositoryIdentityDigestSha256:
+            snapshot.repositoryIdentityDigestSha256,
+          workingContentDigestSha256: snapshot.workingContentDigestSha256,
+          dirty: snapshot.dirty,
+        },
       };
     });
   }

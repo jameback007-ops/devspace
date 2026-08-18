@@ -20,6 +20,18 @@ import {
   type ResearchWorkspace,
   ZesResearchCycleManager,
 } from "./research-cycle.js";
+import {
+  RESEARCH_EVIDENCE_NEED_KINDS,
+  RESEARCH_INSTRUMENT_ARTIFACT_LOCATIONS,
+  RESEARCH_INSTRUMENT_ARTIFACT_ROLES,
+  RESEARCH_INSTRUMENT_CLAIM_CLASSES,
+  RESEARCH_INSTRUMENT_EXECUTION_BOUNDARIES,
+  RESEARCH_INSTRUMENT_MODEL_USE,
+  RESEARCH_INSTRUMENT_OUTCOMES,
+  type ResearchInstrumentPlanInput,
+  type ResearchInstrumentRecordInput,
+  ZesResearchInstrumentManager,
+} from "./research-instruments.js";
 
 type AppToolRegistrar = typeof registerAppToolType;
 type JsonObject = Record<string, unknown>;
@@ -131,6 +143,125 @@ const providerRequestSchema = z.union([
   }),
 ]);
 
+const researchInstrumentResultSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("notebook_experiment"),
+    parameterSetRefs: nonEmptyStrings.min(1),
+    datasetRefs: nonEmptyStrings,
+    replicateCount: z.number().int().min(1),
+    deterministic: z.boolean(),
+    metricRefs: nonEmptyStrings.min(1),
+  }),
+  z.object({
+    kind: z.literal("property_falsification"),
+    invariantRefs: nonEmptyStrings.min(1),
+    generatedCaseCount: z.number().int().min(1),
+    stateTransitionCount: z.number().int().min(0),
+    counterexampleFound: z.boolean(),
+    minimalCounterexampleRef: z.string().min(1).optional(),
+    seedRefs: nonEmptyStrings.min(1),
+  }),
+  z.object({
+    kind: z.literal("real_dependency_integration"),
+    dependencyIdentityRefs: nonEmptyStrings.min(1),
+    isolationRef: z.string().min(1),
+    scenarioCount: z.number().int().min(1),
+    passedScenarioCount: z.number().int().min(0),
+    failedScenarioRefs: nonEmptyStrings,
+  }),
+  z.object({
+    kind: z.literal("agent_behavior_eval"),
+    agentTargetRefs: nonEmptyStrings.min(1),
+    modelRefs: nonEmptyStrings.min(1),
+    datasetRef: z.string().min(1),
+    treatmentRef: z.string().min(1),
+    controlRef: z.string().min(1),
+    scorerRefs: nonEmptyStrings.min(1),
+    traceRefs: nonEmptyStrings.min(1),
+    sampleCount: z.number().int().min(1),
+    replicateCount: z.number().int().min(1),
+    seedRefs: nonEmptyStrings.min(1),
+    humanBaselineRef: z.string().min(1).optional(),
+  }),
+  z.object({
+    kind: z.literal("trace_analysis"),
+    traceRefs: nonEmptyStrings.min(1),
+    instrumentationRefs: nonEmptyStrings.min(1),
+    evaluatorRefs: nonEmptyStrings,
+    attributionMethodRef: z.string().min(1),
+    spanCount: z.number().int().min(1),
+  }),
+  z.object({
+    kind: z.literal("bounded_counterfactual"),
+    assignmentRef: z.string().min(1),
+    treatmentRef: z.string().min(1),
+    controlRef: z.string().min(1),
+    interventionRef: z.string().min(1),
+    analysisRef: z.string().min(1),
+    treatmentOutcomeRefs: nonEmptyStrings.min(1),
+    controlOutcomeRefs: nonEmptyStrings.min(1),
+    behaviorDeltaRefs: nonEmptyStrings.min(1),
+    modelRefs: nonEmptyStrings,
+    necessitySupported: z.boolean(),
+    sufficiencySupported: z.boolean(),
+  }),
+  z.object({
+    kind: z.literal("live_canary"),
+    runtimeIdentityRefs: nonEmptyStrings.min(1),
+    effectKeys: nonEmptyStrings.min(1),
+    cleanupRefs: nonEmptyStrings.min(1),
+    sampleCount: z.number().int().min(1),
+    terminalOutcomeObserved: z.boolean(),
+    rollbackAvailable: z.boolean(),
+  }),
+]);
+
+const researchInstrumentArtifactSchema = z.object({
+  location: z.enum(RESEARCH_INSTRUMENT_ARTIFACT_LOCATIONS),
+  path: z.string().min(1).max(4_096),
+  role: z.enum(RESEARCH_INSTRUMENT_ARTIFACT_ROLES),
+  mediaType: z.string().min(1).max(256),
+});
+
+function collectJsonStrings(value: unknown, output = new Set<string>()): Set<string> {
+  if (typeof value === "string") {
+    output.add(value);
+  } else if (Array.isArray(value)) {
+    for (const entry of value) collectJsonStrings(entry, output);
+  } else if (typeof value === "object" && value !== null) {
+    for (const entry of Object.values(value)) collectJsonStrings(entry, output);
+  }
+  return output;
+}
+
+function requireInstrumentEvidenceReferenced(
+  request: JsonObject,
+  evidenceRefs: string[],
+): void {
+  const requestStrings = collectJsonStrings(request);
+  const missing = evidenceRefs.filter((ref) => !requestStrings.has(ref));
+  if (missing.length > 0) {
+    throw new ResearchCycleError(
+      "RESEARCH_INSTRUMENT_EVIDENCE_NOT_REFERENCED",
+      "every verified research-instrument evidence ref must be referenced by the native Research Reflex request",
+      { missingEvidenceRefs: missing },
+    );
+  }
+}
+
+function referencedInstrumentEvidenceRefs(value: unknown): string[] {
+  return [...collectJsonStrings(value)]
+    .filter((entry) => entry.startsWith("research-instrument-evidence:"))
+    .sort();
+}
+
+function combinedInstrumentEvidenceRefs(
+  referenced: string[],
+  supplied: string[] | undefined,
+): string[] {
+  return [...new Set([...referenced, ...(supplied ?? [])])].sort();
+}
+
 function toolMeta(config: ServerConfig): { _meta: Record<string, unknown> } {
   if (config.widgets === "off") return { _meta: {} };
   return {
@@ -223,6 +354,9 @@ function registerLifecycleTool<Input extends object>(
 export const ZES_RESEARCH_CYCLE_TOOL_NAMES = [
   "zes_research_cycle_open",
   "zes_research_cycle_prepare",
+  "zes_research_instrument_plan",
+  "zes_research_instrument_record",
+  "zes_research_instrument_status",
   "zes_research_provider_invoke",
   "zes_research_cycle_assess",
   "zes_research_cycle_invalidate",
@@ -241,8 +375,106 @@ export function registerZesResearchCycleTools(
     config.zesResearchCycle,
     manager,
   ),
+  instrumentManager = new ZesResearchInstrumentManager(manager),
 ): void {
   if (!manager.enabled) return;
+
+  registerLifecycleTool(
+    server,
+    config,
+    registerTool,
+    "zes_research_instrument_plan",
+    {
+      title: "Plan evidence-producing research instruments",
+      description:
+        "Select a bounded experimental evidence route for the current prepared or admitted Research Reflex generation. The planner derives property/stateful falsification, disposable real-dependency integration, parameterized computational notebooks, treatment/control agent evaluation, trace attribution, bounded counterfactual, or live-canary steps from the claim class and explicit evidence needs. It records only an executor-local plan and never invokes Jupyter, Hypothesis, Testcontainers, Inspect, Phoenix, a model, a container, or a live effect. Blocked steps identify missing sandbox, model, or live-effect boundaries. A plan never establishes truth or research sufficiency.",
+      inputSchema: {
+        workspaceId: workspaceIdSchema,
+        idempotencyKey: z.string().min(1).max(200),
+        claimClass: z.enum(RESEARCH_INSTRUMENT_CLAIM_CLASSES),
+        claimRefs: nonEmptyStrings.min(1),
+        question: z.string().min(1).max(20_000),
+        hypothesis: z.string().min(1).max(20_000),
+        falsifier: z.string().min(1).max(20_000),
+        explicitEvidenceNeeds: z.array(
+          z.enum(RESEARCH_EVIDENCE_NEED_KINDS),
+        ).optional(),
+        executionConstraints: z.object({
+          executionBoundary: z.enum(
+            RESEARCH_INSTRUMENT_EXECUTION_BOUNDARIES,
+          ),
+          modelUse: z.enum(RESEARCH_INSTRUMENT_MODEL_USE),
+        }),
+      },
+      outputSchema,
+      ...toolMeta(config),
+      annotations: localStateAnnotations,
+    },
+    async (input: ResearchInstrumentPlanInput & { workspaceId: string }) => {
+      const { workspaceId, ...planInput } = input;
+      return await instrumentManager.plan(
+        resolveWorkspace(workspaceId),
+        planInput,
+      );
+    },
+  );
+
+  registerLifecycleTool(
+    server,
+    config,
+    registerTool,
+    "zes_research_instrument_record",
+    {
+      title: "Bind one research experiment receipt",
+      description:
+        "Bind one completed planned experiment to the current Research Reflex generation. The caller supplies typed treatment/control, model, dependency, trace, invariant, counterfactual, or live-canary fields plus 1-20 existing workspace or cycle-evidence artifacts. DevSpace reads only those bounded files, rejects traversal, symlinks, hard links, oversized files and self-referential instrument state, then records exact SHA-256 and byte identities. This tool does not execute the instrument. A passed receipt remains evidence under the planned claim ceiling and does not decide research sufficiency, semantic truth, publication, release, activation, runtime, or effect authority.",
+      inputSchema: {
+        workspaceId: workspaceIdSchema,
+        idempotencyKey: z.string().min(1).max(200),
+        planRef: z.string().min(1),
+        stepRef: z.string().min(1),
+        outcome: z.enum(RESEARCH_INSTRUMENT_OUTCOMES),
+        startedAt: z.string().min(1),
+        completedAt: z.string().min(1),
+        toolName: z.string().min(1).max(1_000),
+        toolVersion: z.string().min(1).max(1_000).optional(),
+        adapterRef: z.string().min(1).max(2_000).optional(),
+        environmentRefs: nonEmptyStrings,
+        artifacts: z.array(researchInstrumentArtifactSchema).min(1).max(20),
+        result: researchInstrumentResultSchema,
+        limitations: nonEmptyStrings,
+        unresolved: nonEmptyStrings,
+      },
+      outputSchema,
+      ...toolMeta(config),
+      annotations: localStateAnnotations,
+    },
+    async (input: ResearchInstrumentRecordInput & { workspaceId: string }) => {
+      const { workspaceId, ...recordInput } = input;
+      return await instrumentManager.record(
+        resolveWorkspace(workspaceId),
+        recordInput,
+      );
+    },
+  );
+
+  registerLifecycleTool(
+    server,
+    config,
+    registerTool,
+    "zes_research_instrument_status",
+    {
+      title: "Read research instrument plans and receipts",
+      description:
+        "Read current-generation experimental plans, blocked evidence steps, receipt refs, claim ceilings, and bounded artifact-integrity checks. Earlier generations remain counted as stale rather than silently reused. This is executor-local experimental evidence state, not canonical task, semantic, research-sufficiency, writer, publication, release, activation, runtime, or effect authority.",
+      inputSchema: { workspaceId: workspaceIdSchema },
+      outputSchema,
+      ...toolMeta(config),
+      annotations: readOnlyAnnotations,
+    },
+    async (input: { workspaceId: string }) =>
+      await instrumentManager.status(resolveWorkspace(input.workspaceId)),
+  );
 
   registerLifecycleTool(
     server,
@@ -372,6 +604,7 @@ export function registerZesResearchCycleTools(
         workspaceId: workspaceIdSchema,
         request: jsonObjectSchema,
         providerTraces: z.array(providerTraceSchema).optional(),
+        instrumentEvidenceRefs: nonEmptyStrings.min(1).optional(),
       },
       outputSchema,
       ...toolMeta(config),
@@ -381,11 +614,39 @@ export function registerZesResearchCycleTools(
       workspaceId: string;
       request: JsonObject;
       providerTraces?: ResearchProviderTraceInput[];
-    }) => await manager.assess(
-      resolveWorkspace(input.workspaceId),
-      input.request,
-      input.providerTraces ?? [],
-    ),
+      instrumentEvidenceRefs?: string[];
+    }) => {
+      const workspace = resolveWorkspace(input.workspaceId);
+      let instrumentEvidenceVerification: Record<string, unknown> | undefined;
+      const referencedEvidenceRefs = referencedInstrumentEvidenceRefs(
+        input.request,
+      );
+      const evidenceRefs = combinedInstrumentEvidenceRefs(
+        referencedEvidenceRefs,
+        input.instrumentEvidenceRefs,
+      );
+      if (input.instrumentEvidenceRefs?.length) {
+        requireInstrumentEvidenceReferenced(
+          input.request,
+          input.instrumentEvidenceRefs,
+        );
+      }
+      if (evidenceRefs.length > 0) {
+        instrumentEvidenceVerification =
+          await instrumentManager.verifyEvidenceRefs(
+            workspace,
+            evidenceRefs,
+          );
+      }
+      const result = await manager.assess(
+        workspace,
+        input.request,
+        input.providerTraces ?? [],
+      );
+      return instrumentEvidenceVerification
+        ? { ...result, instrumentEvidenceVerification }
+        : result;
+    },
   );
 
   registerLifecycleTool(
@@ -432,6 +693,7 @@ export function registerZesResearchCycleTools(
       inputSchema: {
         workspaceId: workspaceIdSchema,
         validationRefs: nonEmptyStrings.min(1),
+        instrumentEvidenceRefs: nonEmptyStrings.min(1).optional(),
         challenge: z.object({
           localAuthorityRechecked: z.boolean(),
           externalCurrentnessRechecked: z.boolean(),
@@ -449,12 +711,46 @@ export function registerZesResearchCycleTools(
     async (input: {
       workspaceId: string;
       validationRefs: string[];
+      instrumentEvidenceRefs?: string[];
       challenge: ResearchPreCommitChallenge;
-    }) => await manager.verifyPreCommit(
-      resolveWorkspace(input.workspaceId),
-      input.validationRefs,
-      input.challenge,
-    ),
+    }) => {
+      const workspace = resolveWorkspace(input.workspaceId);
+      let instrumentEvidenceVerification: Record<string, unknown> | undefined;
+      const validationInstrumentRefs = input.validationRefs
+        .filter((ref) => ref.startsWith("research-instrument-evidence:"));
+      const evidenceRefs = combinedInstrumentEvidenceRefs(
+        validationInstrumentRefs,
+        input.instrumentEvidenceRefs,
+      );
+      if (input.instrumentEvidenceRefs?.length) {
+        const validationRefs = new Set(input.validationRefs);
+        const missing = input.instrumentEvidenceRefs.filter(
+          (ref) => !validationRefs.has(ref),
+        );
+        if (missing.length > 0) {
+          throw new ResearchCycleError(
+            "RESEARCH_INSTRUMENT_EVIDENCE_NOT_IN_VALIDATION_REFS",
+            "pre-commit research-instrument evidence refs must also be present in validationRefs",
+            { missingEvidenceRefs: missing },
+          );
+        }
+      }
+      if (evidenceRefs.length > 0) {
+        instrumentEvidenceVerification =
+          await instrumentManager.verifyEvidenceRefs(
+            workspace,
+            evidenceRefs,
+          );
+      }
+      const result = await manager.verifyPreCommit(
+        workspace,
+        input.validationRefs,
+        input.challenge,
+      );
+      return instrumentEvidenceVerification
+        ? { ...result, instrumentEvidenceVerification }
+        : result;
+    },
   );
 
   registerLifecycleTool(

@@ -192,6 +192,7 @@ devspace doctor
 - [Execution-Scope Messaging](https://github.com/Waishnav/devspace/blob/main/docs/execution-scope-messaging.md)
 - [Local-Agent Session Continuation](https://github.com/Waishnav/devspace/blob/main/docs/local-agent-continuation.md)
 - [ZES Research Reflex Execution Cycle](docs/research-execution-cycle.md)
+- [ZES Research Instrumentation Cycle](docs/research-instrumentation-cycle.md)
 - [Workspace Candidate Lifecycle](https://github.com/Waishnav/devspace/blob/main/docs/workspace-candidate-lifecycle.md)
 - [Native File Download](https://github.com/Waishnav/devspace/blob/main/docs/artifact-exchange.md)
 - [Security Model](https://github.com/Waishnav/devspace/blob/main/docs/security.md)
