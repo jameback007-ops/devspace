@@ -68,7 +68,7 @@ sandbox: commands still run with the configured operating-system identity.
 ## Optional ZES Research Reflex Lifecycle
 
 DevSpace can bind material work in a ZES checkout to the native ZES Research
-Reflex v2 admission and episode contracts. The feature is disabled by default
+Reflex v3 admission and episode contracts. The feature is disabled by default
 and activates only for opened workspaces containing
 `packages/zes-control-kernel/pyproject.toml`.
 
@@ -79,7 +79,7 @@ and activates only for opened workspaces containing
 | `DEVSPACE_ZES_RESEARCH_STATE_ROOT` | `<DEVSPACE_STATE_DIR>/zes-research-cycles` | Owner-local lifecycle, receipt, and evidence state. |
 | `DEVSPACE_ZES_RESEARCH_TIMEOUT_SECONDS` | `60` | Native Research Reflex command timeout; maximum 300 seconds. |
 | `DEVSPACE_ZES_RESEARCH_TRUSTED_TRACE_ROOTS` | empty | Comma-separated additional roots for exact provider trace receipts. |
-| `EXA_API_KEY` | empty | Optional service-held Exa handle required by the fixed `zes_research_provider_invoke` Exa route. It is copied only into that exact child process and never into arbitrary `exec_command` or model-visible output. |
+| `EXA_API_KEY` | empty | Optional service-held Exa handle required by the fixed `zes_research_provider_invoke` Exa route. Exa `search` is the open-world operation; Exa `fetch` remains known-source acquisition. The handle is copied only into that exact child process and never into arbitrary `exec_command` or model-visible output. |
 | `CONTEXT7_API_KEY` | empty | Optional service-held Context7 handle for the fixed provider broker. Anonymous Context7 remains usable when supported upstream. |
 
 `observe` reports guard findings but allows the operation, while recording

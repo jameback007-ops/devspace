@@ -20,8 +20,8 @@ const MAX_PROCESS_OUTPUT_BYTES = 2 * 1024 * 1024;
 const STATE_SCHEMA = "devspace.zes-research-cycle-state.v1";
 const OPEN_SCHEMA = "devspace.zes-research-cycle-open.v1";
 const PREPARED_SCHEMA = "devspace.zes-research-cycle-prepared-scope.v1";
-const ADMISSION_REQUEST_SCHEMA = "zes.research-decision-admission-request.v2";
-const ADMISSION_RECEIPT_SCHEMA = "zes.research-decision-admission-receipt.v2";
+const ADMISSION_REQUEST_SCHEMA = "zes.research-decision-admission-request.v3";
+const ADMISSION_RECEIPT_SCHEMA = "zes.research-decision-admission-receipt.v3";
 const EPISODE_PACKET_SCHEMAS = new Set([
   "zes.research-episode-packet.v1",
   "zes.research-episode-packet.v2",
@@ -2093,8 +2093,8 @@ export class ZesResearchCycleManager {
     const prepared = state.prepared!;
     if (request.schema_version !== ADMISSION_REQUEST_SCHEMA) {
       throw new ResearchCycleError(
-        "RESEARCH_CYCLE_V2_ADMISSION_REQUIRED",
-        "the DevSpace action gate requires a provider-verifiable Research Reflex v2 request",
+        "RESEARCH_CYCLE_V3_ADMISSION_REQUIRED",
+        "the DevSpace action gate requires a capability-bound Research Reflex v3 request",
       );
     }
     const comparisons: Array<[string, unknown, unknown]> = [

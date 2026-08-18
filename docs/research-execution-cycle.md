@@ -1,7 +1,7 @@
 # ZES Research Reflex execution cycle
 
-DevSpace can bind material work in a ZES checkout to the native ZES Research
-Reflex v2 admission contract. The adapter owns only executor-local lifecycle,
+DevSpace can bind material work in a ZES checkout to the native capability-bound
+ZES Research Reflex v3 admission contract. The adapter owns only executor-local lifecycle,
 receipt verification, and effect observation. It does not become a second
 research engine or grant task, semantic, writer, publication, release,
 activation, runtime, or effect authority.
@@ -28,13 +28,15 @@ The model-facing flow is:
    scope, and every exact shell command expected to mutate source or dependency
    files. Only command digests are persisted.
 3. `zes_research_provider_invoke` optionally acquires one exact provider
-   receipt and binds it to native Research Reflex evidence inside the cycle's
+   receipt and binds it to provider-execution evidence v2 inside the cycle's
    private evidence directory. The broker exposes only typed Context7, Exa, and
    targeted-Web operations. It accepts no provider endpoint, command,
    credential, or output path from the model.
 4. `zes_research_cycle_assess` invokes the fixed native
    `zes-research-reflex assess` application port. DevSpace stores and hashes the
-   returned v2 receipt and lease; it does not recompute sufficiency.
+   returned v3 receipt and lease; it does not recompute sufficiency. Historical
+   v1/v2 receipts remain decodeable, but they cannot create a new admission
+   through this action gate.
 5. `zes_research_cycle_invalidate` reopens judgment after counterevidence,
    architecture or semantic forks, dependency/upstream changes, owner direction
    changes, repeated distinct failures, scope drift, or source-currentness
@@ -108,16 +110,22 @@ cheapest or easiest to call:
   or official source identity is already known and only its current location or
   content needs confirmation. It performs bounded pinned-HTTPS fetches and
   explicitly records that no open-world candidate discovery occurred.
-- Exa is the default for unknown candidate space, competitive alternatives,
-  field failures, community patterns, and broad multi-source discovery.
-- A different provider may replace Exa only when it is explicitly classified
-  as an equivalent open-world route and the Research Reflex request records the
-  exact override and coverage reason.
+- Exa `search` is the registered operation for unknown candidate space,
+  competitive alternatives, field failures, community patterns, and broad
+  multi-source discovery.
+- Exa `fetch` is a known-source acquisition operation. It remains useful for
+  reading an already-selected URL, but it does not prove that open-world
+  candidate discovery occurred merely because it uses the Exa service.
+- A different provider may replace Exa search only after its exact provider
+  route and open-world capability are registered and emitted by a verified
+  provider receipt. Caller-selected capability labels, free text, and an
+  override reason alone are insufficient.
 
-Targeted Web, ordinary host Web Search, Context7, and one already-known source
-never silently substitute for unavailable Exa on an open-world evidence need.
-That boundary remains held as provider-degraded until Exa or an explicitly
-equivalent open-world provider succeeds. Conversely, a narrow uniquely
+Targeted Web, ordinary host Web Search, Context7, Exa fetch, and one
+already-known source never silently substitute for unavailable Exa search on an
+open-world evidence need. That boundary remains held as provider-degraded until
+Exa search or a registered receipt-verified equivalent open-world provider
+succeeds. Conversely, a narrow uniquely
 authoritative fact does not have to spend an Exa call merely to retrieve a
 known official source.
 
@@ -131,7 +139,8 @@ The generic command-environment passthrough also rejects both reserved names.
 Provider timeouts and output ceilings terminate the complete child process
 group, and receipt/evidence files are opened no-follow, owner-checked,
 single-link, identity-stable, and bound back to the exact requested provider,
-operation, route kind, purpose, and cycle framing before admission.
+operation, route ref, transport, capability refs, open-world-performed proof,
+purpose, and cycle framing before admission.
 
 ## Configuration
 
@@ -177,10 +186,13 @@ tool-surface fingerprint and critical capability-group assessment.
 ## Failure and recovery rules
 
 - Provider failure cannot silently become `NO_SEARCH`.
-- Exa failure cannot silently downgrade an open-world decision to targeted Web.
+- Exa search failure cannot silently downgrade an open-world decision to Exa
+  fetch, targeted Web, Context7, or one known source.
 - Provider credentials remain service-held handles and are never accepted as
   model input or passed to arbitrary shell execution.
-- Only the native v2 admission receipt and lease can admit an action.
+- Only a new native v3 admission receipt and lease can admit an action through
+  this DevSpace action gate. Historical v1/v2 receipts remain available for
+  immutable decode and verification but do not create a new admission.
 - A receipt is bound to task, material decision, decision boundary, source
   identity, implementation boundary, action scope, and exact admitted shell
   mutation command digests.

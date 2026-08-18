@@ -17,6 +17,7 @@ import {
   canonicalDigest,
   classifyResearchCommand,
   extractPatchPaths,
+  ResearchCycleError,
   researchCommandDigest,
   type ResearchCycleOpenInput,
   type ResearchCyclePrepareInput,
@@ -78,7 +79,7 @@ async function nativeRunner(
     const requestDigest = canonicalDigest(request);
     const receiptDigest = "b".repeat(64);
     const receipt = {
-      schema_version: "zes.research-decision-admission-receipt.v2",
+      schema_version: "zes.research-decision-admission-receipt.v3",
       request,
       admission_state: "admitted_no_search",
       commit_admitted: true,
@@ -230,7 +231,7 @@ async function admit(
   );
   const bindings = prepared.requestBindings as Record<string, unknown>;
   await current.manager.assess(current.workspace, {
-    schema_version: "zes.research-decision-admission-request.v2",
+    schema_version: "zes.research-decision-admission-request.v3",
     task_ref: input.taskRef,
     material_decision_ref: input.materialDecisionRef,
     decision_boundary_ref: input.decisionBoundaryRef,
@@ -257,6 +258,31 @@ test("command and patch classification is conservative", () => {
       "*** End Patch",
     ].join("\n")),
     ["src/a.ts", "src/b.ts"],
+  );
+});
+
+test("new assessment rejects legacy v2 admission requests", async (t) => {
+  const current = await fixture(t);
+  const input = openInput();
+  await current.manager.open(current.workspace, input);
+  const prepared = await current.manager.prepare(
+    current.workspace,
+    prepareInput(),
+  );
+  const bindings = prepared.requestBindings as Record<string, unknown>;
+  await assert.rejects(
+    () => current.manager.assess(current.workspace, {
+      schema_version: "zes.research-decision-admission-request.v2",
+      task_ref: input.taskRef,
+      material_decision_ref: input.materialDecisionRef,
+      decision_boundary_ref: input.decisionBoundaryRef,
+      decision_question: input.decisionQuestion,
+      owner_seeded_framing: input.ownerSeededFraming,
+      assessing_actor_ref: input.actorRef,
+      ...bindings,
+    }),
+    (error: unknown) => error instanceof ResearchCycleError
+      && error.code === "RESEARCH_CYCLE_V3_ADMISSION_REQUIRED",
   );
 });
 

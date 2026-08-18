@@ -111,11 +111,28 @@ function fakeRunner(
       const receiptPath = argument(invocation.args, "--receipt");
       const provider = argument(invocation.args, "--provider");
       const operation = argument(invocation.args, "--operation");
-      const routeKind = provider === "exa"
-        ? "exa_open_world_research"
-        : provider === "context7"
+      const routeKind = provider === "context7"
         ? "context7_upstream_documentation"
+        : provider === "exa" && operation === "search"
+        ? "exa_open_world_research"
         : "targeted_web_search";
+      const routeRef = provider === "context7"
+        ? "cli.context7"
+        : provider === "exa"
+        ? "plugin.hermes-web-exa:outer_Codex_supporting_controller_route"
+        : "direct.targeted-web";
+      const transport = provider === "context7"
+        ? "pinned_cli"
+        : provider === "exa"
+        ? "streamable_http_mcp"
+        : "pinned_https_fetch";
+      const capabilityRefs = provider === "context7"
+        ? ["capability:upstream-versioned-documentation:v1"]
+        : provider === "exa" && operation === "search"
+        ? ["capability:open-world-candidate-discovery:v1"]
+        : ["capability:targeted-known-source-acquisition:v1"];
+      const openWorldCandidateDiscoveryPerformed =
+        provider === "exa" && operation === "search";
       const receipt = {
         schema_version: "zes.repository-execution-accelerator-receipt.v1",
         receipt_kind: "provider_invocation",
@@ -135,10 +152,12 @@ function fakeRunner(
           failure_classification: null,
           no_retry_performed: true,
           research_evidence_route_kind: routeKind,
+          route_ref: routeRef,
+          transport,
+          verified_capability_refs: capabilityRefs,
+          open_world_candidate_discovery_performed:
+            openWorldCandidateDiscoveryPerformed,
           secret_value_or_secret_digest_emitted: false,
-          ...(provider === "web"
-            ? { open_world_candidate_discovery_performed: false }
-            : {}),
         },
       };
       await writeFile(receiptPath, `${JSON.stringify(receipt)}\n`);
@@ -151,12 +170,23 @@ function fakeRunner(
     const receiptPath = argument(invocation.args, "--provider-receipt");
     const receipt = JSON.parse(await readFile(receiptPath, "utf8")) as {
       receipt_digest_sha256: string;
-      result: { research_evidence_route_kind: string };
+      result: {
+        operation: string;
+        research_evidence_route_kind: string;
+        route_ref: string;
+        verified_capability_refs: string[];
+        open_world_candidate_discovery_performed: boolean;
+      };
     };
     const evidence = {
-      schema_version: "zes.research-provider-execution-evidence.v1",
+      schema_version: "zes.research-provider-execution-evidence.v2",
       evidence_ref: evidenceRef,
       route_kind: receipt.result.research_evidence_route_kind,
+      provider_route_ref: receipt.result.route_ref,
+      provider_operation: receipt.result.operation,
+      verified_capability_refs: receipt.result.verified_capability_refs,
+      open_world_candidate_discovery_performed:
+        receipt.result.open_world_candidate_discovery_performed,
       purpose: argument(invocation.args, "--purpose"),
       trace_source_ref:
         `trace:provider-invocation:${receipt.receipt_digest_sha256}`,
@@ -205,6 +235,33 @@ test("Exa uses only the fixed service credential broker", async (t) => {
   assert.equal(invocations[0]?.args.includes("--provider"), true);
   assert.equal(invocations[0]?.args.includes("exa"), true);
   assert.equal(JSON.stringify(result).includes(secret), false);
+  const providerReceipt = result.providerReceipt as {
+    result: Record<string, unknown>;
+  };
+  const providerEvidence = result.providerEvidence as Record<string, unknown>;
+  assert.equal(
+    providerReceipt.result.research_evidence_route_kind,
+    "exa_open_world_research",
+  );
+  assert.deepEqual(providerReceipt.result.verified_capability_refs, [
+    "capability:open-world-candidate-discovery:v1",
+  ]);
+  assert.equal(
+    providerReceipt.result.open_world_candidate_discovery_performed,
+    true,
+  );
+  assert.equal(
+    providerEvidence.schema_version,
+    "zes.research-provider-execution-evidence.v2",
+  );
+  assert.equal(providerEvidence.provider_operation, "search");
+  assert.deepEqual(providerEvidence.verified_capability_refs, [
+    "capability:open-world-candidate-discovery:v1",
+  ]);
+  assert.equal(
+    providerEvidence.open_world_candidate_discovery_performed,
+    true,
+  );
   assert.deepEqual(result.credentialHandle, {
     kind: "service_environment_handle",
     name: "EXA_API_KEY",
@@ -219,6 +276,50 @@ test("Exa uses only the fixed service credential broker", async (t) => {
   assert.equal(
     (result.policy as Record<string, unknown>)
       .targetedWebSubstitutesForOpenWorldDiscovery,
+    false,
+  );
+});
+
+test("Exa fetch remains a known-source lane and cannot claim open-world discovery", async (t) => {
+  const current = await fixture(t);
+  const invocations: ResearchProviderProcessInvocation[] = [];
+  const broker = new ZesResearchProviderBroker(
+    current.config,
+    current.manager,
+    {
+      processRunner: fakeRunner(invocations),
+      parentEnvironment: {
+        PATH: process.env.PATH,
+        HOME: process.env.HOME,
+        EXA_API_KEY: "service-held",
+      },
+      uuid: () => "00000000-0000-4000-8000-00000000000a",
+    },
+  );
+
+  const result = await broker.invoke(
+    current.workspace,
+    "currentness_or_delta_check",
+    {
+      provider: "exa",
+      operation: "fetch",
+      query: "Read the already-known candidate source",
+      urls: ["https://example.test/known-candidate"],
+    },
+  );
+  const receipt = result.providerReceipt as { result: Record<string, unknown> };
+  const evidence = result.providerEvidence as Record<string, unknown>;
+  assert.equal(receipt.result.research_evidence_route_kind, "targeted_web_search");
+  assert.deepEqual(receipt.result.verified_capability_refs, [
+    "capability:targeted-known-source-acquisition:v1",
+  ]);
+  assert.equal(receipt.result.open_world_candidate_discovery_performed, false);
+  assert.equal(evidence.route_kind, "targeted_web_search");
+  assert.equal(evidence.provider_operation, "fetch");
+  assert.equal(evidence.open_world_candidate_discovery_performed, false);
+  assert.equal(
+    (result.policy as Record<string, unknown>)
+      .exaFetchSubstitutesForOpenWorldDiscovery,
     false,
   );
 });
@@ -299,6 +400,29 @@ test("targeted Web remains credentialless and explicitly non-open-world", async 
   assert.equal(
     (result.policy as Record<string, unknown>)
       .targetedWebSubstitutesForOpenWorldDiscovery,
+    false,
+  );
+  const webReceipt = result.providerReceipt as {
+    result: Record<string, unknown>;
+  };
+  const webEvidence = result.providerEvidence as Record<string, unknown>;
+  assert.equal(
+    webReceipt.result.research_evidence_route_kind,
+    "targeted_web_search",
+  );
+  assert.deepEqual(webReceipt.result.verified_capability_refs, [
+    "capability:targeted-known-source-acquisition:v1",
+  ]);
+  assert.equal(
+    webReceipt.result.open_world_candidate_discovery_performed,
+    false,
+  );
+  assert.equal(webEvidence.provider_operation, "fetch");
+  assert.deepEqual(webEvidence.verified_capability_refs, [
+    "capability:targeted-known-source-acquisition:v1",
+  ]);
+  assert.equal(
+    webEvidence.open_world_candidate_discovery_performed,
     false,
   );
 });
@@ -389,6 +513,112 @@ test("provider receipt identity cannot be substituted across routes", async (t) 
       && error.code === "RESEARCH_PROVIDER_RECEIPT_IDENTITY_MISMATCH",
   );
   assert.equal(invocations.length, 1);
+});
+
+test("provider receipt capability and operation proof cannot be laundered", async (t) => {
+  const current = await fixture(t);
+  for (const mutation of [
+    (result: Record<string, unknown>) => {
+      result.verified_capability_refs = [
+        "capability:targeted-known-source-acquisition:v1",
+      ];
+    },
+    (result: Record<string, unknown>) => {
+      result.open_world_candidate_discovery_performed = false;
+    },
+  ]) {
+    const invocations: ResearchProviderProcessInvocation[] = [];
+    const baseRunner = fakeRunner(invocations);
+    const runner = async (invocation: ResearchProviderProcessInvocation) => {
+      const value = await baseRunner(invocation);
+      if (invocation.args.includes("zes-accelerate")) {
+        const receiptPath = argument(invocation.args, "--receipt");
+        const receipt = JSON.parse(await readFile(receiptPath, "utf8")) as {
+          result: Record<string, unknown>;
+        };
+        mutation(receipt.result);
+        await writeFile(receiptPath, `${JSON.stringify(receipt)}\n`);
+        await chmod(receiptPath, 0o600);
+      }
+      return value;
+    };
+    const broker = new ZesResearchProviderBroker(
+      current.config,
+      current.manager,
+      {
+        processRunner: runner,
+        parentEnvironment: {
+          PATH: process.env.PATH,
+          HOME: process.env.HOME,
+          EXA_API_KEY: "service-held",
+        },
+      },
+    );
+    await assert.rejects(
+      () => broker.invoke(
+        current.workspace,
+        "fresh_acquisition",
+        {
+          provider: "exa",
+          operation: "search",
+          query: "Find competing open-world evidence",
+        },
+      ),
+      (error: unknown) => error instanceof ResearchCycleError
+        && error.code === "RESEARCH_PROVIDER_RECEIPT_IDENTITY_MISMATCH",
+    );
+  }
+});
+
+test("bound provider evidence must preserve the receipt operation capability and proof", async (t) => {
+  const current = await fixture(t);
+  const invocations: ResearchProviderProcessInvocation[] = [];
+  const baseRunner = fakeRunner(invocations);
+  const runner = async (invocation: ResearchProviderProcessInvocation) => {
+    const value = await baseRunner(invocation);
+    if (!invocation.args.includes("zes-accelerate")) {
+      const evidencePath = argument(invocation.args, "--evidence-output");
+      const evidence = JSON.parse(await readFile(evidencePath, "utf8")) as Record<
+        string,
+        unknown
+      >;
+      evidence.provider_operation = "fetch";
+      evidence.verified_capability_refs = [
+        "capability:targeted-known-source-acquisition:v1",
+      ];
+      evidence.open_world_candidate_discovery_performed = false;
+      await writeFile(evidencePath, `${JSON.stringify(evidence)}\n`);
+      await chmod(evidencePath, 0o600);
+    }
+    return value;
+  };
+  const broker = new ZesResearchProviderBroker(
+    current.config,
+    current.manager,
+    {
+      processRunner: runner,
+      parentEnvironment: {
+        PATH: process.env.PATH,
+        HOME: process.env.HOME,
+        EXA_API_KEY: "service-held",
+      },
+      uuid: () => "00000000-0000-4000-8000-00000000000b",
+    },
+  );
+
+  await assert.rejects(
+    () => broker.invoke(
+      current.workspace,
+      "fresh_acquisition",
+      {
+        provider: "exa",
+        operation: "search",
+        query: "Find competing open-world evidence",
+      },
+    ),
+    (error: unknown) => error instanceof ResearchCycleError
+      && error.code === "RESEARCH_PROVIDER_BINDING_IDENTITY_MISMATCH",
+  );
 });
 
 test("provider evidence paths must be fresh before process execution", async (t) => {

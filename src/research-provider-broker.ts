@@ -33,6 +33,61 @@ const PROVIDER_CREDENTIALS = {
   context7: "CONTEXT7_API_KEY",
   exa: "EXA_API_KEY",
 } as const;
+const CAPABILITY_UPSTREAM_VERSIONED_DOCUMENTATION =
+  "capability:upstream-versioned-documentation:v1";
+const CAPABILITY_TARGETED_KNOWN_SOURCE_ACQUISITION =
+  "capability:targeted-known-source-acquisition:v1";
+const CAPABILITY_OPEN_WORLD_CANDIDATE_DISCOVERY =
+  "capability:open-world-candidate-discovery:v1";
+
+interface ResearchProviderOperationContract {
+  routeKind:
+    | "context7_upstream_documentation"
+    | "targeted_web_search"
+    | "exa_open_world_research";
+  routeRef: string;
+  transport: "pinned_cli" | "pinned_https_fetch" | "streamable_http_mcp";
+  capabilityRefs: readonly string[];
+  openWorldCandidateDiscoveryPerformed: boolean;
+}
+
+const RESEARCH_PROVIDER_OPERATION_CONTRACTS = {
+  "context7:resolve-library": {
+    routeKind: "context7_upstream_documentation",
+    routeRef: "cli.context7",
+    transport: "pinned_cli",
+    capabilityRefs: [CAPABILITY_UPSTREAM_VERSIONED_DOCUMENTATION],
+    openWorldCandidateDiscoveryPerformed: false,
+  },
+  "context7:docs": {
+    routeKind: "context7_upstream_documentation",
+    routeRef: "cli.context7",
+    transport: "pinned_cli",
+    capabilityRefs: [CAPABILITY_UPSTREAM_VERSIONED_DOCUMENTATION],
+    openWorldCandidateDiscoveryPerformed: false,
+  },
+  "exa:search": {
+    routeKind: "exa_open_world_research",
+    routeRef: "plugin.hermes-web-exa:outer_Codex_supporting_controller_route",
+    transport: "streamable_http_mcp",
+    capabilityRefs: [CAPABILITY_OPEN_WORLD_CANDIDATE_DISCOVERY],
+    openWorldCandidateDiscoveryPerformed: true,
+  },
+  "exa:fetch": {
+    routeKind: "targeted_web_search",
+    routeRef: "plugin.hermes-web-exa:outer_Codex_supporting_controller_route",
+    transport: "streamable_http_mcp",
+    capabilityRefs: [CAPABILITY_TARGETED_KNOWN_SOURCE_ACQUISITION],
+    openWorldCandidateDiscoveryPerformed: false,
+  },
+  "web:fetch": {
+    routeKind: "targeted_web_search",
+    routeRef: "direct.targeted-web",
+    transport: "pinned_https_fetch",
+    capabilityRefs: [CAPABILITY_TARGETED_KNOWN_SOURCE_ACQUISITION],
+    openWorldCandidateDiscoveryPerformed: false,
+  },
+} as const satisfies Record<string, ResearchProviderOperationContract>;
 
 export const RESEARCH_PROVIDER_PURPOSES = [
   "fresh_acquisition",
@@ -535,17 +590,30 @@ function providerArguments(
   return args;
 }
 
-function expectedRouteKind(
-  provider: ResearchProviderRequest["provider"],
-): string {
-  switch (provider) {
-    case "context7":
-      return "context7_upstream_documentation";
-    case "exa":
-      return "exa_open_world_research";
-    case "web":
-      return "targeted_web_search";
+function providerOperationContract(
+  request: ResearchProviderRequest,
+): ResearchProviderOperationContract {
+  const key = `${request.provider}:${request.operation}`;
+  const contract = RESEARCH_PROVIDER_OPERATION_CONTRACTS[
+    key as keyof typeof RESEARCH_PROVIDER_OPERATION_CONTRACTS
+  ];
+  if (!contract) {
+    throw new ResearchCycleError(
+      "RESEARCH_PROVIDER_OPERATION_UNREGISTERED",
+      "the requested provider operation has no fixed evidence contract",
+      { provider: request.provider, operation: request.operation },
+    );
   }
+  return contract;
+}
+
+function exactStringArray(
+  value: unknown,
+  expected: readonly string[],
+): boolean {
+  return Array.isArray(value)
+    && value.length === expected.length
+    && value.every((item, index) => item === expected[index]);
 }
 
 function assertProviderReceiptIdentity(
@@ -553,7 +621,7 @@ function assertProviderReceiptIdentity(
   request: ResearchProviderRequest,
 ): Record<string, unknown> {
   const result = receipt.result;
-  const expectedRoute = expectedRouteKind(request.provider);
+  const expected = providerOperationContract(request);
   if (
     receipt.schema_version
       !== "zes.repository-execution-accelerator-receipt.v1"
@@ -562,13 +630,17 @@ function assertProviderReceiptIdentity(
     || result.schema_version !== "zes.provider-invocation-result.v1"
     || result.provider !== request.provider
     || result.operation !== request.operation
-    || result.research_evidence_route_kind !== expectedRoute
+    || result.research_evidence_route_kind !== expected.routeKind
+    || result.route_ref !== expected.routeRef
+    || result.transport !== expected.transport
+    || !exactStringArray(
+      result.verified_capability_refs,
+      expected.capabilityRefs,
+    )
+    || result.open_world_candidate_discovery_performed
+      !== expected.openWorldCandidateDiscoveryPerformed
     || result.no_retry_performed !== true
     || result.secret_value_or_secret_digest_emitted !== false
-    || (
-      request.provider === "web"
-      && result.open_world_candidate_discovery_performed !== false
-    )
   ) {
     throw new ResearchCycleError(
       "RESEARCH_PROVIDER_RECEIPT_IDENTITY_MISMATCH",
@@ -576,7 +648,12 @@ function assertProviderReceiptIdentity(
       {
         requestedProvider: request.provider,
         requestedOperation: request.operation,
-        expectedRoute,
+        expectedRoute: expected.routeKind,
+        expectedRouteRef: expected.routeRef,
+        expectedTransport: expected.transport,
+        expectedCapabilityRefs: expected.capabilityRefs,
+        expectedOpenWorldCandidateDiscoveryPerformed:
+          expected.openWorldCandidateDiscoveryPerformed,
         secretValueOrDigestExposed: false,
       },
     );
@@ -764,12 +841,20 @@ export class ZesResearchProviderBroker {
       "provider evidence",
     );
     const traceRef = providerEvidence.value.trace_source_ref;
-    const expectedRoute = expectedRouteKind(request.provider);
+    const expected = providerOperationContract(request);
     if (
       providerEvidence.value.schema_version
-        !== "zes.research-provider-execution-evidence.v1"
+        !== "zes.research-provider-execution-evidence.v2"
       || providerEvidence.value.evidence_ref !== evidenceRef
-      || providerEvidence.value.route_kind !== expectedRoute
+      || providerEvidence.value.route_kind !== expected.routeKind
+      || providerEvidence.value.provider_route_ref !== expected.routeRef
+      || providerEvidence.value.provider_operation !== request.operation
+      || !exactStringArray(
+        providerEvidence.value.verified_capability_refs,
+        expected.capabilityRefs,
+      )
+      || providerEvidence.value.open_world_candidate_discovery_performed
+        !== expected.openWorldCandidateDiscoveryPerformed
       || providerEvidence.value.purpose !== purpose
       || providerEvidence.value.owner_seeded_framing
         !== context.ownerSeededFraming
@@ -828,6 +913,9 @@ export class ZesResearchProviderBroker {
         serviceCredentialValueOrDigestExposed: false,
         providerSelectionOrResearchSufficiencyPerformed: false,
         targetedWebSubstitutesForOpenWorldDiscovery: false,
+        exaFetchSubstitutesForOpenWorldDiscovery: false,
+        providerOperationRouteAndCapabilityReceiptBound: true,
+        openWorldCandidateDiscoveryProofRequired: true,
         automaticRetryPerformed: false,
         semanticMutationPublicationRuntimeOrEffectAuthorityGranted: false,
       },

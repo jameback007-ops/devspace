@@ -252,7 +252,7 @@ export function registerZesResearchCycleTools(
     {
       title: "Invoke a fixed Research Reflex evidence provider",
       description:
-        "Acquire provider-verifiable evidence inside the active prepared Research Reflex generation through one fixed broker. Context7 is for exact upstream documentation. Exa is for open-world candidate discovery, competing patterns, and field failures. Targeted Web fetch is only for an already-known exact fact, named document, or official source and cannot substitute for Exa. The DevSpace service may attach its fixed provider credential handle to the child process, but the model and arbitrary exec_command never receive the credential value or digest. The result includes providerEvidence plus the exact providerTrace to pass to zes_research_cycle_assess.",
+        "Acquire provider-verifiable evidence v2 inside the active prepared Research Reflex generation through one fixed broker. Context7 is for exact upstream documentation. Exa search is the registered open-world candidate-discovery operation. Exa fetch and targeted Web fetch are known-source acquisition operations and cannot satisfy open-world discovery. Every successful result binds provider, operation, route, transport, capability refs, and whether open-world candidate discovery actually occurred. The DevSpace service may attach its fixed provider credential handle to the exact provider child, but the model and arbitrary exec_command never receive the credential value or digest. The result includes providerEvidence plus the exact providerTrace to pass to zes_research_cycle_assess.",
       inputSchema: {
         workspaceId: workspaceIdSchema,
         purpose: providerPurposeSchema,
@@ -323,7 +323,7 @@ export function registerZesResearchCycleTools(
     {
       title: "Prepare exact Research Reflex bindings",
       description:
-        "Prepare the exact task, decision, evidence-regime, source-identity, implementation-boundary, and action-scope digests required by the native ZES Research Reflex v2 admission request. Supply every exact shell command that may mutate source or dependencies; DevSpace persists only their SHA-256 digests and holds unbound shell mutation in enforce mode. Direct apply_patch/write/edit effects remain path-bound. This operation does not assess research sufficiency.",
+        "Prepare the exact task, decision, evidence-regime, source-identity, implementation-boundary, and action-scope digests required by the native capability-bound ZES Research Reflex v3 admission request. Supply every exact shell command that may mutate source or dependencies; DevSpace persists only their SHA-256 digests and holds unbound shell mutation in enforce mode. Direct apply_patch/write/edit effects remain path-bound. This operation does not assess research sufficiency.",
       inputSchema: {
         workspaceId: workspaceIdSchema,
         pathPrefixes: nonEmptyStrings.min(1),
@@ -367,7 +367,7 @@ export function registerZesResearchCycleTools(
     {
       title: "Assess through native ZES Research Reflex",
       description:
-        "Invoke the fixed native `zes-research-reflex assess` application port with a provider-verifiable v2 request matching the prepared workspace bindings. Optional Context7 or Exa provider receipts must be supplied as exact trace refs and files under configured trust roots. The native verdict and lease are stored durably; DevSpace does not substitute its own research judgment.",
+        "Invoke the fixed native `zes-research-reflex assess` application port with a capability-bound v3 request matching the prepared workspace bindings. Provider evidence v2 and its exact Context7, Exa, or targeted-source receipt must be supplied through trace refs and files under configured trust roots. The native verifier checks operation, route, transport, capability, and open-world-performed identity before issuing the v3 verdict and lease. Historical v1/v2 receipts remain decodeable but cannot create a new admission through this action gate. DevSpace does not substitute its own research judgment.",
       inputSchema: {
         workspaceId: workspaceIdSchema,
         request: jsonObjectSchema,
