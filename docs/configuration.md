@@ -445,6 +445,14 @@ capability routing map, source identities, and authority notes. When an opened
 checkout or managed worktree matches a marker set, `open_workspace` injects the
 index into both its model-readable text and structured `systemIndexes` output.
 
+The manifest's `sourceIdentity.rootRelativeToManifest` must identify an
+ancestor one to four levels above the manifest, and every listed source path
+must be a regular relative file below that root with an exact byte count and
+SHA-256. DevSpace verifies the source identity when loading the configured
+manifest and again before projecting it into a matching workspace. A source
+change without deterministic regeneration therefore fails closed instead of
+silently hydrating stale stack or capability guidance.
+
 This layer is for mandatory orientation that must not depend on a model
 eventually finding another repository's `AGENTS.md`. It is not current task,
 writer, runtime, release, memory, or effect authority. Entries should point to
@@ -453,10 +461,12 @@ on-demand skills.
 
 Configured manifests are loaded and strictly validated when the
 `WorkspaceRegistry` starts. Missing, malformed, oversized, duplicate-ID, or
-unsafe-marker manifests fail closed instead of silently omitting mandatory
-context. A matching index is returned once per conversation bootstrap, like
-root instructions and automatically exposed skills; repeated opens in the same
-conversation reuse the already supplied context.
+unsafe-marker manifests, stale source identities, source symlinks, or source
+paths escaping the named authority root fail closed instead of silently
+omitting or corrupting mandatory context. A matching index is returned once per
+conversation bootstrap, like root instructions and automatically exposed
+skills; repeated opens in the same conversation reuse the already supplied
+context.
 
 The user config file may set the equivalent array:
 

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -2059,11 +2060,13 @@ async function fixture(
   let workspaceSystemIndexPath: string | undefined;
   if (options.workspaceSystemIndex) {
     await mkdir(join(project, "architecture"), { recursive: true });
+    await mkdir(join(project, "release"), { recursive: true });
+    const sourceContent = "selected_native_components: []\n";
     await writeFile(
       join(project, "architecture", "module-package-deployment.yaml"),
-      "selected_native_components: []\n",
+      sourceContent,
     );
-    workspaceSystemIndexPath = join(root, "zes-system-index.json");
+    workspaceSystemIndexPath = join(project, "release", "zes-system-index.json");
     await writeFile(
       workspaceSystemIndexPath,
       JSON.stringify({
@@ -2081,11 +2084,14 @@ async function fixture(
         ],
         sourceIdentity: {
           authorityRef: "git:zes@test",
+          rootRelativeToManifest: "..",
           files: [
             {
               path: "architecture/module-package-deployment.yaml",
-              digestSha256: "a".repeat(64),
-              byteCount: 31,
+              digestSha256: createHash("sha256")
+                .update(sourceContent)
+                .digest("hex"),
+              byteCount: Buffer.byteLength(sourceContent),
             },
           ],
         },

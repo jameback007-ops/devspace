@@ -68,8 +68,9 @@ mandatory `AGENTS.md`; it does not replace it.
 - **Instruction file** — an `AGENTS.md` or `CLAUDE.md` loaded initially or
   advertised for a nested path.
 - **Workspace system index** — a bounded, generated stack and capability
-  orientation manifest injected when configured workspace markers match. It is
-  not current task, writer, runtime, release, memory, or effect authority.
+  orientation manifest injected when configured workspace markers match. Its
+  named local authority sources are byte-verified at load and before projection.
+  It is not current task, writer, runtime, release, memory, or effect authority.
 - **Skill** — a lazy procedure selected by metadata and read only when relevant.
 - **Subagent** — a bounded model invocation coordinated by the host.
 - **Agent profile** — provider, model, tools, and instructions for a subagent.

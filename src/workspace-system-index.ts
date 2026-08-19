@@ -5,7 +5,13 @@ import {
   realpathSync,
   statSync,
 } from "node:fs";
-import { isAbsolute, relative, resolve, sep } from "node:path";
+import {
+  dirname,
+  isAbsolute,
+  relative,
+  resolve,
+  sep,
+} from "node:path";
 import * as z from "zod/v4";
 
 export const WORKSPACE_SYSTEM_INDEX_SCHEMA =
@@ -32,13 +38,17 @@ const workspaceMatcherSchema = z.object({
 }).strict();
 
 const sourceFileIdentitySchema = z.object({
-  path: boundedString(1_024),
+  path: markerPathSchema,
   digestSha256: z.string().regex(/^[a-f0-9]{64}$/u),
   byteCount: z.number().int().nonnegative(),
 }).strict();
 
 const sourceIdentitySchema = z.object({
   authorityRef: boundedString(2_000),
+  rootRelativeToManifest: z.string().regex(
+    /^\.\.(?:[\\/]\.\.){0,3}$/u,
+    "source authority root must be an ancestor within four levels of the manifest",
+  ),
   files: z.array(sourceFileIdentitySchema).min(1).max(32),
 }).strict();
 
@@ -93,6 +103,7 @@ interface LoadedWorkspaceSystemIndex {
   document: WorkspaceSystemIndexDocument;
   digestSha256: string;
   byteCount: number;
+  authorityRoot: string;
 }
 
 export interface WorkspaceSystemIndexProjection {
@@ -140,7 +151,10 @@ export class WorkspaceSystemIndexRegistry {
     const matched = this.indexes
       .filter(({ document }) => document.matchers.some((matcher) =>
         candidateRoots.some((candidateRoot) => matcherApplies(candidateRoot, matcher))))
-      .map(projectWorkspaceSystemIndex);
+      .map((loaded) => {
+        assertSourceIdentityCurrent(loaded);
+        return projectWorkspaceSystemIndex(loaded);
+      });
     const rendered = renderWorkspaceSystemIndexes(matched);
     if ((rendered?.length ?? 0) > MAX_RENDERED_INDEX_CHARACTERS) {
       throw new Error(
@@ -216,11 +230,24 @@ function loadWorkspaceSystemIndex(path: string): LoadedWorkspaceSystemIndex {
     );
   }
 
+  const manifestPath = realpathSync(path);
+  const authorityRoot = resolve(
+    dirname(manifestPath),
+    result.data.sourceIdentity.rootRelativeToManifest,
+  );
+  if (!pathIsInside(manifestPath, authorityRoot)) {
+    throw new Error(
+      `Invalid workspace system index ${path}: source authority root must contain the manifest`,
+    );
+  }
+
   const loaded = {
     document: result.data,
     digestSha256: createHash("sha256").update(content).digest("hex"),
     byteCount: content.byteLength,
+    authorityRoot,
   };
+  assertSourceIdentityCurrent(loaded, path);
   const rendered = renderWorkspaceSystemIndexes([
     projectWorkspaceSystemIndex(loaded),
   ]);
@@ -230,6 +257,51 @@ function loadWorkspaceSystemIndex(path: string): LoadedWorkspaceSystemIndex {
     );
   }
   return loaded;
+}
+
+function assertSourceIdentityCurrent(
+  loaded: LoadedWorkspaceSystemIndex,
+  configuredPath?: string,
+): void {
+  for (const source of loaded.document.sourceIdentity.files) {
+    const candidate = resolve(loaded.authorityRoot, source.path);
+    if (!pathIsInside(candidate, loaded.authorityRoot)) {
+      throw sourceIdentityError(configuredPath, source.path, "escaped authority root");
+    }
+
+    let content: Buffer;
+    try {
+      if (!lstatSync(candidate).isFile()) {
+        throw new Error("not a regular file");
+      }
+      if (!pathIsInside(realpathSync(candidate), realpathSync(loaded.authorityRoot))) {
+        throw new Error("resolved outside authority root");
+      }
+      content = readFileSync(candidate);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      throw sourceIdentityError(configuredPath, source.path, reason);
+    }
+
+    const digestSha256 = createHash("sha256").update(content).digest("hex");
+    if (content.byteLength !== source.byteCount || digestSha256 !== source.digestSha256) {
+      throw sourceIdentityError(
+        configuredPath,
+        source.path,
+        "byte identity no longer matches the generated manifest",
+      );
+    }
+  }
+}
+
+function sourceIdentityError(
+  configuredPath: string | undefined,
+  sourcePath: string,
+  reason: string,
+): Error {
+  return new Error(
+    `Workspace system index${configuredPath ? ` ${configuredPath}` : ""} is stale or unverifiable at ${sourcePath}: ${reason}. Regenerate the manifest from its named authority before opening a matching workspace.`,
+  );
 }
 
 function projectWorkspaceSystemIndex(

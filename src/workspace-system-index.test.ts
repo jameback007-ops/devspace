@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import {
   mkdtemp,
   mkdir,
@@ -16,21 +17,24 @@ import {
   renderWorkspaceSystemIndexes,
 } from "./workspace-system-index.js";
 
+const SOURCE_CONTENT = "selected_native_components: []\n";
+
 test("workspace system indexes match configured repository markers and expose bounded provenance", async () => {
   const root = await mkdtemp(join(tmpdir(), "devspace-system-index-"));
   const sourceRoot = join(root, "source");
   const worktreeRoot = join(root, "worktree");
   const unrelatedRoot = join(root, "unrelated");
   await mkdir(join(sourceRoot, "architecture"), { recursive: true });
+  await mkdir(join(sourceRoot, "release"), { recursive: true });
   await mkdir(worktreeRoot, { recursive: true });
   await mkdir(unrelatedRoot, { recursive: true });
   await writeFile(
     join(sourceRoot, "architecture", "module-package-deployment.yaml"),
-    "selected_native_components: []\n",
+    SOURCE_CONTENT,
   );
   await writeFile(join(sourceRoot, "AGENTS.md"), "instructions\n");
 
-  const indexPath = join(root, "zes-system-index.json");
+  const indexPath = join(sourceRoot, "release", "zes-system-index.json");
   await writeFile(indexPath, JSON.stringify(sampleIndex(), null, 2) + "\n");
 
   const registry = new WorkspaceSystemIndexRegistry([indexPath]);
@@ -55,8 +59,15 @@ test("workspace system indexes match configured repository markers and expose bo
 
 test("workspace system index configuration fails closed for duplicate ids and unsafe marker paths", async () => {
   const root = await mkdtemp(join(tmpdir(), "devspace-system-index-invalid-"));
-  const first = join(root, "first.json");
-  const second = join(root, "second.json");
+  const authorityRoot = join(root, "authority");
+  await mkdir(join(authorityRoot, "architecture"), { recursive: true });
+  await mkdir(join(authorityRoot, "release"), { recursive: true });
+  await writeFile(
+    join(authorityRoot, "architecture", "module-package-deployment.yaml"),
+    SOURCE_CONTENT,
+  );
+  const first = join(authorityRoot, "release", "first.json");
+  const second = join(authorityRoot, "release", "second.json");
   await writeFile(first, JSON.stringify(sampleIndex()) + "\n");
   await writeFile(second, JSON.stringify(sampleIndex()) + "\n");
 
@@ -67,7 +78,7 @@ test("workspace system index configuration fails closed for duplicate ids and un
 
   const unsafe = sampleIndex();
   unsafe.matchers = [{ allMarkerPaths: ["../outside"] }];
-  const unsafePath = join(root, "unsafe.json");
+  const unsafePath = join(authorityRoot, "release", "unsafe.json");
   await writeFile(unsafePath, JSON.stringify(unsafe) + "\n");
   assert.throws(
     () => new WorkspaceSystemIndexRegistry([unsafePath]),
@@ -94,15 +105,16 @@ test("workspace system index matching rejects symlink markers and oversized aggr
   const source = join(root, "source");
   const outside = join(root, "outside-marker");
   await mkdir(join(source, "architecture"), { recursive: true });
+  await mkdir(join(source, "release"), { recursive: true });
   await writeFile(outside, "outside\n");
   await symlink(outside, join(source, "AGENTS.md"));
   await writeFile(
     join(source, "architecture", "module-package-deployment.yaml"),
-    "selected_native_components: []\n",
+    SOURCE_CONTENT,
   );
 
   const first = sampleIndex();
-  const firstPath = join(root, "first.json");
+  const firstPath = join(source, "release", "first.json");
   await writeFile(firstPath, JSON.stringify(first) + "\n");
   const markerRegistry = new WorkspaceSystemIndexRegistry([firstPath]);
   assert.deepEqual(markerRegistry.forWorkspace(source), []);
@@ -113,7 +125,7 @@ test("workspace system index matching rejects symlink markers and oversized aggr
   await mkdir(outsideArchitecture, { recursive: true });
   await writeFile(
     join(outsideArchitecture, "module-package-deployment.yaml"),
-    "selected_native_components: []\n",
+    SOURCE_CONTENT,
   );
   await rm(join(source, "architecture"), { recursive: true });
   await symlink(outsideArchitecture, join(source, "architecture"));
@@ -123,13 +135,13 @@ test("workspace system index matching rejects symlink markers and oversized aggr
   await mkdir(join(source, "architecture"), { recursive: true });
   await writeFile(
     join(source, "architecture", "module-package-deployment.yaml"),
-    "selected_native_components: []\n",
+    SOURCE_CONTENT,
   );
   first.capabilities = longCapabilities("first");
   const second = sampleIndex();
   second.indexId = "zes-system-capabilities-second";
   second.capabilities = longCapabilities("second");
-  const secondPath = join(root, "second.json");
+  const secondPath = join(source, "release", "second.json");
   await writeFile(firstPath, JSON.stringify(first) + "\n");
   await writeFile(secondPath, JSON.stringify(second) + "\n");
   const aggregateRegistry = new WorkspaceSystemIndexRegistry([
@@ -139,6 +151,36 @@ test("workspace system index matching rejects symlink markers and oversized aggr
   assert.throws(
     () => aggregateRegistry.forWorkspace(source),
     /exceed 30000 rendered characters/,
+  );
+});
+
+test("workspace system index source identity is verified at load and before projection", async () => {
+  const root = await mkdtemp(join(tmpdir(), "devspace-system-index-source-"));
+  const authorityRoot = join(root, "authority");
+  const sourcePath = join(
+    authorityRoot,
+    "architecture",
+    "module-package-deployment.yaml",
+  );
+  const indexPath = join(authorityRoot, "release", "index.json");
+  await mkdir(join(authorityRoot, "architecture"), { recursive: true });
+  await mkdir(join(authorityRoot, "release"), { recursive: true });
+  await writeFile(sourcePath, SOURCE_CONTENT);
+  await writeFile(join(authorityRoot, "AGENTS.md"), "instructions\n");
+  await writeFile(indexPath, JSON.stringify(sampleIndex()) + "\n");
+
+  const registry = new WorkspaceSystemIndexRegistry([indexPath]);
+  assert.equal(registry.forWorkspace(authorityRoot).length, 1);
+
+  await writeFile(sourcePath, "selected_native_components: [changed]\n");
+  assert.throws(
+    () => registry.forWorkspace(authorityRoot),
+    /is stale or unverifiable.*byte identity no longer matches/u,
+  );
+
+  assert.throws(
+    () => new WorkspaceSystemIndexRegistry([indexPath]),
+    /is stale or unverifiable.*byte identity no longer matches/u,
   );
 });
 
@@ -158,11 +200,14 @@ function sampleIndex() {
     ],
     sourceIdentity: {
       authorityRef: "git:zes@example",
+      rootRelativeToManifest: "..",
       files: [
         {
           path: "architecture/module-package-deployment.yaml",
-          digestSha256: "a".repeat(64),
-          byteCount: 42,
+          digestSha256: createHash("sha256")
+            .update(SOURCE_CONTENT)
+            .digest("hex"),
+          byteCount: Buffer.byteLength(SOURCE_CONTENT),
         },
       ],
     },

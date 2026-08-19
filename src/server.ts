@@ -635,6 +635,7 @@ const workspaceSystemIndexOutputSchema = z.object({
   manifestByteCount: z.number().int().nonnegative(),
   sourceIdentity: z.object({
     authorityRef: z.string(),
+    rootRelativeToManifest: z.string(),
     files: z.array(workspaceSystemIndexSourceFileOutputSchema),
   }),
   stack: z.array(workspaceSystemIndexStackOutputSchema),
