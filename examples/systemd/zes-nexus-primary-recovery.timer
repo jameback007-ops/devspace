@@ -1,0 +1,13 @@
+[Unit]
+Description=Probe and repair the ZES Nexus primary MCP route
+
+[Timer]
+OnBootSec=45s
+OnUnitActiveSec=30s
+AccuracySec=5s
+RandomizedDelaySec=2s
+Persistent=false
+Unit=zes-nexus-primary-recovery.service
+
+[Install]
+WantedBy=timers.target

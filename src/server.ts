@@ -56,6 +56,17 @@ import {
   type McpSessionCloseResult,
 } from "./mcp-sessions.js";
 import {
+  assessMcpPrimaryReadiness,
+  assessMcpPrimaryRecovery,
+  MCP_WORK_CAPABILITY_REFS,
+  type McpPrimaryRecoveryAssessment,
+  type McpWorkCapabilityRef,
+} from "./mcp-primary-recovery.js";
+import {
+  observeCurrentServiceChildProcesses,
+  type ServiceProcessObservation,
+} from "./service-process-observation.js";
+import {
   DEFAULT_EXEC_YIELD_MS,
   DEFAULT_INTERACTIVE_YIELD_MS,
   DEFAULT_POLL_YIELD_MS,
@@ -83,6 +94,7 @@ import { registerZesResearchCycleTools } from "./research-cycle-tools.js";
 import {
   clientAttestationFromHeaders,
   type ClientCatalogAttestation,
+  type OverallFreshnessStatus,
 } from "./tool-surface-freshness.js";
 import {
   ZesScopePublicationPreflightAssessor,
@@ -520,7 +532,7 @@ function serverInstructions(config: ServerConfig): string {
     ? ""
     : " For a workspace containing the ZES control-kernel marker, use zes_research_cycle_open before material design or mutation, then prepare exact action bindings and obtain a native capability-bound ZES Research Reflex v3 admission with zes_research_cycle_assess. Use zes_research_provider_invoke when external evidence is required: Context7 covers exact upstream documentation; Exa search is the open-world discovery operation; Exa fetch and targeted Web fetch remain known-source lanes and cannot substitute for open-world discovery. Reopen judgment with zes_research_cycle_invalidate when evidence, scope, architecture, dependencies, currentness, owner direction, or failure causality changes. Before commit, use zes_research_cycle_verify_pre_commit; close the episode after the exact commit or terminal no-change/deferred/abandoned outcome. observe mode reports lifecycle drift without blocking; enforce mode holds source mutation, commit preparation, commit, and publication when the exact current lifecycle is absent or stale. Historical v1/v2 receipts may be decoded but cannot create a new admission through this action gate. These executor-local tools verify native receipts but never create semantic, writer, publication, release, activation, runtime, or effect authority.";
   const executionScopeInstruction = config.executionObservability.enabled
-    ? " Use execution_scope_list to discover recent DevSpace execution scopes. When a target explicitly recorded a recovery capsule, the list includes a compact capsule-derived semantic label/frontier hint; it is not a host chat title and absent capsule means unknown mission. Use execution_scope_status for linked workspaces, live processes, explicit semantic recovery state, the observation gap since the last MCP/tool event, the additive turnLanding resume projection, and additive read-only stable control-plane projections. turnLanding joins a bounded persisted machine envelope to the latest explicit semantic capsule and distinguishes a clean turn boundary, a fresh or stale/missing semantic frontier, and process/effect reconciliation requirements without inferring mission from operational events. Scope inspection also returns the current backend runtime instance and an exact fingerprint of the registered model-facing tool surface. The server cannot see the host's cached tools/list result. A frozen catalog may still consume compatible additive control state through execution_scope_status; refresh or reconnect is needed only when the task genuinely requires a newer top-level tool or changed input schema rather than a compatible stable projection. A no-tool interval does not reveal whether the model is reasoning, queued, generating, or hung; model progress and provider generation remain unobservable between MCP calls. Use execution_scope_audit for bounded metadata-only tool lifecycle. Semantic state is never inferred from filenames or tool events, cross-scope authority freshness remains unverified unless a fixed rightful-owner projection explicitly revalidates it, and a recorded exact action remains historical until current canonical/runtime/writer/effect owners are rehydrated. These views never replace Git, canonical product state, runtime/effect readback, or writer/lease reconciliation, and they do not contain transcripts, prompts, private reasoning, tool outputs, patches, credentials, raw commands, or arbitrary paths."
+    ? " Use execution_scope_list to discover recent DevSpace execution scopes. When a target explicitly recorded a recovery capsule, the list includes a compact capsule-derived semantic label/frontier hint; it is not a host chat title and absent capsule means unknown mission. Use execution_scope_status for linked workspaces, live processes, explicit semantic recovery state, the observation gap since the last MCP/tool event, the additive turnLanding resume projection, and additive read-only stable control-plane projections. Before selecting a fallback, or before capability-critical work after a backend/tool-surface change, call execution_scope_status with the exact requiredCapabilityRefs and the complete clientObservedToolNames from the current host catalog when available. Follow stableControlPlane.capabilities.primaryMcpRecovery: attest or refresh a stale catalog, reconnect or repair the primary, allow only one recovery owner, use an exact stable read-only projection when it fully satisfies the need, and admit fallback only after repair is exhausted and exact quality equivalence, the complete fallback descriptor fingerprint, bounded evidence refs, and its policy ref are established. Catalog-refresh and diagnostic exhaustion also require bounded receipt refs rather than naked booleans. For missing research, validation, canonical-state, recovery, publication, runtime, or other effect-critical capability, prefer a recoverable safe turn landing over silent quality reduction. Fail back to the primary only after functional readiness and the required catalog subset are verified. turnLanding joins a bounded persisted machine envelope to the latest explicit semantic capsule and distinguishes a clean turn boundary, a fresh or stale/missing semantic frontier, and process/effect reconciliation requirements without inferring mission from operational events. Scope inspection also returns the current backend runtime instance and an exact fingerprint of the registered model-facing tool surface. The server cannot see the host's cached tools/list result and cannot force the host to refresh it. A frozen catalog may still consume compatible additive control state through execution_scope_status; refresh or reconnect is needed only when the task genuinely requires a newer top-level tool or changed input schema rather than a compatible stable projection. A no-tool interval does not reveal whether the model is reasoning, queued, generating, or hung; model progress and provider generation remain unobservable between MCP calls. Use execution_scope_audit for bounded metadata-only tool lifecycle. Semantic state is never inferred from filenames or tool events, cross-scope authority freshness remains unverified unless a fixed rightful-owner projection explicitly revalidates it, and a recorded exact action remains historical until current canonical/runtime/writer/effect owners are rehydrated. These views never replace Git, canonical product state, runtime/effect readback, or writer/lease reconciliation, and they do not contain transcripts, prompts, private reasoning, tool outputs, patches, credentials, raw commands, or arbitrary paths."
     : "";
   const executionMailboxInstruction = config.executionMailbox.enabled
     ? " Use execution_scope_message_send to leave a durable message for another known scope, reusing one idempotencyKey for retries. Acceptance means stored, not observed. When a tool result reports pending mail, call execution_scope_message_inbox before opening a new major frontier, then record acknowledged or acted state with execution_scope_message_receipt. Use execution_scope_message_status to inspect a message you sent or received. The mailbox is executor-local coordination, not task, decision, effect, writer, or canonical-memory authority, and it cannot wake or inject text directly into an inactive WebChat transcript."
@@ -1082,12 +1094,16 @@ function scopeRuntimeRelation(
 
 function stableControlPlaneProjection(
   input: {
+    primaryMcpRecovery?: McpPrimaryRecoveryAssessment;
     continuationPreflight?: ZesContinuationPreflightProjection;
     scopePublicationPreflight?: ScopePublicationPreflight;
     selfRepositoryPublicationPreflight?: SelfRepositoryScopePublicationProjection;
   },
 ) {
   const capabilities = {
+    ...(input.primaryMcpRecovery === undefined
+      ? {}
+      : { primaryMcpRecovery: input.primaryMcpRecovery }),
     ...(input.continuationPreflight === undefined
       ? {}
       : { continuationPreflight: input.continuationPreflight }),
@@ -1138,6 +1154,37 @@ function stableControlPlaneProjection(
       canonicalTaskDecisionWriterEffectOrPublicationAuthorityGranted: false,
     },
   } as const;
+}
+
+function runtimeFreshnessStatus(
+  runtime: Record<string, unknown>,
+): OverallFreshnessStatus {
+  const freshness = isRecord(runtime.toolSurfaceFreshness)
+    ? runtime.toolSurfaceFreshness
+    : undefined;
+  const status = freshness?.status;
+  return [
+    "CURRENT",
+    "SERVER_CURRENT_CLIENT_UNKNOWN",
+    "STALE_SERVER",
+    "STALE_CLIENT",
+    "INDETERMINATE",
+  ].includes(String(status))
+    ? status as OverallFreshnessStatus
+    : "INDETERMINATE";
+}
+
+function runtimeRegisteredToolNames(
+  runtime: Record<string, unknown>,
+): string[] {
+  const toolSurface = isRecord(runtime.toolSurface)
+    ? runtime.toolSurface
+    : undefined;
+  return Array.isArray(toolSurface?.toolNames)
+    ? toolSurface.toolNames.filter(
+        (entry): entry is string => typeof entry === "string",
+      )
+    : [];
 }
 
 function setRuntimeCapabilityHeaders(
@@ -1202,6 +1249,79 @@ function registerExecutionScopeTools(
       .optional()
       .describe(
         "Optional exact tool names from the same client-observed tools/list response.",
+      ),
+  };
+  const primaryRecoveryInputSchema = {
+    requiredCapabilityRefs: z
+      .array(z.enum(MCP_WORK_CAPABILITY_REFS))
+      .max(MCP_WORK_CAPABILITY_REFS.length)
+      .optional()
+      .describe(
+        "Optional exact mission capability classes required before material work. The recovery projection uses them for capability-aware repair, fallback, or safe-turn decisions.",
+      ),
+    activeMcpRoute: z
+      .enum(["primary", "fallback"])
+      .optional()
+      .describe(
+        "Current route selected by the caller. A healthy current primary causes a verified failback disposition when this is fallback.",
+      ),
+    fallbackAvailable: z
+      .boolean()
+      .optional()
+      .describe(
+        "Whether an independently running fallback route was actually observed. Availability alone never establishes quality equivalence.",
+      ),
+    fallbackObservedToolNames: z
+      .array(z.string().min(1).max(1_024))
+      .max(10_000)
+      .optional()
+      .describe(
+        "Exact fallback tool names from one observed fallback tools/list response.",
+      ),
+    fallbackObservedFingerprintSha256: z
+      .string()
+      .regex(/^[a-f0-9]{64}$/)
+      .optional()
+      .describe(
+        "SHA-256 of the canonical complete fallback tools/list descriptors from the same observation as fallbackObservedToolNames.",
+      ),
+    fallbackQualityEquivalentAttested: z
+      .boolean()
+      .optional()
+      .describe(
+        "Explicit caller attestation that the fallback is quality-equivalent for the declared capability classes. It grants no effect authority.",
+      ),
+    fallbackQualityEvidenceRefs: z
+      .array(z.string().min(1).max(2_000))
+      .min(1)
+      .max(20)
+      .optional()
+      .describe(
+        "Bounded evidence references supporting quality equivalence for the exact fallback surface and declared mission capability classes.",
+      ),
+    fallbackPolicyRef: z
+      .string()
+      .min(1)
+      .max(2_000)
+      .optional()
+      .describe(
+        "Typed policy reference governing the exact fallback route and capability boundary.",
+      ),
+    catalogRefreshEvidenceRefs: z
+      .array(z.string().min(1).max(2_000))
+      .min(1)
+      .max(20)
+      .optional()
+      .describe(
+        "Bounded receipt or host-observation references proving that the catalog refresh/reconnect attempt for this assessment cycle was performed.",
+      ),
+    diagnosticEvidenceRefs: z
+      .array(z.string().min(1).max(2_000))
+      .min(1)
+      .max(20)
+      .optional()
+      .describe(
+        "Bounded incident or diagnostic receipt references proving that one primary diagnostic recovery attempt was performed.",
       ),
   };
 
@@ -1291,6 +1411,7 @@ function registerExecutionScopeTools(
       inputSchema: {
         scopeRef: scopeRefSchema.optional(),
         ...clientCatalogInputSchema,
+        ...primaryRecoveryInputSchema,
       },
       outputSchema: resultOutputSchema({ data: z.unknown() }),
       ...toolWidgetDescriptorMeta(config, "read"),
@@ -1301,6 +1422,16 @@ function registerExecutionScopeTools(
       clientObservedSurfaceEpoch,
       clientObservedFingerprintSha256,
       clientObservedToolNames,
+      requiredCapabilityRefs,
+      activeMcpRoute,
+      fallbackAvailable,
+      fallbackObservedToolNames,
+      fallbackObservedFingerprintSha256,
+      fallbackQualityEquivalentAttested,
+      fallbackQualityEvidenceRefs,
+      fallbackPolicyRef,
+      catalogRefreshEvidenceRefs,
+      diagnosticEvidenceRefs,
     }, { _meta }) => {
       const status = executionScopes.status(
         scopeRef,
@@ -1364,8 +1495,70 @@ function registerExecutionScopeTools(
       const continuationPreflight = continuationPreflightProjector
         ? await continuationPreflightProjector.project()
         : undefined;
-      const stableControlPlane = continuationPreflight || selfRepositoryPublicationPreflight
+      const stableCapabilityRefs: string[] = [
+        ...(continuationPreflight
+          ? [continuationPreflight.capabilityRef]
+          : []),
+        ...(scopePublication ? [scopePublication.capabilityRef] : []),
+        ...(selfRepositoryPublicationPreflight
+          ? [selfRepositoryPublicationPreflight.capabilityRef]
+          : []),
+      ];
+      const fallbackObservationProvided = fallbackAvailable !== undefined
+        || fallbackObservedToolNames !== undefined
+        || fallbackObservedFingerprintSha256 !== undefined
+        || fallbackQualityEquivalentAttested !== undefined
+        || fallbackQualityEvidenceRefs !== undefined
+        || fallbackPolicyRef !== undefined;
+      const catalogRefreshAttemptCount = catalogRefreshEvidenceRefs?.length ?? 0;
+      const diagnosticAttemptCount = diagnosticEvidenceRefs?.length ?? 0;
+      const primaryMcpRecovery = assessMcpPrimaryRecovery({
+        primaryFunctionalState: "healthy",
+        activeRoute: activeMcpRoute,
+        catalogStatus: runtimeFreshnessStatus(backendRuntime),
+        primaryRegisteredToolNames: runtimeRegisteredToolNames(backendRuntime),
+        clientObservedToolNames,
+        knownCallableToolNames: ["execution_scope_status"],
+        stableCapabilityRefs,
+        requiredCapabilityRefs:
+          requiredCapabilityRefs as McpWorkCapabilityRef[] | undefined,
+        recovery: {
+          transportReconnect: "available",
+          hostCatalogRefresh: catalogRefreshAttemptCount > 0
+            ? "unavailable"
+            : "manual_only",
+          functionalRepair: "unknown",
+          diagnosticAgent: diagnosticAttemptCount > 0
+            ? "unavailable"
+            : "manual_only",
+          recoveryLease: "unknown",
+          restartSafety: "unknown",
+          catalogRefreshAttempts: catalogRefreshAttemptCount,
+          maxCatalogRefreshAttempts: 1,
+          diagnosticAttempts: diagnosticAttemptCount,
+          maxDiagnosticAttempts: 1,
+        },
+        ...(fallbackObservationProvided
+          ? {
+              fallback: {
+                available: fallbackAvailable ?? true,
+                observedToolNames: fallbackObservedToolNames,
+                observedFingerprintSha256:
+                  fallbackObservedFingerprintSha256,
+                qualityEquivalentAttested:
+                  fallbackQualityEquivalentAttested,
+                qualityEvidenceRefs: fallbackQualityEvidenceRefs,
+                policyRef: fallbackPolicyRef,
+              },
+            }
+          : {}),
+        safeTurnLandingAvailable: true,
+      });
+      const stableControlPlane = primaryMcpRecovery
+        || continuationPreflight
+        || selfRepositoryPublicationPreflight
         ? stableControlPlaneProjection({
+            primaryMcpRecovery,
             continuationPreflight,
             scopePublicationPreflight: scopePublication,
             selfRepositoryPublicationPreflight,
@@ -3941,6 +4134,7 @@ export function createMcpServer(
 
 export interface CreateServerOptions {
   incomingArtifactAdapters?: readonly IncomingArtifactAdapter[];
+  serviceProcessObserver?: () => ServiceProcessObservation;
 }
 
 export function createServer(
@@ -3949,6 +4143,8 @@ export function createServer(
 ): RunningServer {
   const incomingArtifactAdapters = options.incomingArtifactAdapters
     ?? [createOpenAIIncomingArtifactAdapter()];
+  const serviceProcessObserver = options.serviceProcessObserver
+    ?? observeCurrentServiceChildProcesses;
   const allowedHosts = config.allowedHosts.includes("*")
     ? undefined
     : Array.from(new Set([config.host, ...config.allowedHosts]));
@@ -4139,6 +4335,49 @@ export function createServer(
       toolSurfaceFreshness: runtime.toolSurfaceFreshness,
       deploymentManifestObservation: runtime.deploymentManifestObservation,
       runtimeBindingObservation: runtime.runtimeBindingObservation,
+    });
+  });
+
+  app.get("/readyz", (req, res) => {
+    const clientAttestation = requestClientCatalogAttestation(req);
+    setRuntimeCapabilityHeaders(res, runtimeCapabilities, clientAttestation);
+    const runtime = runtimeCapabilities.snapshot({ clientAttestation });
+    const backend = isRecord(runtime.backend) ? runtime.backend : {};
+    const toolSurface = isRecord(runtime.toolSurface) ? runtime.toolSurface : {};
+    const database = executionScopes.readinessProbe();
+    const runningProcessCount = processSessions
+      .inspect()
+      .filter((process) => process.running)
+      .length;
+    const serviceProcesses = serviceProcessObserver();
+    const readiness = assessMcpPrimaryReadiness({
+      databaseState: database.databaseState,
+      latestMigrationVersion: database.latestMigrationVersion,
+      executionScopeCount: database.executionScopeCount,
+      toolSurfaceInitialized: toolSurface.initialized === true,
+      toolCount:
+        typeof toolSurface.toolCount === "number" ? toolSurface.toolCount : 0,
+      activeToolCount: database.activeToolCount,
+      runningProcessCount,
+      serviceChildProcessObservationState: serviceProcesses.state,
+      activeServiceChildProcessCount: serviceProcesses.childProcessCount,
+      databaseErrorKind: database.errorKind,
+      databaseErrorDigestSha256: database.errorDigestSha256,
+    });
+    res.status(readiness.ok ? 200 : 503).json({
+      ...readiness,
+      name: "devspace",
+      backendInstanceRef: backend.instanceRef,
+      backendStartedAt: backend.startedAt,
+      surfaceEpoch: toolSurface.surfaceEpoch,
+      toolSurfaceFingerprintSha256: toolSurface.fingerprintSha256,
+      serviceProcessObservation: serviceProcesses,
+      policy: {
+        ...readiness.policy,
+        endpointAuthority:
+          "executor_local_functional_readiness_and_restart_safety_only",
+        deploymentOrEffectAuthorityGranted: false,
+      },
     });
   });
 

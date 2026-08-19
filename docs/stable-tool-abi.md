@@ -81,6 +81,7 @@ returned by `execution_scope_status`:
 execution_scope_status
   -> stableControlPlane
        -> capabilityDirectory
+       -> capabilities.primaryMcpRecovery
        -> capabilities.continuationPreflight
        -> capabilities.scopePublicationPreflight
        -> capabilities.selfRepositoryPublicationPreflight
@@ -91,6 +92,13 @@ refreshed. Their absence does not invalidate the embedded server-owned
 projection and does not establish writer uncertainty. A missing direct tool
 blocks only an operation that genuinely lacks a compatible stable projection;
 it must not block unrelated research, validation, or preparation lanes.
+
+`primaryMcpRecovery` adds a capability-aware work gate behind the same stable
+bootstrap. A client may attest its complete visible tool list and exact mission
+capability needs. The projection then orders catalog repair, stable read-only
+projection, typed fallback, or safe turn landing. It never treats an available
+fallback as quality-equivalent by default and never transfers an effectful
+operation implicitly.
 
 The continuation projector used internally by repository publication may be
 deferred to avoid an irrelevant global refresh. The client-facing stable

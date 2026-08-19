@@ -27,6 +27,21 @@ export interface ExecutionObservationHandle {
   toolName: string;
 }
 
+export interface ExecutionScopeReadinessProbe {
+  schemaVersion: 1;
+  databaseState: "ready" | "failed";
+  activeToolCount: number;
+  latestMigrationVersion?: number;
+  executionScopeCount?: number;
+  errorKind?: string;
+  errorDigestSha256?: string;
+  policy: {
+    sameLongLivedConnectionAsMcpTools: true;
+    readOnlySentinel: true;
+    rawErrorExcluded: true;
+  };
+}
+
 export interface ExecutionScopeManagerOptions {
   now?: () => number;
 }
@@ -377,6 +392,7 @@ function decodeCursor(cursor: string | undefined): number | undefined {
 export class ExecutionScopeManager {
   private readonly database: DatabaseHandle;
   private readonly now: () => number;
+  private readonly activeObservations = new Set<string>();
   private nextGlobalPruneAtMs = 0;
 
   constructor(
@@ -443,12 +459,15 @@ export class ExecutionScopeManager {
       return row.sequence;
     });
 
-    return {
+    const sequence = transaction.immediate();
+    const handle = {
       scopeRef: identity.scopeRef,
-      sequence: transaction.immediate(),
+      sequence,
       startedAtMs,
       toolName,
     };
+    this.activeObservations.add(this.observationKey(handle));
+    return handle;
   }
 
   finishTool(
@@ -464,47 +483,90 @@ export class ExecutionScopeManager {
     const detailJson = boundedDetailJson(responseDetail);
     const observedError = input.error === undefined ? undefined : errorObservation(input.error);
 
-    const transaction = this.database.sqlite.transaction(() => {
-      this.database.sqlite
-        .prepare(`
-          update execution_scope_events
-             set outcome = ?, completed_at_ms = ?, duration_ms = ?,
-                 workspace_id = coalesce(?, workspace_id),
-                 process_session_id = coalesce(?, process_session_id),
-                 detail_json = case
-                   when ? is null then detail_json
-                   when detail_json is null then ?
-                   else json_patch(detail_json, ?)
-                 end,
-                 error_kind = ?, error_summary = ?, error_digest_sha256 = ?
-           where scope_ref = ? and sequence = ?
-        `)
-        .run(
-          outcome,
-          completedAtMs,
-          Math.max(0, completedAtMs - handle.startedAtMs),
-          workspaceId ?? null,
-          processSessionId ?? null,
-          detailJson ?? null,
-          detailJson ?? null,
-          detailJson ?? null,
-          observedError?.errorKind ?? (outcome === "error" ? "tool_error_response" : null),
-          observedError?.errorSummary ?? null,
-          observedError?.errorDigestSha256 ?? null,
-          handle.scopeRef,
-          handle.sequence,
-        );
-      this.database.sqlite
-        .prepare(`
-          update execution_scopes
-             set last_activity_at_ms = ?, last_tool_name = ?, last_tool_outcome = ?
-           where scope_ref = ?
-        `)
-        .run(completedAtMs, handle.toolName, outcome, handle.scopeRef);
-      if (workspaceId) this.linkWorkspace(handle.scopeRef, workspaceId, completedAtMs);
-      this.pruneScope(handle.scopeRef, completedAtMs);
-    });
-    transaction.immediate();
+    try {
+      const transaction = this.database.sqlite.transaction(() => {
+        this.database.sqlite
+          .prepare(`
+            update execution_scope_events
+               set outcome = ?, completed_at_ms = ?, duration_ms = ?,
+                   workspace_id = coalesce(?, workspace_id),
+                   process_session_id = coalesce(?, process_session_id),
+                   detail_json = case
+                     when ? is null then detail_json
+                     when detail_json is null then ?
+                     else json_patch(detail_json, ?)
+                   end,
+                   error_kind = ?, error_summary = ?, error_digest_sha256 = ?
+             where scope_ref = ? and sequence = ?
+          `)
+          .run(
+            outcome,
+            completedAtMs,
+            Math.max(0, completedAtMs - handle.startedAtMs),
+            workspaceId ?? null,
+            processSessionId ?? null,
+            detailJson ?? null,
+            detailJson ?? null,
+            detailJson ?? null,
+            observedError?.errorKind
+              ?? (outcome === "error" ? "tool_error_response" : null),
+            observedError?.errorSummary ?? null,
+            observedError?.errorDigestSha256 ?? null,
+            handle.scopeRef,
+            handle.sequence,
+          );
+        this.database.sqlite
+          .prepare(`
+            update execution_scopes
+               set last_activity_at_ms = ?, last_tool_name = ?, last_tool_outcome = ?
+             where scope_ref = ?
+          `)
+          .run(completedAtMs, handle.toolName, outcome, handle.scopeRef);
+        if (workspaceId) {
+          this.linkWorkspace(handle.scopeRef, workspaceId, completedAtMs);
+        }
+        this.pruneScope(handle.scopeRef, completedAtMs);
+      });
+      transaction.immediate();
+    } finally {
+      this.activeObservations.delete(this.observationKey(handle));
+    }
+  }
+
+  readinessProbe(): ExecutionScopeReadinessProbe {
+    const policy = {
+      sameLongLivedConnectionAsMcpTools: true,
+      readOnlySentinel: true,
+      rawErrorExcluded: true,
+    } as const;
+    try {
+      const migration = this.database.sqlite
+        .prepare(
+          "select coalesce(max(version), 0) as version from devspace_schema_migrations",
+        )
+        .get() as { version: number };
+      const scopes = this.database.sqlite
+        .prepare("select count(*) as count from execution_scopes")
+        .get() as { count: number };
+      return {
+        schemaVersion: 1,
+        databaseState: "ready",
+        activeToolCount: this.activeObservations.size,
+        latestMigrationVersion: migration.version,
+        executionScopeCount: scopes.count,
+        policy,
+      };
+    } catch (error) {
+      const observed = errorObservation(error);
+      return {
+        schemaVersion: 1,
+        databaseState: "failed",
+        activeToolCount: this.activeObservations.size,
+        errorKind: observed.errorKind,
+        errorDigestSha256: observed.errorDigestSha256,
+        policy,
+      };
+    }
   }
 
   outcomeForResponse(response: unknown): "succeeded" | "error" {
@@ -645,7 +707,12 @@ export class ExecutionScopeManager {
   }
 
   close(): void {
+    this.activeObservations.clear();
     this.database.close();
+  }
+
+  private observationKey(handle: ExecutionObservationHandle): string {
+    return `${handle.scopeRef}:${handle.sequence}`;
   }
 
   private upsertScope(

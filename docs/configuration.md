@@ -65,6 +65,39 @@ DEVSPACE_COMMAND_ENV_PASSTHROUGH="UV_CACHE_DIR PANTS_LOCAL_STORE_DIR PANTS_NAMED
 This boundary reduces accidental credential propagation. It is not a shell
 sandbox: commands still run with the configured operating-system identity.
 
+## Optional Nexus Primary Recovery Controller
+
+The primary-recovery controller is a separate host process, not a DevSpace MCP
+tool and not part of the primary server process. It probes the fixed loopback
+`/readyz` endpoint, holds one recovery-owner lease, persists sanitized incident
+receipts, and may restart only `devspace-zesnexus.service` after a bounded
+failure threshold and restart-safety check. Repair effects are disabled by
+default.
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `ZES_NEXUS_PRIMARY_RECOVERY_EFFECTS` | `0` | Enables the fixed Nexus service restart effect only after an observation-only canary. |
+| `ZES_NEXUS_PRIMARY_READY_URL` | `http://127.0.0.1:7677/readyz` | Fixed loopback functional-readiness route. Non-loopback and non-HTTP targets are rejected. |
+| `ZES_NEXUS_PRIMARY_HOST_HEADER` | `mcp.zesnexus.com` | Host header for the local readiness request. |
+| `ZES_NEXUS_PRIMARY_RECOVERY_STATE_ROOT` | `/run/devspace-zesnexus-primary-recovery` | Volatile lease and incident-state directory. |
+| `ZES_NEXUS_PRIMARY_RECOVERY_RECEIPT_ROOT` | `/var/lib/devspace-zesnexus/incident-snapshots/primary-recovery` | Durable sanitized recovery receipts. |
+| `ZES_NEXUS_PRIMARY_RECOVERY_FAILURE_THRESHOLD` | `3` | Consecutive failed readiness probes required before a repair is considered. |
+| `ZES_NEXUS_PRIMARY_RECOVERY_MAX_REPAIR_ATTEMPTS` | `1` | Maximum automatic service repairs per incident before diagnostic escalation. |
+| `ZES_NEXUS_PRIMARY_RECOVERY_PROBE_TIMEOUT_MS` | `5000` | Readiness request timeout. |
+| `ZES_NEXUS_PRIMARY_RECOVERY_STABLE_PROBE_COUNT` | `3` | Consecutive healthy post-repair probes required for failback. |
+| `ZES_NEXUS_PRIMARY_RECOVERY_STABLE_PROBE_MAXIMUM` | `6` | Maximum post-repair probes before the repair is considered unverified. |
+| `ZES_NEXUS_PRIMARY_RECOVERY_STABLE_PROBE_DELAY_MS` | `2000` | Delay between post-repair probes. |
+| `ZES_NEXUS_PRIMARY_RECOVERY_LEASE_STALE_AFTER_MS` | `300000` | Minimum age before a lease held by a dead process may be reclaimed. |
+
+Install the example service and timer from `examples/systemd/` only after the
+deployed release exposes `/readyz`. Keep effects off first. Before enabling the
+effects drop-in, disable the old health-only restart timer so one incident has
+exactly one restart owner. The controller never deploys or rolls back a release,
+opens or deletes the live SQLite database, mutates Legacy, or replays an MCP
+effect. The example unit overrides the receipt root with its own systemd-managed
+`StateDirectory`, while the table above documents the standalone-controller
+default. See [MCP Primary-First Self-Healing](mcp-primary-self-healing.md).
+
 ## Optional ZES Research Reflex Lifecycle
 
 DevSpace can bind material work in a ZES checkout to the native ZES Research

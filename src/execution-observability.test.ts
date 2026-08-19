@@ -497,3 +497,39 @@ test("arbitrary exception messages never enter cross-scope audit", async (t) => 
   );
   assert.match(String(event?.errorDigestSha256), /^[a-f0-9]{64}$/);
 });
+
+test("readiness probes the same database connection and tracks active tool work", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "devspace-execution-readiness-"));
+  const stateDir = join(root, ".state");
+  const processes = new ProcessSessionManager();
+  const manager = new ExecutionScopeManager(config, stateDir, processes);
+  let closed = false;
+  t.after(async () => {
+    processes.shutdown();
+    if (!closed) manager.close();
+    await rm(root, { recursive: true, force: true });
+  });
+
+  const ready = manager.readinessProbe();
+  assert.equal(ready.databaseState, "ready");
+  assert.equal(ready.activeToolCount, 0);
+  assert.ok(Number(ready.latestMigrationVersion) >= 1);
+  assert.equal(ready.policy.sameLongLivedConnectionAsMcpTools, true);
+
+  const identity = executionScopeIdentity({
+    "openai/session": "readiness-active-tool",
+  });
+  assert.ok(identity);
+  const handle = manager.beginTool(identity, "read", { path: "README.md" });
+  assert.ok(handle);
+  assert.equal(manager.readinessProbe().activeToolCount, 1);
+  manager.finishTool(handle, "succeeded");
+  assert.equal(manager.readinessProbe().activeToolCount, 0);
+
+  manager.close();
+  closed = true;
+  const failed = manager.readinessProbe();
+  assert.equal(failed.databaseState, "failed");
+  assert.match(String(failed.errorDigestSha256), /^[a-f0-9]{64}$/);
+  assert.equal("error" in failed, false);
+});

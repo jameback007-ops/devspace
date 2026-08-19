@@ -1,0 +1,30 @@
+[Unit]
+Description=ZES Nexus primary-first functional recovery controller
+After=network-online.target devspace-zesnexus.service
+Wants=network-online.target
+ConditionPathExists=/usr/local/libexec/zes-nexus-primary-recovery.mjs
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+UMask=0077
+RuntimeDirectory=devspace-zesnexus-primary-recovery
+RuntimeDirectoryMode=0700
+StateDirectory=devspace-zesnexus-primary-recovery
+StateDirectoryMode=0700
+Environment=ZES_NEXUS_PRIMARY_RECOVERY_EFFECTS=0
+Environment=ZES_NEXUS_PRIMARY_READY_URL=http://127.0.0.1:7677/readyz
+Environment=ZES_NEXUS_PRIMARY_HOST_HEADER=mcp.zesnexus.com
+Environment=ZES_NEXUS_PRIMARY_RECOVERY_RECEIPT_ROOT=/var/lib/devspace-zesnexus-primary-recovery/receipts
+Environment=ZES_NEXUS_PRIMARY_RECOVERY_FAILURE_THRESHOLD=3
+Environment=ZES_NEXUS_PRIMARY_RECOVERY_MAX_REPAIR_ATTEMPTS=1
+ExecStart=/usr/local/bin/node /usr/local/libexec/zes-nexus-primary-recovery.mjs
+TimeoutStartSec=180
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+StandardOutput=journal
+StandardError=journal

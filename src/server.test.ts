@@ -957,6 +957,112 @@ test("execution-scope status carries the stable continuation control plane witho
       .policy.arbitraryWorkspacePathAccepted,
     false,
   );
+  assert.equal(
+    stable.capabilities.primaryMcpRecovery.capabilityRef,
+    "zes.mcp-primary-recovery.v1",
+  );
+  assert.equal(
+    stable.capabilities.primaryMcpRecovery.policy.primaryRepairBeforeFallback,
+    true,
+  );
+  assert.equal(
+    stable.capabilities.primaryMcpRecovery.policy.qualityReductionAuthorized,
+    false,
+  );
+});
+
+test("stable status repairs a partial catalog before admitting fallback or safe turn landing", async (t) => {
+  const context = await fixture(t, {
+    toolMode: "codex",
+    codexNavigationTools: true,
+    runtimeCapabilities: true,
+  });
+  const listed = await context.client.listTools();
+  const statusTool = listed.tools.find(
+    (tool) => tool.name === "execution_scope_status",
+  );
+  const statusInput = JSON.stringify(statusTool?.inputSchema ?? {});
+  assert.match(statusInput, /requiredCapabilityRefs/);
+  assert.match(statusInput, /fallbackObservedToolNames/);
+  assert.match(statusInput, /fallbackObservedFingerprintSha256/);
+  assert.match(statusInput, /catalogRefreshEvidenceRefs/);
+
+  const partialClientTools = [
+    "execution_scope_status",
+    "open_workspace",
+    "read",
+  ];
+  const fallbackTools = [
+    "open_workspace",
+    "read",
+    "apply_patch",
+    "exec_command",
+  ];
+  const repairFirst = await context.client.callTool({
+    name: "execution_scope_status",
+    arguments: {
+      clientObservedToolNames: partialClientTools,
+      requiredCapabilityRefs: ["workspace_mutation"],
+      fallbackAvailable: true,
+      fallbackObservedToolNames: fallbackTools,
+      fallbackObservedFingerprintSha256: "b".repeat(64),
+      fallbackQualityEquivalentAttested: true,
+      fallbackQualityEvidenceRefs: ["receipt:fallback-parity-v1"],
+      fallbackPolicyRef: "fallback-policy:legacy-survival-v1",
+    },
+    _meta: { "openai/session": "primary-recovery-policy-session" },
+  } as Parameters<Client["callTool"]>[0]);
+  const repairAssessment = structuredData(repairFirst).stableControlPlane
+    .capabilities.primaryMcpRecovery;
+  assert.equal(repairAssessment.state, "REFRESH_CLIENT_CATALOG");
+  assert.equal(repairAssessment.workMayContinue, false);
+  assert.equal(repairAssessment.fallback.admitted, false);
+
+  const fallbackLast = await context.client.callTool({
+    name: "execution_scope_status",
+    arguments: {
+      clientObservedToolNames: partialClientTools,
+      requiredCapabilityRefs: ["workspace_mutation"],
+      fallbackAvailable: true,
+      fallbackObservedToolNames: fallbackTools,
+      fallbackObservedFingerprintSha256: "b".repeat(64),
+      fallbackQualityEquivalentAttested: true,
+      fallbackQualityEvidenceRefs: ["receipt:fallback-parity-v1"],
+      fallbackPolicyRef: "fallback-policy:legacy-survival-v1",
+      catalogRefreshEvidenceRefs: ["receipt:host-catalog-refresh-v1"],
+      diagnosticEvidenceRefs: ["incident:primary-diagnostic-v1"],
+    },
+    _meta: { "openai/session": "primary-recovery-policy-session" },
+  } as Parameters<Client["callTool"]>[0]);
+  const fallbackAssessment = structuredData(fallbackLast).stableControlPlane
+    .capabilities.primaryMcpRecovery;
+  assert.equal(
+    fallbackAssessment.state,
+    "USE_QUALITY_EQUIVALENT_FALLBACK",
+  );
+  assert.equal(fallbackAssessment.fallback.admitted, true);
+  assert.equal(fallbackAssessment.policy.fallbackIsLastResort, true);
+
+  const landInsteadOfDegrade = await context.client.callTool({
+    name: "execution_scope_status",
+    arguments: {
+      clientObservedToolNames: partialClientTools,
+      requiredCapabilityRefs: ["research_freshness"],
+      fallbackAvailable: true,
+      fallbackObservedToolNames: fallbackTools,
+      fallbackObservedFingerprintSha256: "b".repeat(64),
+      fallbackQualityEquivalentAttested: false,
+      fallbackQualityEvidenceRefs: ["receipt:fallback-insufficient-v1"],
+      catalogRefreshEvidenceRefs: ["receipt:host-catalog-refresh-v1"],
+      diagnosticEvidenceRefs: ["incident:primary-diagnostic-v1"],
+    },
+    _meta: { "openai/session": "primary-recovery-policy-session" },
+  } as Parameters<Client["callTool"]>[0]);
+  const landingAssessment = structuredData(landInsteadOfDegrade)
+    .stableControlPlane.capabilities.primaryMcpRecovery;
+  assert.equal(landingAssessment.state, "SAFE_TURN_LANDING");
+  assert.equal(landingAssessment.workMayContinue, false);
+  assert.equal(landingAssessment.policy.qualityReductionAuthorized, false);
 });
 
 test("one host scope can inspect another through bounded execution-scope tools", async (t) => {

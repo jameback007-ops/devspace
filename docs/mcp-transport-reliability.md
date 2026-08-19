@@ -1,8 +1,8 @@
 # MCP Transport Reliability Supervisor
 
-Status: source-only integration candidate. No production Nexus restart,
-deployment, publication, or Stable Tool ABI contract change is part of this
-candidate.
+Status: the transport supervisor source is integrated. Production host/client
+adoption and the separate primary self-healing activation remain governed
+follow-up effects. See `mcp-primary-self-healing.md`.
 
 ## Scope and authority boundary
 
@@ -34,6 +34,12 @@ successful backend effect. This candidate therefore provides a reusable
 supervisor and official MCP `Client` adapter for host/client consumers, plus
 effect-receipt semantics that remain safe when a response is lost. It does not
 claim that the live ChatGPT host has adopted the adapter.
+
+Primary service and catalog recovery are specified separately. The Transport
+Supervisor owns one logical MCP call; the primary self-healing plane owns
+cross-call functional readiness, one incident owner, bounded service repair,
+diagnostic escalation, fallback admission, safe turn landing, and verified
+failback. Neither layer silently grants the other effect authority.
 
 The ZES Research Reflex action was attempted before source mutation and returned
 `RESEARCH_CYCLE_WORKSPACE_NOT_MANAGED` because this DevSpace repository is not an
