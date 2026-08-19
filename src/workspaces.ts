@@ -34,6 +34,10 @@ import {
   type IncompleteInstructionDiscoveryReason,
   type InstructionPathFinder,
 } from "./workspace-instruction-discovery.js";
+import {
+  WorkspaceSystemIndexRegistry,
+  type WorkspaceSystemIndexProjection,
+} from "./workspace-system-index.js";
 
 const MAX_NESTED_INSTRUCTION_FILES = 100;
 const MAX_NESTED_INSTRUCTION_PATH_BYTES = 16 * 1024;
@@ -84,6 +88,7 @@ export interface Workspace {
   skillCatalog: LoadedSkills["catalog"];
   skillDiagnostics: LoadedSkills["diagnostics"];
   agentProfiles: LocalAgentProfile[];
+  systemIndexes: WorkspaceSystemIndexProjection[];
   activatedSkillDirs: Set<string>;
   instructionSnapshot?: WorkspaceInstructionSnapshot;
 }
@@ -93,6 +98,7 @@ export interface WorkspaceContext {
   agentsFiles: LoadedAgentsFile[];
   availableAgentsFiles: AvailableAgentsFile[];
   instructionDiscovery: WorkspaceInstructionDiscovery;
+  systemIndexes: WorkspaceSystemIndexProjection[];
   workspaceReused: boolean;
   includeBootstrapContext: boolean;
 }
@@ -122,11 +128,16 @@ type DirectoryOps = {
 export class WorkspaceRegistry {
   private readonly workspaces = new Map<string, Workspace>();
   private readonly pendingCheckoutOpens = new Map<string, Promise<WorkspaceContext>>();
+  private readonly systemIndexRegistry: WorkspaceSystemIndexRegistry;
 
   constructor(
     private readonly config: ServerConfig,
     private readonly store?: WorkspaceStore,
-  ) {}
+  ) {
+    this.systemIndexRegistry = new WorkspaceSystemIndexRegistry(
+      config.workspaceSystemIndexPaths,
+    );
+  }
 
   async openWorkspace(
     input: string | OpenWorkspaceInput,
@@ -271,6 +282,7 @@ export class WorkspaceRegistry {
       agentsFiles,
       availableAgentsFiles: snapshot.availableAgentsFiles,
       instructionDiscovery: snapshot.discovery,
+      systemIndexes: workspace.systemIndexes,
       workspaceReused: true,
       includeBootstrapContext: true,
     };
@@ -322,6 +334,7 @@ export class WorkspaceRegistry {
           : undefined,
       ...this.loadSkillsForWorkspace(root),
       agentProfiles: [],
+      systemIndexes: this.systemIndexRegistry.forWorkspace(root, session.sourceRoot),
       activatedSkillDirs: new Set(),
     };
     this.store?.touchSession(workspaceId);
@@ -441,6 +454,10 @@ export class WorkspaceRegistry {
       worktree: input.worktree,
       ...this.loadSkillsForWorkspace(input.root),
       agentProfiles: await loadLocalAgentProfiles(this.config, input.root),
+      systemIndexes: this.systemIndexRegistry.forWorkspace(
+        input.root,
+        input.sourceRoot,
+      ),
       activatedSkillDirs: new Set(),
     };
 
@@ -464,6 +481,7 @@ export class WorkspaceRegistry {
       agentsFiles,
       availableAgentsFiles: snapshot.availableAgentsFiles,
       instructionDiscovery: snapshot.discovery,
+      systemIndexes: workspace.systemIndexes,
       workspaceReused: false,
       includeBootstrapContext: true,
     };

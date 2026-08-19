@@ -107,6 +107,9 @@ import {
   WorkspaceRegistry,
   type WorkspaceInstructionDiscovery,
 } from "./workspaces.js";
+import {
+  renderWorkspaceSystemIndexes,
+} from "./workspace-system-index.js";
 import { summarizeLocalAgentProfile } from "./local-agent-profiles.js";
 import {
   formatLocalAgentProviderAvailabilitySummary,
@@ -553,7 +556,7 @@ function serverInstructions(config: ServerConfig): string {
     ? `When ${toolNames.openWorkspace} returns a relevant skill and the task matches it, use ${toolNames.read} to read that skill's path before proceeding. Use ${toolNames.skillSearch} only when a specialized project or host capability is needed but was not listed automatically. Skill paths may be outside the workspace, but ${toolNames.read} only permits skills advertised by ${toolNames.openWorkspace} or ${toolNames.skillSearch}, plus files under a skill directory after its SKILL.md has been read. `
     : "";
 
-  const agentsMd = `Follow instructions returned by ${toolNames.openWorkspace}. Before working under a path listed in availableAgentsFiles, use ${toolNames.read} to inspect that instruction file and follow it. `;
+  const agentsMd = `Follow instructions returned by ${toolNames.openWorkspace}. Consume any returned systemIndexes as mandatory stack and capability orientation, while resolving current state and authority through the exact refs they name. Before working under a path listed in availableAgentsFiles, use ${toolNames.read} to inspect that instruction file and follow it. `;
 
   return `Use DevSpace for coding work. Call ${toolNames.openWorkspace} once for each project folder or isolated worktree, then keep using its workspaceId. During continued work in the same project or worktree, do not call ${toolNames.openWorkspace} again. Open another workspace only when changing projects, switching checkout/worktree mode, creating another isolated worktree, or when the current workspaceId is rejected. ${agentsMd}${skills}${inspection}Prefer ${toolNames.edit} for targeted modifications, ${toolNames.write} only for new files or complete rewrites, and ${toolNames.shell} for tests, builds, git inspection, package scripts, and commands that are better executed by the shell. Do not create or modify files with ${toolNames.shell}; avoid shell redirection, heredocs, tee, sed -i, perl -i, node/python/ruby scripts, or any command whose purpose is to write project files.${workspaceLifecycleInstruction}${artifactInstruction}${showChangesInstruction}${codexSessionInstruction}${zesContinuationInstruction}${zesResearchCycleInstruction}${executionScopeInstruction}${executionMailboxInstruction}${turnContinuityInstruction}${localAgentInstruction}`;
 }
@@ -598,6 +601,45 @@ const workspaceSkillOutputSchema = z.object({
 const workspaceAgentsFileOutputSchema = z.object({
   path: z.string(),
   content: z.string(),
+});
+
+const workspaceSystemIndexSourceFileOutputSchema = z.object({
+  path: z.string(),
+  digestSha256: z.string().regex(/^[a-f0-9]{64}$/u),
+  byteCount: z.number().int().nonnegative(),
+});
+
+const workspaceSystemIndexStackOutputSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  role: z.string(),
+  authorityLimit: z.string().optional(),
+  detailRef: z.string().optional(),
+});
+
+const workspaceSystemIndexCapabilityOutputSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  purpose: z.string(),
+  useWhen: z.string(),
+  authorityLimit: z.string().optional(),
+  detailRef: z.string().optional(),
+});
+
+const workspaceSystemIndexOutputSchema = z.object({
+  schemaVersion: z.literal("devspace.workspace-system-index.v1"),
+  indexId: z.string(),
+  title: z.string(),
+  summary: z.string(),
+  manifestDigestSha256: z.string().regex(/^[a-f0-9]{64}$/u),
+  manifestByteCount: z.number().int().nonnegative(),
+  sourceIdentity: z.object({
+    authorityRef: z.string(),
+    files: z.array(workspaceSystemIndexSourceFileOutputSchema),
+  }),
+  stack: z.array(workspaceSystemIndexStackOutputSchema),
+  capabilities: z.array(workspaceSystemIndexCapabilityOutputSchema),
+  authorityNotes: z.array(z.string()),
 });
 
 const workspaceLocalAgentOutputSchema = z.object({
@@ -2461,6 +2503,7 @@ export function createMcpServer(
             managed: z.boolean(),
           })
           .optional(),
+        systemIndexes: z.array(workspaceSystemIndexOutputSchema).optional(),
         agentsFiles: z.array(workspaceAgentsFileOutputSchema).optional(),
         availableAgentsFiles: z.array(workspaceAvailableAgentsFileOutputSchema).optional(),
         instructionDiscovery: workspaceInstructionDiscoveryOutputSchema.optional(),
@@ -2480,6 +2523,7 @@ export function createMcpServer(
         agentsFiles,
         availableAgentsFiles,
         instructionDiscovery,
+        systemIndexes,
         workspaceReused,
         includeBootstrapContext,
       } = await workspaces.openWorkspace(
@@ -2516,15 +2560,26 @@ export function createMcpServer(
       const cardAvailableAgentsFiles = availableAgentsFiles.map((file) => ({
         path: formatAgentsPath(file.path, workspace.root),
       }));
+      const cardSystemIndexes = systemIndexes;
       const visibleSkills = includeBootstrapContext ? cardSkills : [];
       const visibleAgentProviders = includeBootstrapContext ? cardAgentProviders : [];
       const visibleAgents = includeBootstrapContext ? cardAgents : [];
       const loadedAgentsFiles = includeBootstrapContext ? cardAgentsFiles : [];
       const availableAgentsFileOutputs = includeBootstrapContext ? cardAvailableAgentsFiles : [];
+      const visibleSystemIndexes = includeBootstrapContext ? cardSystemIndexes : [];
+      const systemIndexText = renderWorkspaceSystemIndexes(visibleSystemIndexes);
       const discoveryWarning = incompleteInstructionDiscoveryMessage(instructionDiscovery);
-      const standardCardInstruction = config.skillsEnabled
-        ? "Use this workspaceId for subsequent work in this project. Keep reusing it while working in this project. Follow loaded agentsFiles instructions. Before working under a path listed in availableAgentsFiles, read that instruction file. When a task matches a listed skill, read its path before proceeding. Use skill_search only when a specialized project or host capability is needed but was not listed automatically."
-        : "Use this workspaceId for subsequent work in this project. Keep reusing it while working in this project. Follow loaded agentsFiles instructions. Before working under a path listed in availableAgentsFiles, read that instruction file.";
+      const systemIndexInstruction = cardSystemIndexes.length > 0
+        ? "Treat systemIndexes as mandatory orientation for the available system stack and engineering capabilities, while resolving current state and authority through the exact refs they name."
+        : undefined;
+      const standardCardInstruction = [
+        "Use this workspaceId for subsequent work in this project. Keep reusing it while working in this project.",
+        systemIndexInstruction,
+        "Follow loaded agentsFiles instructions. Before working under a path listed in availableAgentsFiles, read that instruction file.",
+        config.skillsEnabled
+          ? "When a task matches a listed skill, read its path before proceeding. Use skill_search only when a specialized project or host capability is needed but was not listed automatically."
+          : undefined,
+      ].filter(Boolean).join(" ");
       const cardInstruction = [standardCardInstruction, discoveryWarning]
         .filter(Boolean)
         .join("\n\n");
@@ -2535,7 +2590,11 @@ export function createMcpServer(
             "Keep following the project instructions, nested instruction files, skills, agent profiles, and diagnostics already provided for this workspace.",
           ].join("\n\n")
         : workspace.mode === "worktree"
-          ? "Use this workspaceId for subsequent work in this isolated worktree. Keep reusing it while working in this worktree. Follow the project instructions, nested instruction files, skills, agent profiles, and diagnostics returned for it."
+          ? [
+              "Use this workspaceId for subsequent work in this isolated worktree. Keep reusing it while working in this worktree.",
+              systemIndexInstruction,
+              "Follow the project instructions, nested instruction files, skills, agent profiles, and diagnostics returned for it.",
+            ].filter(Boolean).join(" ")
           : standardCardInstruction;
       const instruction = [baseInstruction, discoveryWarning]
         .filter(Boolean)
@@ -2561,6 +2620,7 @@ export function createMcpServer(
             visibleSkills.length > 0
               ? `Available skills: ${visibleSkills.map((skill) => skill.name).join(", ")}`
               : undefined,
+            systemIndexText,
             visibleAgentProviders.some((provider) => provider.available)
               ? `Available subagent providers: ${visibleAgentProviders.filter((provider) => provider.available).map((provider) => provider.name).join(", ")}`
               : undefined,
@@ -2599,6 +2659,7 @@ export function createMcpServer(
             includeBootstrapContext,
             sourceRoot: workspace.sourceRoot,
             worktree: workspace.worktree,
+            systemIndexes: cardSystemIndexes,
             agentsFiles: cardAgentsFiles,
             ...(instructionDiscovery.status === "complete"
               ? { availableAgentsFiles: cardAvailableAgentsFiles }
@@ -2617,6 +2678,7 @@ export function createMcpServer(
               agentsFiles: cardAgentsFiles.length,
               availableAgentsFiles: cardAvailableAgentsFiles.length,
               instructionDiscovery: instructionDiscovery.status,
+              systemIndexes: cardSystemIndexes.length,
               skills: cardSkills.length,
               agentProviders: cardAgentProviders.length,
               agents: cardAgents.length,
@@ -2632,6 +2694,7 @@ export function createMcpServer(
           ...(includeBootstrapContext
             ? {
                 agentsFiles: loadedAgentsFiles,
+                systemIndexes: visibleSystemIndexes,
                 ...(instructionDiscovery.status === "complete"
                   ? { availableAgentsFiles: availableAgentsFileOutputs }
                   : {

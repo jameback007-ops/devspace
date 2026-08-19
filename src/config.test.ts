@@ -159,6 +159,20 @@ assert.equal(loadConfig({ ...baseEnv, DEVSPACE_MINIMAL_TOOLS: "1" }).toolMode, "
 assert.equal(loadConfig(baseEnv).skillsEnabled, true);
 assert.equal(loadConfig(baseEnv).devspaceSkillsDir, join(emptyConfigDir, "skills"));
 assert.equal(loadConfig(baseEnv).devspaceAgentsDir, join(emptyConfigDir, "agents"));
+assert.deepEqual(loadConfig(baseEnv).workspaceSystemIndexPaths, []);
+assert.deepEqual(
+  loadConfig({
+    ...baseEnv,
+    DEVSPACE_WORKSPACE_SYSTEM_INDEX_PATHS: [
+      join(emptyConfigDir, "zes-system-index.json"),
+      join(emptyConfigDir, "other-system-index.json"),
+    ].join(","),
+  }).workspaceSystemIndexPaths,
+  [
+    join(emptyConfigDir, "zes-system-index.json"),
+    join(emptyConfigDir, "other-system-index.json"),
+  ],
+);
 assert.equal(loadConfig(baseEnv).subagents, false);
 assert.equal(loadConfig(baseEnv).artifactsEnabled, false);
 assert.equal(loadConfig(baseEnv).artifactMaxFileBytes, 100 * 1024 * 1024);
@@ -569,3 +583,19 @@ assert.deepEqual(fileConfig.allowedHosts, [
   "::1",
   "devspace.example.com",
 ]);
+
+const invalidSystemIndexConfigDir = mkdtempSync(
+  join(tmpdir(), "devspace-invalid-system-index-config-test-"),
+);
+writeFileSync(
+  join(invalidSystemIndexConfigDir, "config.json"),
+  JSON.stringify({ workspaceSystemIndexPaths: "not-an-array" }),
+);
+assert.throws(
+  () => loadConfig({
+    DEVSPACE_CONFIG_DIR: invalidSystemIndexConfigDir,
+    DEVSPACE_ALLOWED_ROOTS: process.cwd(),
+    DEVSPACE_OAUTH_OWNER_TOKEN: "test-owner-token-that-is-long-enough",
+  }),
+  /config\.workspaceSystemIndexPaths: expected an array of path strings/,
+);

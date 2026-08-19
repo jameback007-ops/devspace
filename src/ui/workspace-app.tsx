@@ -516,6 +516,28 @@ function renderWorkspacePayload(container: HTMLElement, card: ToolResultCard): v
     card.availableAgentsFiles ?? [],
   );
 
+  const systemIndexes = card.systemIndexes ?? [];
+  if (systemIndexes.length > 0) {
+    appendWorkspaceChipRow(
+      rows,
+      "System context",
+      systemIndexes.map((index) => ({
+        label: index.title ?? index.indexId ?? "System index",
+        title: [
+          index.summary,
+          index.manifestDigestSha256
+            ? `Manifest: ${index.manifestDigestSha256}`
+            : undefined,
+          index.stack ? `Stack entries: ${index.stack.length}` : undefined,
+          index.capabilities
+            ? `Capability entries: ${index.capabilities.length}`
+            : undefined,
+        ].filter((value): value is string => Boolean(value)).join("\n") || undefined,
+      })),
+      toolIcons.instructions,
+    );
+  }
+
   if (card.instructionDiscovery?.status === "incomplete") {
     const reason = card.instructionDiscovery.reason === "deadline_exceeded"
       ? "Nested discovery exceeded its time budget. Open a narrower project workspace."

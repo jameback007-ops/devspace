@@ -170,6 +170,42 @@ test("open_workspace keeps lifecycle flags out of model output and preserves com
   assert.ok(Array.isArray(card.agents));
 });
 
+test("open_workspace injects a matching mandatory system index once per conversation bootstrap", async (t) => {
+  const context = await fixture(t, { workspaceSystemIndex: true });
+  const first = await callOpen(context.client, context.project, "system-index-chat");
+  const repeated = await callOpen(context.client, context.project, "system-index-chat");
+
+  const tools = await context.client.listTools();
+  const openTool = tools.tools.find((tool) => tool.name === "open_workspace");
+  const outputProperties = (openTool?.outputSchema as {
+    properties?: Record<string, unknown>;
+  } | undefined)?.properties;
+  assert.ok(outputProperties && "systemIndexes" in outputProperties);
+
+  const firstStructured = structuredContent(first);
+  const firstSystemIndexes = firstStructured.systemIndexes as Array<Record<string, unknown>>;
+  assert.equal(firstSystemIndexes.length, 1);
+  assert.equal(
+    firstSystemIndexes[0]?.indexId,
+    "zes-system-capabilities-test",
+  );
+  assert.equal(
+    String(firstSystemIndexes[0]?.manifestDigestSha256).length,
+    64,
+  );
+  assert.match(responseText(first), /Mandatory system index: ZES System Index/);
+  assert.match(responseText(first), /Hermes Agent/);
+  assert.match(responseText(first), /ZES Execution Accelerator/);
+  assert.match(responseText(first), /mandatory orientation/);
+
+  assert.equal(structuredContent(repeated).systemIndexes, undefined);
+  const card = responseCard(repeated);
+  const cardSystemIndexes = card.systemIndexes as Array<Record<string, unknown>>;
+  const cardSummary = card.summary as Record<string, unknown>;
+  assert.equal(cardSystemIndexes.length, 1);
+  assert.equal(cardSummary.systemIndexes, 1);
+});
+
 test("open_workspace returns only root context when the nested instruction inventory is too large", async (t) => {
   const context = await fixture(t);
   for (let index = 0; index < 101; index += 1) {
@@ -2008,6 +2044,7 @@ async function fixture(
       effectsEnabled?: boolean;
       bridge: ConversationTransportBridgePort;
     };
+    workspaceSystemIndex?: boolean;
   } = {},
 ): Promise<ServerFixture> {
   const root = await mkdtemp(join(tmpdir(), "devspace-server-test-"));
@@ -2019,6 +2056,60 @@ async function fixture(
   await mkdir(agentDir, { recursive: true });
   await writeFile(join(agentDir, "AGENTS.md"), "global instructions\n");
   await writeFile(join(project, "AGENTS.md"), "project instructions\n");
+  let workspaceSystemIndexPath: string | undefined;
+  if (options.workspaceSystemIndex) {
+    await mkdir(join(project, "architecture"), { recursive: true });
+    await writeFile(
+      join(project, "architecture", "module-package-deployment.yaml"),
+      "selected_native_components: []\n",
+    );
+    workspaceSystemIndexPath = join(root, "zes-system-index.json");
+    await writeFile(
+      workspaceSystemIndexPath,
+      JSON.stringify({
+        schemaVersion: "devspace.workspace-system-index.v1",
+        indexId: "zes-system-capabilities-test",
+        title: "ZES System Index",
+        summary: "Compact mandatory orientation for ZES work.",
+        matchers: [
+          {
+            allMarkerPaths: [
+              "AGENTS.md",
+              "architecture/module-package-deployment.yaml",
+            ],
+          },
+        ],
+        sourceIdentity: {
+          authorityRef: "git:zes@test",
+          files: [
+            {
+              path: "architecture/module-package-deployment.yaml",
+              digestSha256: "a".repeat(64),
+              byteCount: 31,
+            },
+          ],
+        },
+        stack: [
+          {
+            id: "COMP-HERMES",
+            name: "Hermes Agent",
+            role: "Root cognitive runtime.",
+          },
+        ],
+        capabilities: [
+          {
+            id: "zes-execution-accelerator",
+            name: "ZES Execution Accelerator",
+            purpose: "Routes bounded engineering work.",
+            useWhen: "selecting a bounded engineering route.",
+          },
+        ],
+        authorityNotes: [
+          "This index is orientation only and grants no writer or effect authority.",
+        ],
+      }, null, 2) + "\n",
+    );
+  }
   await writeFile(join(project, ".devspace", "agents", "reviewer.md"), [
     "---",
     "name: reviewer",
@@ -2093,6 +2184,9 @@ async function fixture(
     DEVSPACE_CODEX_NAVIGATION_TOOLS: options.codexNavigationTools ? "1" : "0",
     DEVSPACE_SKILLS: options.skillsEnabled === false ? "0" : "1",
     DEVSPACE_SUBAGENTS: options.subagents ? "1" : "0",
+    ...(workspaceSystemIndexPath
+      ? { DEVSPACE_WORKSPACE_SYSTEM_INDEX_PATHS: workspaceSystemIndexPath }
+      : {}),
     ...(options.zesResearchCycleMode
       ? {
           DEVSPACE_ZES_RESEARCH_CYCLE_MODE: options.zesResearchCycleMode,

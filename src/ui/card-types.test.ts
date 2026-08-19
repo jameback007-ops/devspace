@@ -108,6 +108,16 @@ test("a workspace card expands when it contains available instruction files", ()
   );
 });
 
+test("a workspace card expands when it contains a mandatory system index", () => {
+  assert.equal(
+    isExpandableCard({
+      tool: "open_workspace",
+      systemIndexes: [{ title: "ZES System Index" }],
+    }),
+    true,
+  );
+});
+
 test("a workspace card expands when nested instruction discovery is incomplete", () => {
   assert.equal(
     isExpandableCard({

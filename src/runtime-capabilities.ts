@@ -303,6 +303,8 @@ export class RuntimeCapabilityRegistry {
       localAgentContinuationEnabled: this.config.subagents,
       zesResearchCycleMode: this.config.zesResearchCycle.mode,
       artifactDownloadConfigured: this.config.artifactsEnabled,
+      workspaceSystemIndexConfiguredCount:
+        this.config.workspaceSystemIndexPaths.length,
       selfRepositoryPublicationConfigured:
         this.config.selfRepositoryPublication.enabled,
       selfRepositoryPublicationEffectsEnabled:

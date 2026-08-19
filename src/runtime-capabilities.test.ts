@@ -94,6 +94,11 @@ assert.deepEqual(firstSurface.requiredClientTools, [
   "exec_command",
   "skill_search",
 ]);
+assert.equal(
+  (firstSurface.configuration as Record<string, unknown>)
+    .workspaceSystemIndexConfiguredCount,
+  0,
+);
 
 const recoveryGroup = (
   firstSurface.criticalToolGroups as Record<string, Record<string, unknown>>

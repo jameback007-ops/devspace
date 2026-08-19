@@ -21,6 +21,7 @@ export interface DevspaceUserConfig {
   artifactMaxFileBytes?: number;
   codexNavigationTools?: boolean;
   agentDir?: string;
+  workspaceSystemIndexPaths?: string[];
   subagents?: boolean;
 }
 

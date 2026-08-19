@@ -436,6 +436,38 @@ them into one of the active profile directories before use.
 
 Legacy project paths such as `.pi/skills` can be added through `DEVSPACE_SKILL_PATHS` when needed.
 
+## Workspace System Indexes
+
+`DEVSPACE_WORKSPACE_SYSTEM_INDEX_PATHS` accepts a comma-separated list of
+absolute or home-relative generated JSON manifests. Each manifest declares
+bounded workspace marker sets plus a compact system stack, engineering
+capability routing map, source identities, and authority notes. When an opened
+checkout or managed worktree matches a marker set, `open_workspace` injects the
+index into both its model-readable text and structured `systemIndexes` output.
+
+This layer is for mandatory orientation that must not depend on a model
+eventually finding another repository's `AGENTS.md`. It is not current task,
+writer, runtime, release, memory, or effect authority. Entries should point to
+the rightful source for detailed or current state, and large procedures remain
+on-demand skills.
+
+Configured manifests are loaded and strictly validated when the
+`WorkspaceRegistry` starts. Missing, malformed, oversized, duplicate-ID, or
+unsafe-marker manifests fail closed instead of silently omitting mandatory
+context. A matching index is returned once per conversation bootstrap, like
+root instructions and automatically exposed skills; repeated opens in the same
+conversation reuse the already supplied context.
+
+The user config file may set the equivalent array:
+
+```json
+{
+  "workspaceSystemIndexPaths": [
+    "/srv/zes-codex/ZES-SYSTEM-BLUEPRINT/release/workspace-system-index.json"
+  ]
+}
+```
+
 Example:
 
 ```bash

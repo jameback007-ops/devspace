@@ -100,6 +100,7 @@ export interface ServerConfig {
   skillPaths: string[];
   devspaceSkillsDir: string;
   devspaceAgentsDir: string;
+  workspaceSystemIndexPaths: string[];
   subagents: boolean;
   agentDir: string;
   executionObservability: ExecutionObservabilityConfig;
@@ -359,6 +360,17 @@ function parsePathList(value: string | undefined): string[] {
       .map((entry) => entry.trim())
       .filter(Boolean) ?? []
   );
+}
+
+function parseConfiguredPathList(value: unknown, name: string): string[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.some((entry) => typeof entry !== "string")) {
+    throw new Error(`Invalid ${name}: expected an array of path strings`);
+  }
+
+  return value
+    .map((entry) => entry.trim())
+    .filter(Boolean);
 }
 
 function parseStringList(value: string | undefined, fallback: string[]): string[] {
@@ -746,6 +758,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     skillPaths: parsePathList(env.DEVSPACE_SKILL_PATHS),
     devspaceSkillsDir: devspaceSkillsDir(env),
     devspaceAgentsDir: devspaceAgentsDir(env),
+    workspaceSystemIndexPaths: (
+      env.DEVSPACE_WORKSPACE_SYSTEM_INDEX_PATHS === undefined
+        ? parseConfiguredPathList(
+            files.config.workspaceSystemIndexPaths,
+            "config.workspaceSystemIndexPaths",
+          )
+        : parsePathList(env.DEVSPACE_WORKSPACE_SYSTEM_INDEX_PATHS)
+    ).map((path) => resolve(expandHomePath(path))),
     subagents:
       env.DEVSPACE_SUBAGENTS === undefined
         ? files.config.subagents === true

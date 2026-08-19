@@ -59,6 +59,15 @@ export interface ToolResultCard {
   availableAgentsFiles?: Array<{
     path?: string;
   }>;
+  systemIndexes?: Array<{
+    indexId?: string;
+    title?: string;
+    summary?: string;
+    manifestDigestSha256?: string;
+    stack?: Array<unknown>;
+    capabilities?: Array<unknown>;
+    authorityNotes?: string[];
+  }>;
   instructionDiscovery?: {
     status?: "incomplete";
     reason?: "deadline_exceeded" | "result_limit_exceeded";
@@ -171,11 +180,13 @@ export function isExpandableCard(card: ToolResultCard): boolean {
   if (card.tool === "open_workspace") {
     return (
       Number(card.summary?.agentsFiles ?? 0) > 0 ||
+      Number(card.summary?.systemIndexes ?? 0) > 0 ||
       Number(card.summary?.skills ?? 0) > 0 ||
       Number(card.summary?.agentProviders ?? 0) > 0 ||
       Number(card.summary?.agents ?? 0) > 0 ||
       Boolean(card.agentsFiles?.length) ||
       Boolean(card.availableAgentsFiles?.length) ||
+      Boolean(card.systemIndexes?.length) ||
       card.instructionDiscovery?.status === "incomplete" ||
       Boolean(card.skills?.length) ||
       Boolean(card.agentProviders?.length) ||
