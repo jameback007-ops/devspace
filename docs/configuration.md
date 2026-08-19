@@ -159,24 +159,45 @@ candidate-object refspec, `--force-with-lease`, and post-effect remote readback.
 
 ## Advisory Turn Continuity and Recovery Capsules
 
-DevSpace provides a soft assistant-turn horizon and Git-bound executor recovery
-capsules. This replaces the retired executor-window mechanism without restoring
-its blocking behavior. The horizon never disables tools, requires task
-completion, forces a commit, suppresses dynamic replanning, or authorizes weaker
-validation.
+DevSpace provides a soft assistant-turn horizon, instability-aware early
+landing, a persisted bounded machine operational envelope, and Git-bound
+semantic recovery capsules. This replaces the retired executor-window
+mechanism without restoring its blocking behavior. Nothing in this layer
+disables tools, requires task completion, forces a commit, suppresses dynamic
+replanning, retries an effect, or authorizes weaker validation.
 
 When a host supplies `devspace/executor-turn`, DevSpace begins a fresh advisory
 epoch for that exact assistant turn. A host may also supply an exact absolute
 deadline through `devspace/executor-deadline-ms` or
-`devspace/executor-deadline-at`. When neither is available, the model calls
-`turn_horizon_begin` once near the first tool call of the turn with a unique
+`devspace/executor-deadline-at`. When neither is available, the first
+non-control tool starts an implicit epoch automatically. `turn_horizon_begin`
+remains available for an explicit or recovered boundary with a unique
 idempotency key. Conversation age is never substituted for turn age.
 
-The fallback estimate defaults to 120 minutes. At 95 minutes DevSpace emits one
-checkpoint-awareness notice. At 110 minutes it emits one landing-opportunity
-notice. Both are advisory: continue the current causal slice until a genuinely
-recoverable cut, then end only the assistant turn. A task may continue across
-any number of turns.
+The fallback estimate defaults to 120 minutes. At 90 minutes DevSpace emits one
+checkpoint-awareness notice, at 100 minutes one landing-opportunity notice,
+and at 108 minutes one urgent-landing notice. An exact host deadline uses the
+same default lead margins (30, 20, and 12 minutes). All are advisory: finish the
+current coherent causal slice at a genuinely recoverable cut, then end only the
+assistant turn. A task may continue across any number of turns.
+
+Within a bounded recent window, sanitized lifecycle receipts also classify
+`normal`, `degraded`, `unstable`, or `critical` recovery risk. Tool error,
+blocked/interrupted lifecycle, repeated normalized failures, backend epoch
+change, stale ordinary tool observation, capsule debt, running process
+exposure, and explicit in-flight/unknown effect state are considered. A normal
+nonzero command exit and a legitimate long `exec_command`/`write_stdin` are not
+misclassified as transport failure. The result is guidance only and does not
+grant mutation, writer, effect, or publication authority.
+
+When timing or instability becomes material, DevSpace persists a bounded
+machine operational envelope per scope/epoch. It contains opaque IDs, event and
+checkpoint timing, safe running process/tool metadata, backend identity,
+sanitized risk counts, and explicit capsule/effect disposition. It excludes
+prompts, transcripts, private reasoning, tool output, exception messages, raw
+commands, patches, credentials, arbitrary paths, and inferred mission. A
+`turn_boundary` capsule seals the current epoch; the next non-control tool
+starts a fresh epoch while resume guidance preserves the same explicit mission.
 
 `recovery_capsule_record` stores bounded semantic recovery state together with a
 digest of the exact Git HEAD, branch, tracked diff, status, and bounded
@@ -198,8 +219,13 @@ configuration is:
 | --- | --- | --- |
 | `DEVSPACE_TURN_CONTINUITY` | `1` | Enable advisory horizon and recovery capsule tools. |
 | `DEVSPACE_TURN_HORIZON_MINUTES` | `120` | Fallback estimated host turn duration. |
-| `DEVSPACE_TURN_HORIZON_AWARENESS_MINUTES` | `95` | Emit one early checkpoint-awareness notice. |
-| `DEVSPACE_TURN_HORIZON_LANDING_MINUTES` | `110` | Emit one nearest-recoverable-cut notice. |
+| `DEVSPACE_TURN_HORIZON_AWARENESS_MINUTES` | `90` | Emit one early checkpoint-awareness notice. |
+| `DEVSPACE_TURN_HORIZON_LANDING_MINUTES` | `100` | Emit one nearest-recoverable-cut notice. |
+| `DEVSPACE_TURN_HORIZON_URGENT_MINUTES` | `108` | Emit one urgent nearest-safe-cut notice. Must be below the estimated horizon. |
+| `DEVSPACE_TURN_INSTABILITY_WINDOW_MINUTES` | `15` | Bounded lifecycle evidence window used for instability assessment. |
+| `DEVSPACE_TURN_CAPSULE_REFRESH_MINUTES` | `30` | Mark an active capsule as carrying refresh debt after later activity or mutation. |
+| `DEVSPACE_TURN_STALE_TOOL_MINUTES` | `5` | Stale threshold for a running ordinary non-process tool observation. Long process tools are exempt. |
+| `DEVSPACE_TURN_STALE_PROCESS_MINUTES` | `20` | Stale-output exposure threshold for a running process; exposure alone does not prove failure. |
 | `DEVSPACE_RECOVERY_CAPSULE_RETENTION_HOURS` | `720` | Retain capsules for 30 days. |
 | `DEVSPACE_RECOVERY_CAPSULE_MAX_PER_WORKSPACE` | `50` | Bound retained capsules per exact workspace root. |
 | `DEVSPACE_RECOVERY_CAPSULE_MAX_CHARACTERS` | `64000` | Bound one capsule's semantic payload. |

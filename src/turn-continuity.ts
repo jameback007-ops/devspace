@@ -14,6 +14,11 @@ export interface TurnContinuityConfig {
   estimatedTurnMs: number;
   awarenessAfterMs: number;
   landingAfterMs: number;
+  urgentAfterMs: number;
+  instabilityWindowMs: number;
+  capsuleRefreshAfterMs: number;
+  staleRunningToolMs: number;
+  staleRunningProcessMs: number;
   capsuleRetentionMs: number;
   maxCapsulesPerWorkspace: number;
   maxCapsuleCharacters: number;
@@ -88,14 +93,45 @@ export interface RecoveryCapsuleInput {
 
 export interface TurnContinuityManagerOptions {
   now?: () => number;
+  operationalObservation?: (
+    scopeRef: string,
+  ) => TurnContinuityOperationalObservation | undefined;
+  operationalRefreshIntervalMs?: number | false;
 }
 
-type HorizonSource = "host_turn" | "host_deadline" | "explicit";
+export interface TurnContinuityProcessObservation {
+  sessionId: number;
+  workspaceId: string;
+  startedAt: string;
+  lastOutputAt?: string;
+  wallTimeMs: number;
+}
+
+export interface TurnContinuityBackendObservation {
+  instanceRef?: string;
+  startedAtMs?: number;
+  surfaceEpoch?: string;
+  fingerprintSha256?: string;
+}
+
+export interface TurnContinuityOperationalObservation {
+  runningProcesses?: TurnContinuityProcessObservation[];
+  backend?: TurnContinuityBackendObservation;
+}
+
+type HorizonSource = "host_turn" | "host_deadline" | "explicit" | "implicit";
 type HorizonAdvisory =
   | "not_started"
   | "normal"
   | "checkpoint_awareness"
-  | "landing_opportunity";
+  | "landing_opportunity"
+  | "urgent_landing";
+
+export type TurnInstabilityState =
+  | "normal"
+  | "degraded"
+  | "unstable"
+  | "critical";
 
 interface HorizonRow {
   scope_ref: string;
@@ -111,8 +147,62 @@ interface HorizonRow {
   last_checkpoint_id: string | null;
   awareness_emitted_at_ms: number | null;
   landing_emitted_at_ms: number | null;
+  urgent_emitted_at_ms: number | null;
+  instability_notice_state: TurnInstabilityState | null;
+  instability_notice_emitted_at_ms: number | null;
   stale_checkpoint_notice_emitted_at_ms: number | null;
   capsule_nudge_emitted_at_ms: number | null;
+  sealed_at_ms: number | null;
+  sealed_by_capsule_id: string | null;
+  sealed_reason: string | null;
+}
+
+interface LandingEnvelopeRow {
+  id: string;
+  scope_ref: string;
+  epoch_id: string;
+  generation: number;
+  trigger_kind: string;
+  envelope_json: string;
+  envelope_digest_sha256: string;
+  created_at_ms: number;
+  updated_at_ms: number;
+}
+
+interface InstabilityEventRow {
+  sequence: number;
+  tool_name: string;
+  outcome: string;
+  started_at_ms: number;
+  completed_at_ms: number | null;
+  workspace_id: string | null;
+  process_session_id: number | null;
+  error_kind: string | null;
+  error_digest_sha256: string | null;
+}
+
+interface TurnInstabilityAssessment {
+  state: TurnInstabilityState;
+  score: number;
+  reasonCodes: string[];
+  windowStartedAtMs: number;
+  windowEndedAtMs?: number;
+  latestEventSequence?: number;
+  recentErrorCount: number;
+  recentBlockedCount: number;
+  recentInterruptedCount: number;
+  repeatedFailureCount: number;
+  runningTools: InstabilityEventRow[];
+  staleRunningToolCount: number;
+  runningProcesses: TurnContinuityProcessObservation[];
+  staleRunningProcessCount: number;
+  backend?: TurnContinuityBackendObservation;
+  backendChangedSinceEnvelope: boolean;
+  latestCapsule?: CapsuleRow;
+  latestSemantic?: RecoverySemanticState;
+  mutationAfterCapsule: boolean;
+  capsuleRefreshDebt: boolean;
+  effectReconciliationRequired: boolean;
 }
 
 interface CapsuleRow {
@@ -197,6 +287,13 @@ const MAX_UNTRACKED_HASH_PATHS = 200;
 const MAX_GIT_OUTPUT_BYTES = 50 * 1024 * 1024;
 const EXPLICIT_KEY_MAX_CHARACTERS = 200;
 const MAX_RECOVERY_EVIDENCE_EVENTS = 20;
+const MAX_LANDING_ENVELOPE_CHARACTERS = 32_000;
+const MAX_LANDING_ENVELOPES_PER_SCOPE = 50;
+const MAX_ENVELOPE_WORKSPACE_IDS = 25;
+const MAX_ENVELOPE_RUNNING_ITEMS = 20;
+const MAX_INSTABILITY_EVENTS = 100;
+const MAX_BACKGROUND_REFRESH_HORIZONS = 200;
+const DEFAULT_OPERATIONAL_REFRESH_INTERVAL_MS = 30_000;
 const CONTROL_TOOL_NAMES = new Set([
   "turn_horizon_begin",
   "turn_horizon_status",
@@ -222,6 +319,16 @@ const CAPSULE_ADOPTION_NUDGE_TOOLS = new Set([
   "edit_file",
   "download_artifact",
 ]);
+const LEGITIMATE_LONG_RUNNING_TOOL_NAMES = new Set([
+  "exec_command",
+  "write_stdin",
+]);
+const INSTABILITY_SEVERITY: Record<TurnInstabilityState, number> = {
+  normal: 0,
+  degraded: 1,
+  unstable: 2,
+  critical: 3,
+};
 
 function sha256(value: string | Buffer): string {
   return createHash("sha256").update(value).digest("hex");
@@ -313,6 +420,16 @@ function compactHintText(value: string | undefined, maximum: number): string | u
     : `${value.slice(0, Math.max(0, maximum - 3))}...`;
 }
 
+function parseIsoMs(value: string | undefined): number | undefined {
+  if (!value) return undefined;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function uniqueBounded(values: string[], maximum: number): string[] {
+  return Array.from(new Set(values)).slice(0, maximum);
+}
+
 function splitNul(value: string): string[] {
   return value.split("\0").filter((entry) => entry.length > 0);
 }
@@ -327,13 +444,15 @@ function potentiallyMutatingTool(toolName: string, input: unknown): boolean {
 function horizonInstruction(advisory: HorizonAdvisory): string {
   switch (advisory) {
     case "not_started":
-      return "Call turn_horizon_begin once near the first tool call of this assistant turn when the host supplies no exact turn identity. This starts advisory timing only and never creates or limits a task.";
+      return "The first non-control tool call will start an implicit advisory turn epoch when the host supplies no exact turn identity. turn_horizon_begin remains available for an explicit or recovered boundary; neither path creates or limits a task.";
     case "normal":
       return "Continue the mission normally. Preserve judgment, dynamic replanning, and full validation quality.";
     case "checkpoint_awareness":
       return "Continue the current causal work normally, but keep a recent recovery capsule. Do not change frontier merely because the estimated host horizon is approaching.";
     case "landing_opportunity":
-      return "At the nearest recoverable causal cut, record or refresh a recovery capsule and end only the assistant turn. Do not rush task completion, weaken validation, force a commit, retry an effect, or abandon the current mission.";
+      return "Finish the current coherent causal slice, avoid opening a new long frontier, and use the nearest recoverable cut to record or refresh a recovery capsule before ending only the assistant turn. Do not rush task completion, weaken validation, force a commit, retry an effect, or abandon the current mission.";
+    case "urgent_landing":
+      return "Seek the nearest recoverable causal cut now. Preserve any running process or effect identity, refresh the recovery capsule or intentional-dirty envelope, and end only the assistant turn. Tools remain available and no task completion, forced commit, or quality reduction is authorized.";
   }
 }
 
@@ -344,9 +463,34 @@ function horizonNotice(advisory: Exclude<HorizonAdvisory, "not_started" | "norma
       "The estimated host turn horizon is approaching. Continue the current causal work normally and keep a recent recovery capsule. Do not change frontier, rush the task, reduce validation, or force a commit because of this notice. Tools remain fully available.",
     ].join("\n");
   }
+  if (advisory === "urgent_landing") {
+    return [
+      "[turn-horizon urgent landing guidance]",
+      "Seek the nearest recoverable causal cut now. Preserve and reconcile any running process or in-flight/unknown effect identity, refresh the semantic capsule or intentional-dirty landing envelope, and end only this assistant turn. Do not manufacture a partial commit, weaken validation, retry an indeterminate effect, or claim task completion. Tools remain fully available and this guidance grants no authority.",
+    ].join("\n");
+  }
   return [
     "[turn-horizon landing opportunity]",
     "Use the nearest recoverable causal cut to refresh a recovery capsule and end only this assistant turn. Do not rush task completion, weaken validation, force a commit, retry an effect, or abandon the mission. Tools remain fully available and this notice grants no task, writer, effect, or publication authority.",
+  ].join("\n");
+}
+
+function instabilityNotice(state: Exclude<TurnInstabilityState, "normal">): string {
+  if (state === "degraded") {
+    return [
+      "[turn-stability degraded]",
+      "Bounded executor evidence shows rising recovery debt or a first transport/tool-lifecycle anomaly. Continue the current work normally, but refresh a rolling recovery capsule at the next natural material transition. This is advisory evidence only and does not block tools or grant task, writer, effect, or publication authority.",
+    ].join("\n");
+  }
+  if (state === "unstable") {
+    return [
+      "[turn-stability unstable]",
+      "Repeated or material executor anomalies are present. Finish the current coherent slice, do not open a new long causal frontier, preserve running process/effect identity, and seek the nearest recoverable landing. Do not reduce validation, force a commit, or replay an unknown effect. Tools remain available and this guidance grants no authority.",
+    ].join("\n");
+  }
+  return [
+    "[turn-stability critical]",
+    "Executor evidence indicates a high-risk recovery boundary. Do not begin a new mutation or external effect. Preserve and reconcile the current process/effect identity, record the nearest recoverable semantic frontier or intentional-dirty state, and end only this assistant turn. Tools remain available for inspection and reconciliation; this guidance is not an authorization gate.",
   ].join("\n");
 }
 
@@ -367,6 +511,11 @@ function capsuleAdoptionNotice(): string {
 export class TurnContinuityManager {
   private readonly database: DatabaseHandle;
   private readonly now: () => number;
+  private readonly operationalObservation:
+    | TurnContinuityManagerOptions["operationalObservation"]
+    | undefined;
+  private readonly operationalRefreshIntervalMs: number | false;
+  private operationalRefreshTimer?: NodeJS.Timeout;
   private nextPruneAtMs = 0;
 
   constructor(
@@ -376,7 +525,31 @@ export class TurnContinuityManager {
   ) {
     this.database = openDatabase(stateDir);
     this.now = options.now ?? Date.now;
-    if (config.enabled) this.prune(this.now());
+    this.operationalObservation = options.operationalObservation;
+    this.operationalRefreshIntervalMs =
+      options.operationalRefreshIntervalMs === false
+        ? false
+        : Math.max(
+            1_000,
+            Math.floor(
+              options.operationalRefreshIntervalMs
+                ?? DEFAULT_OPERATIONAL_REFRESH_INTERVAL_MS,
+            ),
+          );
+    if (config.enabled) {
+      this.prune(this.now());
+      if (this.operationalRefreshIntervalMs !== false) {
+        this.operationalRefreshTimer = setInterval(() => {
+          try {
+            this.refreshOperationalLandingState();
+          } catch {
+            // Best-effort executor-local recovery evidence must never take
+            // down the MCP backend. A later timer or tool boundary retries it.
+          }
+        }, this.operationalRefreshIntervalMs);
+        this.operationalRefreshTimer.unref();
+      }
+    }
   }
 
   begin(
@@ -387,14 +560,14 @@ export class TurnContinuityManager {
     if (!this.config.enabled) return this.disabledResult();
     const scope = requireIdentity(identity);
     const nowMs = this.now();
-    const host = this.ensureHostEpoch(scope, metadata, nowMs);
+    const host = this.ensureHostEpoch(scope, metadata, nowMs, false);
     if (host) {
       return {
         schemaVersion: 1,
         started: false,
         reason: input.reason,
         hostBoundaryPreferred: true,
-        status: this.horizonView(host, nowMs),
+        status: this.turnStatusView(host, nowMs),
         policy: this.policy(),
       };
     }
@@ -416,7 +589,7 @@ export class TurnContinuityManager {
         started: false,
         idempotentReplay: true,
         reason: input.reason,
-        status: this.horizonView(current, nowMs),
+        status: this.turnStatusView(current, nowMs),
         policy: this.policy(),
       };
     }
@@ -431,7 +604,7 @@ export class TurnContinuityManager {
       schemaVersion: 1,
       started: true,
       reason: input.reason,
-      status: this.horizonView(row, nowMs),
+      status: this.turnStatusView(row, nowMs),
       policy: this.policy(),
     };
   }
@@ -443,19 +616,32 @@ export class TurnContinuityManager {
     if (!this.config.enabled) return this.disabledResult();
     const scope = requireIdentity(identity);
     const nowMs = this.now();
-    const row = this.ensureHostEpoch(scope, metadata, nowMs)
+    const row = this.ensureHostEpoch(scope, metadata, nowMs, false)
       ?? this.getHorizon(scope.scopeRef);
+    const assessment = row
+      ? this.assessInstability(scope.scopeRef, row, nowMs)
+      : undefined;
+    if (row && assessment) {
+      this.refreshLandingEnvelopeIfMaterial(
+        scope.scopeRef,
+        row,
+        nowMs,
+        "status_assessment",
+        assessment,
+      );
+    }
     return {
       schemaVersion: 1,
       enabled: true,
       status: row
-        ? this.horizonView(row, nowMs)
+        ? this.turnStatusView(row, nowMs, assessment)
         : {
             scopeRef: scope.scopeRef,
             advisory: "not_started",
             instruction: horizonInstruction("not_started"),
             toolsBlocked: false,
             taskCompletionRequired: false,
+            landing: this.landingProjectionForScope(scope.scopeRef, nowMs),
           },
       policy: this.policy(),
     };
@@ -468,14 +654,28 @@ export class TurnContinuityManager {
   ): void {
     if (!this.config.enabled || !identity || CONTROL_TOOL_NAMES.has(toolName)) return;
     const nowMs = this.now();
-    const row = this.ensureHostEpoch(identity, metadata, nowMs)
-      ?? this.getHorizon(identity.scopeRef);
-    if (!row) return;
+    const row = this.ensureActiveEpoch(identity, metadata, nowMs);
     this.database.sqlite
       .prepare(
         "update execution_turn_horizons set last_activity_at_ms = ? where scope_ref = ?",
       )
       .run(nowMs, identity.scopeRef);
+    const current = this.getHorizon(identity.scopeRef) ?? row;
+    const timingMaterial =
+      this.horizonView(current, nowMs).advisory !== "normal";
+    if (
+      timingMaterial
+      || current.sealed_at_ms !== null
+      || this.landingEnvelopeForEpoch(identity.scopeRef, current.epoch_id)
+        !== undefined
+    ) {
+      this.refreshLandingEnvelopeIfMaterial(
+        identity.scopeRef,
+        current,
+        nowMs,
+        "tool_started",
+      );
+    }
   }
 
   observeToolFinish(
@@ -487,9 +687,7 @@ export class TurnContinuityManager {
   ): void {
     if (!this.config.enabled || !identity || CONTROL_TOOL_NAMES.has(toolName)) return;
     const nowMs = this.now();
-    const row = this.ensureHostEpoch(identity, metadata, nowMs)
-      ?? this.getHorizon(identity.scopeRef);
-    if (!row) return;
+    const row = this.ensureActiveEpoch(identity, metadata, nowMs);
     const mutationAt = succeeded && potentiallyMutatingTool(toolName, input)
       ? nowMs
       : undefined;
@@ -501,6 +699,23 @@ export class TurnContinuityManager {
          where scope_ref = ?
       `)
       .run(nowMs, mutationAt ?? null, identity.scopeRef);
+    const current = this.getHorizon(identity.scopeRef) ?? row;
+    const timingMaterial =
+      this.horizonView(current, nowMs).advisory !== "normal";
+    if (
+      !succeeded
+      || timingMaterial
+      || current.sealed_at_ms !== null
+      || this.landingEnvelopeForEpoch(identity.scopeRef, current.epoch_id)
+        !== undefined
+    ) {
+      this.refreshLandingEnvelopeIfMaterial(
+        identity.scopeRef,
+        current,
+        nowMs,
+        mutationAt === undefined ? "tool_finished" : "mutation_finished",
+      );
+    }
     this.maybePrune(nowMs);
   }
 
@@ -513,17 +728,56 @@ export class TurnContinuityManager {
       return undefined;
     }
     const nowMs = this.now();
-    const row = this.ensureHostEpoch(identity, metadata, nowMs)
-      ?? this.getHorizon(identity.scopeRef);
-    if (!row) return undefined;
+    const row = this.ensureActiveEpoch(identity, metadata, nowMs);
+    const assessment = this.assessInstability(identity.scopeRef, row, nowMs);
+    this.refreshLandingEnvelopeIfMaterial(
+      identity.scopeRef,
+      row,
+      nowMs,
+      "notice_assessment",
+      assessment,
+    );
     const view = this.horizonView(row, nowMs);
     const advisory = view.advisory as HorizonAdvisory;
     const latestCapsule = this.latestCapsuleForScope(identity.scopeRef);
     const currentTurnHasCapsule = latestCapsule !== undefined
       && latestCapsule.recorded_at_ms >= row.started_at_ms;
 
+    const priorInstability = row.instability_notice_state ?? "normal";
+    if (
+      assessment.state !== "normal"
+      && INSTABILITY_SEVERITY[assessment.state] > INSTABILITY_SEVERITY[priorInstability]
+    ) {
+      this.database.sqlite
+        .prepare(`
+          update execution_turn_horizons
+             set instability_notice_state = ?,
+                 instability_notice_emitted_at_ms = ?
+           where scope_ref = ?
+        `)
+        .run(assessment.state, nowMs, identity.scopeRef);
+      return instabilityNotice(assessment.state);
+    }
+
+    if (
+      advisory === "urgent_landing"
+      && row.urgent_emitted_at_ms === null
+    ) {
+      this.database.sqlite
+        .prepare(`
+          update execution_turn_horizons
+             set awareness_emitted_at_ms = coalesce(awareness_emitted_at_ms, ?),
+                 landing_emitted_at_ms = coalesce(landing_emitted_at_ms, ?),
+                 urgent_emitted_at_ms = ?
+           where scope_ref = ?
+        `)
+        .run(nowMs, nowMs, nowMs, identity.scopeRef);
+      return horizonNotice("urgent_landing");
+    }
+
     if (
       CAPSULE_ADOPTION_NUDGE_TOOLS.has(toolName)
+      && advisory === "normal"
       && row.last_mutation_at_ms !== null
       && !currentTurnHasCapsule
       && row.capsule_nudge_emitted_at_ms === null
@@ -565,7 +819,7 @@ export class TurnContinuityManager {
     }
 
     if (
-      advisory === "landing_opportunity"
+      (advisory === "landing_opportunity" || advisory === "urgent_landing")
       && row.landing_emitted_at_ms !== null
       && currentTurnHasCapsule
       && row.last_mutation_at_ms !== null
@@ -628,6 +882,31 @@ export class TurnContinuityManager {
           "Recovery capsule idempotency key was already used for a different payload or workspace state.",
         );
       }
+      const replayHorizon = this.getHorizon(scope.scopeRef);
+      const replayBelongsToCurrentEpoch = replayHorizon !== undefined
+        && existing.recorded_at_ms >= replayHorizon.started_at_ms;
+      if (replayBelongsToCurrentEpoch) {
+        this.noteCheckpoint(scope.scopeRef, existing.id, existing.recorded_at_ms);
+      }
+      if (existing.intent === "turn_boundary" && replayBelongsToCurrentEpoch) {
+        this.sealHorizon(
+          scope.scopeRef,
+          existing.id,
+          existing.recorded_at_ms,
+          "turn_boundary_capsule",
+        );
+      }
+      const currentHorizon = this.getHorizon(scope.scopeRef);
+      if (currentHorizon && replayBelongsToCurrentEpoch) {
+        this.refreshLandingEnvelopeIfMaterial(
+          scope.scopeRef,
+          currentHorizon,
+          nowMs,
+          existing.intent === "turn_boundary"
+            ? "turn_boundary"
+            : "capsule_replayed",
+        );
+      }
       return {
         schemaVersion: 1,
         recorded: false,
@@ -644,8 +923,19 @@ export class TurnContinuityManager {
           fingerprint,
           freshness: fingerprint.complete ? "fresh" : "unknown",
         },
+        horizonRelation: replayBelongsToCurrentEpoch
+          ? "same_epoch_idempotent_replay"
+          : "historical_capsule_replay_after_successor_epoch",
+        landing: this.landingProjectionForScope(scope.scopeRef, nowMs),
         policy: this.capsulePolicy(),
       };
+    }
+    if (!this.getHorizon(scope.scopeRef)) {
+      this.startEpoch(scope.scopeRef, {
+        source: "implicit",
+        startedAtMs: nowMs,
+        deadlineAtMs: undefined,
+      });
     }
     const id = `rcp_${randomUUID().replaceAll("-", "")}`;
 
@@ -695,6 +985,23 @@ export class TurnContinuityManager {
     });
     const generation = transaction.immediate();
     this.noteCheckpoint(scope.scopeRef, id, nowMs);
+    if (input.intent === "turn_boundary") {
+      this.sealHorizon(
+        scope.scopeRef,
+        id,
+        nowMs,
+        "turn_boundary_capsule",
+      );
+    }
+    const horizon = this.getHorizon(scope.scopeRef);
+    if (horizon) {
+      this.refreshLandingEnvelopeIfMaterial(
+        scope.scopeRef,
+        horizon,
+        nowMs,
+        input.intent === "turn_boundary" ? "turn_boundary" : "capsule_recorded",
+      );
+    }
     return {
       schemaVersion: 1,
       recorded: true,
@@ -710,6 +1017,7 @@ export class TurnContinuityManager {
         fingerprint,
         freshness: fingerprint.complete ? "fresh" : "unknown",
       },
+      landing: this.landingProjectionForScope(scope.scopeRef, nowMs),
       policy: this.capsulePolicy(),
     };
   }
@@ -729,6 +1037,7 @@ export class TurnContinuityManager {
         available: false,
         workspaceId: workspace.id,
         currentFingerprint: current,
+        landing: this.landingProjectionForScope(scope.scopeRef, this.now()),
         instruction:
           "No recovery capsule exists for this exact opened workspace root. Record one at the next material transition or recoverable causal cut.",
         policy: this.capsulePolicy(),
@@ -796,6 +1105,7 @@ export class TurnContinuityManager {
         authorityComparison.freshness,
         semantic.exactNextAction,
       ),
+      landing: this.landingProjectionForScope(scope.scopeRef, this.now()),
       policy: this.capsulePolicy(),
     };
   }
@@ -879,6 +1189,7 @@ export class TurnContinuityManager {
       return {
         available: false,
         reason: "no_explicit_recovery_capsule_for_scope",
+        landing: this.landingProjectionForScope(scopeRef, this.now()),
         instruction:
           "Operational activity is available, but this scope has not explicitly recorded a bounded semantic recovery capsule. Do not infer mission or next action from filenames or tool events alone.",
         policy: this.semanticProjectionPolicy(),
@@ -1148,13 +1459,34 @@ export class TurnContinuityManager {
   }
 
   close(): void {
+    if (this.operationalRefreshTimer) {
+      clearInterval(this.operationalRefreshTimer);
+      this.operationalRefreshTimer = undefined;
+    }
     this.database.close();
+  }
+
+  private ensureActiveEpoch(
+    identity: ExecutionScopeIdentity,
+    metadata: ExecutorTurnMetadata,
+    nowMs: number,
+  ): HorizonRow {
+    const host = this.ensureHostEpoch(identity, metadata, nowMs, true);
+    if (host) return host;
+    const current = this.getHorizon(identity.scopeRef);
+    if (current && current.sealed_at_ms === null) return current;
+    return this.startEpoch(identity.scopeRef, {
+      source: "implicit",
+      startedAtMs: nowMs,
+      deadlineAtMs: undefined,
+    });
   }
 
   private ensureHostEpoch(
     identity: ExecutionScopeIdentity,
     metadata: ExecutorTurnMetadata,
     nowMs: number,
+    restartSealedSameBoundary: boolean,
   ): HorizonRow | undefined {
     const turnRef = metadata.identity?.turnRef;
     const deadlineAtMs = metadata.deadlineAtMs;
@@ -1162,7 +1494,18 @@ export class TurnContinuityManager {
     const current = this.getHorizon(identity.scopeRef);
 
     if (turnRef) {
-      if (current?.source === "host_turn" && current.turn_ref === turnRef) {
+      if (
+        current?.source === "host_turn"
+        && current.turn_ref === turnRef
+      ) {
+        if (current.sealed_at_ms !== null && restartSealedSameBoundary) {
+          return this.startEpoch(identity.scopeRef, {
+            source: "host_turn",
+            turnRef,
+            startedAtMs: nowMs,
+            deadlineAtMs,
+          });
+        }
         if (deadlineAtMs !== undefined && current.deadline_at_ms !== deadlineAtMs) {
           this.database.sqlite
             .prepare(
@@ -1185,6 +1528,13 @@ export class TurnContinuityManager {
       current?.source === "host_deadline"
       && current.deadline_at_ms === deadlineAtMs
     ) {
+      if (current.sealed_at_ms !== null && restartSealedSameBoundary) {
+        return this.startEpoch(identity.scopeRef, {
+          source: "host_deadline",
+          startedAtMs: nowMs,
+          deadlineAtMs,
+        });
+      }
       return current;
     }
     return this.startEpoch(identity.scopeRef, {
@@ -1226,8 +1576,14 @@ export class TurnContinuityManager {
           last_checkpoint_id = excluded.last_checkpoint_id,
           awareness_emitted_at_ms = null,
           landing_emitted_at_ms = null,
+          urgent_emitted_at_ms = null,
+          instability_notice_state = null,
+          instability_notice_emitted_at_ms = null,
           stale_checkpoint_notice_emitted_at_ms = null,
-          capsule_nudge_emitted_at_ms = null
+          capsule_nudge_emitted_at_ms = null,
+          sealed_at_ms = null,
+          sealed_by_capsule_id = null,
+          sealed_reason = null
       `)
       .run(
         scopeRef,
@@ -1252,10 +1608,14 @@ export class TurnContinuityManager {
     const overrunMs = Math.max(0, nowMs - effectiveDeadline);
     const awarenessLeadMs = this.config.estimatedTurnMs - this.config.awarenessAfterMs;
     const landingLeadMs = this.config.estimatedTurnMs - this.config.landingAfterMs;
+    const urgentLeadMs = this.config.estimatedTurnMs - this.config.urgentAfterMs;
     let advisory: HorizonAdvisory = "normal";
     if (exactDeadline !== undefined) {
-      if (remainingMs <= landingLeadMs) advisory = "landing_opportunity";
+      if (remainingMs <= urgentLeadMs) advisory = "urgent_landing";
+      else if (remainingMs <= landingLeadMs) advisory = "landing_opportunity";
       else if (remainingMs <= awarenessLeadMs) advisory = "checkpoint_awareness";
+    } else if (elapsedMs >= this.config.urgentAfterMs) {
+      advisory = "urgent_landing";
     } else if (elapsedMs >= this.config.landingAfterMs) {
       advisory = "landing_opportunity";
     } else if (elapsedMs >= this.config.awarenessAfterMs) {
@@ -1284,12 +1644,808 @@ export class TurnContinuityManager {
       lastCheckpointAt: iso(row.last_checkpoint_at_ms),
       lastCheckpointId: row.last_checkpoint_id ?? undefined,
       lastMutationAt: iso(row.last_mutation_at_ms),
+      sealed: row.sealed_at_ms !== null,
+      sealedAt: iso(row.sealed_at_ms),
+      sealedByCapsuleId: row.sealed_by_capsule_id ?? undefined,
+      sealedReason: row.sealed_reason ?? undefined,
       instruction: horizonInstruction(advisory),
       toolsBlocked: false,
       taskCompletionRequired: false,
       commitRequired: false,
       qualityReductionAuthorized: false,
     };
+  }
+
+  private turnStatusView(
+    row: HorizonRow,
+    nowMs: number,
+    suppliedAssessment?: TurnInstabilityAssessment,
+  ): Record<string, unknown> {
+    const horizon = this.horizonView(row, nowMs);
+    const assessment = suppliedAssessment
+      ?? this.assessInstability(row.scope_ref, row, nowMs);
+    return {
+      ...horizon,
+      instability: this.instabilityView(assessment),
+      guidance: this.effectiveGuidance(
+        horizon.advisory as HorizonAdvisory,
+        assessment.state,
+      ),
+      landing: this.buildLandingProjection(
+        row.scope_ref,
+        nowMs,
+        assessment,
+      ),
+    };
+  }
+
+  landingProjectionForScope(
+    scopeRef: string,
+    nowMs = this.now(),
+  ): Record<string, unknown> {
+    if (!/^[a-f0-9]{16}$/.test(scopeRef)) {
+      throw new Error(`Invalid execution scope reference: ${scopeRef}`);
+    }
+    const row = this.getHorizon(scopeRef);
+    const assessment = this.assessInstability(scopeRef, row, nowMs);
+    return this.buildLandingProjection(scopeRef, nowMs, assessment);
+  }
+
+  refreshOperationalLandingState(): void {
+    if (!this.config.enabled) return;
+    const nowMs = this.now();
+    this.maybePrune(nowMs);
+    const activeLookbackMs = Math.max(
+      this.config.estimatedTurnMs * 2,
+      this.config.instabilityWindowMs * 2,
+      this.config.capsuleRefreshAfterMs * 2,
+      this.config.staleRunningProcessMs * 2,
+    );
+    const rows = this.database.sqlite
+      .prepare(`
+        select * from execution_turn_horizons
+         where last_activity_at_ms >= ?
+         order by last_activity_at_ms desc
+         limit ?
+      `)
+      .all(
+        Math.max(0, nowMs - activeLookbackMs),
+        MAX_BACKGROUND_REFRESH_HORIZONS,
+      ) as HorizonRow[];
+    for (const row of rows) {
+      try {
+        this.refreshLandingEnvelopeIfMaterial(
+          row.scope_ref,
+          row,
+          nowMs,
+          "background_observation",
+        );
+      } catch {
+        // One stale or partially migrated scope must not prevent bounded
+        // refresh of the remaining active horizons.
+      }
+    }
+  }
+
+  private instabilityView(
+    assessment: TurnInstabilityAssessment,
+  ): Record<string, unknown> {
+    return {
+      state: assessment.state,
+      score: assessment.score,
+      reasonCodes: assessment.reasonCodes,
+      observationWindow: {
+        startedAt: iso(assessment.windowStartedAtMs),
+        endedAt: iso(assessment.windowEndedAtMs),
+        latestEventSequence: assessment.latestEventSequence,
+      },
+      recentOutcomes: {
+        error: assessment.recentErrorCount,
+        blocked: assessment.recentBlockedCount,
+        interrupted: assessment.recentInterruptedCount,
+        repeatedFailureCount: assessment.repeatedFailureCount,
+      },
+      exposure: {
+        staleRunningToolCount: assessment.staleRunningToolCount,
+        runningProcessCount: assessment.runningProcesses.length,
+        staleRunningProcessCount: assessment.staleRunningProcessCount,
+        mutationAfterCapsule: assessment.mutationAfterCapsule,
+        capsuleRefreshDebt: assessment.capsuleRefreshDebt,
+        effectReconciliationRequired:
+          assessment.effectReconciliationRequired,
+        backendChangedSinceEnvelope:
+          assessment.backendChangedSinceEnvelope,
+      },
+      advisoryOnly: true,
+      toolsBlocked: false,
+      newMutationOrEffectAuthorityGranted: false,
+    };
+  }
+
+  private effectiveGuidance(
+    advisory: HorizonAdvisory,
+    instability: TurnInstabilityState,
+  ): Record<string, unknown> {
+    let disposition = "continue_normally";
+    if (instability === "critical") {
+      disposition = "preserve_reconcile_and_land";
+    } else if (
+      instability === "unstable"
+      || advisory === "landing_opportunity"
+      || advisory === "urgent_landing"
+    ) {
+      disposition = "finish_coherent_slice_and_seek_landing";
+    } else if (
+      instability === "degraded"
+      || advisory === "checkpoint_awareness"
+    ) {
+      disposition = "refresh_capsule_at_next_material_transition";
+    }
+    return {
+      disposition,
+      sameMissionContinuationExpected: true,
+      toolsBlocked: false,
+      taskCompletionRequired: false,
+      commitRequired: false,
+      qualityReductionAuthorized: false,
+      newMutationOrEffectAuthorityGranted: false,
+    };
+  }
+
+  private assessInstability(
+    scopeRef: string,
+    row: HorizonRow | undefined,
+    nowMs: number,
+  ): TurnInstabilityAssessment {
+    const windowStartedAtMs = Math.max(
+      0,
+      nowMs - this.config.instabilityWindowMs,
+      row?.started_at_ms ?? 0,
+    );
+    const recentEvents = this.database.sqlite
+      .prepare(`
+        select sequence, tool_name, outcome, started_at_ms, completed_at_ms,
+               workspace_id, process_session_id, error_kind,
+               error_digest_sha256
+          from execution_scope_events
+         where scope_ref = ? and started_at_ms >= ?
+         order by sequence desc
+         limit ?
+      `)
+      .all(
+        scopeRef,
+        windowStartedAtMs,
+        MAX_INSTABILITY_EVENTS,
+      ) as InstabilityEventRow[];
+    const materialEvents = recentEvents.filter(
+      (event) => !CONTROL_TOOL_NAMES.has(event.tool_name),
+    );
+    const runningTools = this.database.sqlite
+      .prepare(`
+        select sequence, tool_name, outcome, started_at_ms, completed_at_ms,
+               workspace_id, process_session_id, error_kind,
+               error_digest_sha256
+          from execution_scope_events
+         where scope_ref = ? and outcome = 'running'
+         order by sequence desc
+         limit ?
+      `)
+      .all(scopeRef, MAX_ENVELOPE_RUNNING_ITEMS + 1) as InstabilityEventRow[];
+    const materialRunningTools = runningTools.filter(
+      (event) => !CONTROL_TOOL_NAMES.has(event.tool_name),
+    );
+    const staleRunningTools = materialRunningTools.filter(
+      (event) =>
+        !LEGITIMATE_LONG_RUNNING_TOOL_NAMES.has(event.tool_name)
+        && nowMs - event.started_at_ms >= this.config.staleRunningToolMs,
+    );
+    const recentErrors = materialEvents.filter((event) => event.outcome === "error");
+    const recentBlocked = materialEvents.filter((event) => event.outcome === "blocked");
+    const recentInterrupted = materialEvents.filter(
+      (event) => event.outcome === "interrupted",
+    );
+    const failureCounts = new Map<string, number>();
+    for (const event of [...recentErrors, ...recentBlocked, ...recentInterrupted]) {
+      if (!event.error_digest_sha256) continue;
+      const key = [
+        event.tool_name,
+        event.error_kind ?? event.outcome,
+        event.error_digest_sha256,
+      ].join(":");
+      failureCounts.set(key, (failureCounts.get(key) ?? 0) + 1);
+    }
+    const repeatedFailureCount = Math.max(0, ...failureCounts.values());
+    const serverRestartObserved = recentInterrupted.some(
+      (event) => event.error_kind === "server_restart",
+    );
+
+    let operational: TurnContinuityOperationalObservation | undefined;
+    try {
+      operational = this.operationalObservation?.(scopeRef);
+    } catch {
+      operational = undefined;
+    }
+    const runningProcesses = (operational?.runningProcesses ?? [])
+      .filter(
+        (process) =>
+          Number.isInteger(process.sessionId)
+          && typeof process.workspaceId === "string"
+          && process.workspaceId.length > 0,
+      )
+      .slice(0, MAX_ENVELOPE_RUNNING_ITEMS + 1);
+    const staleRunningProcessCount = runningProcesses.filter((process) => {
+      if (process.wallTimeMs < this.config.staleRunningProcessMs) return false;
+      const lastOutputAtMs = parseIsoMs(process.lastOutputAt);
+      return lastOutputAtMs === undefined
+        || nowMs - lastOutputAtMs >= this.config.staleRunningProcessMs;
+    }).length;
+
+    const latestCapsule = this.latestCapsuleForScope(scopeRef);
+    let latestSemantic: RecoverySemanticState | undefined;
+    if (latestCapsule) {
+      try {
+        latestSemantic = parseSemantic(latestCapsule.semantic_json);
+      } catch {
+        latestSemantic = undefined;
+      }
+    }
+    const mutationAfterCapsule = row?.last_mutation_at_ms !== null
+      && row?.last_mutation_at_ms !== undefined
+      && (
+        latestCapsule === undefined
+        || row.last_mutation_at_ms > latestCapsule.recorded_at_ms
+      );
+    const capsuleRefreshDebt = latestCapsule === undefined
+      ? row?.last_mutation_at_ms !== null && row?.last_mutation_at_ms !== undefined
+      : nowMs - latestCapsule.recorded_at_ms >= this.config.capsuleRefreshAfterMs
+        && (
+          mutationAfterCapsule
+          || (row?.last_activity_at_ms ?? latestCapsule.recorded_at_ms)
+            > latestCapsule.recorded_at_ms
+        );
+    const effectReconciliationRequired = latestSemantic !== undefined
+      && (
+        latestSemantic.effectState === "in_flight"
+        || latestSemantic.effectState === "unknown"
+        || (
+          latestSemantic.effectKeys.length > 0
+          && latestSemantic.effectState !== "terminal"
+          && latestSemantic.retryPolicy === "reconcile_before_retry"
+        )
+      );
+
+    const latestEnvelope = this.latestLandingEnvelopeForScope(scopeRef);
+    const latestEnvelopeValue = latestEnvelope
+      ? parseOptionalRecordJson(latestEnvelope.envelope_json)
+      : undefined;
+    const envelopeBackend = isRecord(latestEnvelopeValue?.backend)
+      ? latestEnvelopeValue.backend
+      : undefined;
+    const priorBackendInstance = typeof envelopeBackend?.instanceRef === "string"
+      ? envelopeBackend.instanceRef
+      : undefined;
+    const currentBackendInstance = operational?.backend?.instanceRef;
+    const backendChangedSinceEnvelope = priorBackendInstance !== undefined
+      && currentBackendInstance !== undefined
+      && priorBackendInstance !== currentBackendInstance;
+
+    const reasonCodes: string[] = [];
+    let score = 0;
+    if (recentErrors.length > 0) {
+      reasonCodes.push("recent_tool_error_response");
+      score += Math.min(3, recentErrors.length);
+    }
+    if (recentBlocked.length > 0) {
+      reasonCodes.push("recent_tool_blocked");
+      score += Math.min(3, recentBlocked.length);
+    }
+    if (recentInterrupted.length > 0) {
+      reasonCodes.push("recent_tool_interrupted");
+      score += Math.min(4, recentInterrupted.length * 2);
+    }
+    if (repeatedFailureCount >= 2) {
+      reasonCodes.push("repeated_normalized_tool_failure");
+      score += 2;
+    }
+    if (serverRestartObserved) {
+      reasonCodes.push("server_restart_interrupted_observation");
+      score += 2;
+    }
+    if (staleRunningTools.length > 0) {
+      reasonCodes.push("stale_non_process_tool_observation");
+      score += 4;
+    }
+    if (backendChangedSinceEnvelope) {
+      reasonCodes.push("backend_instance_changed_since_envelope");
+      score += 3;
+    }
+    if (mutationAfterCapsule) {
+      reasonCodes.push("mutation_after_latest_capsule");
+      if (latestCapsule !== undefined && capsuleRefreshDebt) score += 1;
+    }
+    if (capsuleRefreshDebt) {
+      reasonCodes.push("capsule_refresh_debt");
+    }
+    if (effectReconciliationRequired) {
+      reasonCodes.push("effect_reconciliation_required");
+      score += 2;
+    }
+    if (runningProcesses.length > 0) {
+      reasonCodes.push("running_process_exposure");
+    }
+    if (staleRunningProcessCount > 0) {
+      reasonCodes.push("stale_running_process_exposure");
+      if (
+        recentErrors.length + recentBlocked.length + recentInterrupted.length > 0
+        || effectReconciliationRequired
+        || backendChangedSinceEnvelope
+      ) {
+        score += 1;
+      }
+    }
+
+    const criticalCombination = effectReconciliationRequired
+      && (
+        serverRestartObserved
+        || staleRunningTools.length > 0
+        || recentInterrupted.length >= 2
+      );
+    const state: TurnInstabilityState = criticalCombination || score >= 7
+      ? "critical"
+      : score >= 4
+        ? "unstable"
+        : score >= 1
+          ? "degraded"
+          : "normal";
+    const latestEvent = materialEvents[0];
+    return {
+      state,
+      score,
+      reasonCodes: uniqueBounded(reasonCodes, 20),
+      windowStartedAtMs,
+      windowEndedAtMs: latestEvent?.completed_at_ms
+        ?? latestEvent?.started_at_ms,
+      latestEventSequence: latestEvent?.sequence,
+      recentErrorCount: recentErrors.length,
+      recentBlockedCount: recentBlocked.length,
+      recentInterruptedCount: recentInterrupted.length,
+      repeatedFailureCount,
+      runningTools: materialRunningTools,
+      staleRunningToolCount: staleRunningTools.length,
+      runningProcesses,
+      staleRunningProcessCount,
+      backend: operational?.backend,
+      backendChangedSinceEnvelope,
+      latestCapsule,
+      latestSemantic,
+      mutationAfterCapsule,
+      capsuleRefreshDebt,
+      effectReconciliationRequired,
+    };
+  }
+
+  private refreshLandingEnvelopeIfMaterial(
+    scopeRef: string,
+    row: HorizonRow,
+    nowMs: number,
+    requestedTrigger: string,
+    suppliedAssessment?: TurnInstabilityAssessment,
+  ): LandingEnvelopeRow | undefined {
+    const assessment = suppliedAssessment
+      ?? this.assessInstability(scopeRef, row, nowMs);
+    const horizon = this.horizonView(row, nowMs);
+    const currentEnvelope = this.landingEnvelopeForEpoch(scopeRef, row.epoch_id);
+    const material = horizon.advisory !== "normal"
+      || assessment.state !== "normal"
+      || row.sealed_at_ms !== null
+      || currentEnvelope !== undefined;
+    if (!material) return undefined;
+    const triggerKind = row.sealed_at_ms !== null
+      ? "turn_boundary"
+      : assessment.state !== "normal"
+        ? "instability"
+        : horizon.advisory === "urgent_landing"
+          ? "urgent_timing"
+          : horizon.advisory === "landing_opportunity"
+            ? "landing_timing"
+            : horizon.advisory === "checkpoint_awareness"
+              ? "awareness_timing"
+              : requestedTrigger;
+    const envelope = this.buildLandingEnvelope(
+      scopeRef,
+      row,
+      horizon,
+      assessment,
+    );
+    return this.persistLandingEnvelope(
+      scopeRef,
+      row.epoch_id,
+      triggerKind,
+      envelope,
+      nowMs,
+    );
+  }
+
+  private buildLandingEnvelope(
+    scopeRef: string,
+    row: HorizonRow,
+    horizon: Record<string, unknown>,
+    assessment: TurnInstabilityAssessment,
+  ): Record<string, unknown> {
+    const linkedRows = this.database.sqlite
+      .prepare(`
+        select workspace_session_id
+          from execution_scope_workspaces
+         where scope_ref = ?
+         order by last_seen_at_ms desc
+         limit ?
+      `)
+      .all(scopeRef, MAX_ENVELOPE_WORKSPACE_IDS + 1) as Array<{
+        workspace_session_id: string;
+      }>;
+    const linkedWorkspaceCount = this.database.sqlite
+      .prepare(`
+        select count(*) as count
+          from execution_scope_workspaces
+         where scope_ref = ?
+      `)
+      .get(scopeRef) as { count: number };
+    const linkedWorkspaceIds = linkedRows
+      .slice(0, MAX_ENVELOPE_WORKSPACE_IDS)
+      .map((entry) => entry.workspace_session_id);
+    const semantic = assessment.latestSemantic;
+    const capsule = assessment.latestCapsule;
+    const runningTools = assessment.runningTools
+      .slice(0, MAX_ENVELOPE_RUNNING_ITEMS)
+      .map((event) => ({
+        sequence: event.sequence,
+        tool: event.tool_name,
+        startedAt: iso(event.started_at_ms),
+        workspaceId: event.workspace_id ?? undefined,
+        processSessionId: event.process_session_id ?? undefined,
+      }));
+    const runningProcesses = assessment.runningProcesses
+      .slice(0, MAX_ENVELOPE_RUNNING_ITEMS)
+      .map((process) => ({
+        sessionId: process.sessionId,
+        workspaceId: process.workspaceId,
+        startedAt: process.startedAt,
+        lastOutputAt: process.lastOutputAt,
+      }));
+    return {
+      schemaVersion: 1,
+      scopeRef,
+      epoch: {
+        epochId: row.epoch_id,
+        source: row.source,
+        startedAt: iso(row.started_at_ms),
+        deadlineAt: horizon.deadlineAt,
+        advisory: horizon.advisory,
+        sealedAt: iso(row.sealed_at_ms),
+        sealedByCapsuleId: row.sealed_by_capsule_id ?? undefined,
+        sealedReason: row.sealed_reason ?? undefined,
+      },
+      eventObservation: {
+        windowDurationMs: this.config.instabilityWindowMs,
+        latestSequence: assessment.latestEventSequence,
+        latestObservedEventAt: iso(assessment.windowEndedAtMs),
+      },
+      semanticCapsule: capsule
+        ? {
+            capsuleId: capsule.id,
+            intent: capsule.intent,
+            recordedAt: iso(capsule.recorded_at_ms),
+            recordedEventSequence:
+              capsule.recorded_event_sequence ?? undefined,
+            mutationObservedAfter: assessment.mutationAfterCapsule,
+            refreshDebt: assessment.capsuleRefreshDebt,
+          }
+        : {
+            available: false,
+            mutationObservedWithoutCapsule: assessment.mutationAfterCapsule,
+          },
+      workspaceLinks: {
+        workspaceIds: linkedWorkspaceIds,
+        totalCount: Number(linkedWorkspaceCount.count),
+        truncated:
+          Number(linkedWorkspaceCount.count) > MAX_ENVELOPE_WORKSPACE_IDS,
+      },
+      mutationCheckpoint: {
+        lastActivityAt: iso(row.last_activity_at_ms),
+        lastMutationAt: iso(row.last_mutation_at_ms),
+        lastCheckpointAt: iso(row.last_checkpoint_at_ms),
+        lastCheckpointId: row.last_checkpoint_id ?? undefined,
+      },
+      running: {
+        tools: runningTools,
+        toolCount: assessment.runningTools.length,
+        toolsTruncated:
+          assessment.runningTools.length > MAX_ENVELOPE_RUNNING_ITEMS,
+        processes: runningProcesses,
+        processCount: assessment.runningProcesses.length,
+        processesTruncated:
+          assessment.runningProcesses.length > MAX_ENVELOPE_RUNNING_ITEMS,
+      },
+      instability: {
+        state: assessment.state,
+        score: assessment.score,
+        reasonCodes: assessment.reasonCodes,
+        recentOutcomes: {
+          error: assessment.recentErrorCount,
+          blocked: assessment.recentBlockedCount,
+          interrupted: assessment.recentInterruptedCount,
+          repeatedFailureCount: assessment.repeatedFailureCount,
+        },
+        exposure: {
+          staleRunningToolCount: assessment.staleRunningToolCount,
+          runningProcessCount: assessment.runningProcesses.length,
+          staleRunningProcessCount: assessment.staleRunningProcessCount,
+          mutationAfterCapsule: assessment.mutationAfterCapsule,
+          capsuleRefreshDebt: assessment.capsuleRefreshDebt,
+          effectReconciliationRequired:
+            assessment.effectReconciliationRequired,
+          backendChangedSinceEnvelope:
+            assessment.backendChangedSinceEnvelope,
+        },
+        advisoryOnly: true,
+        toolsBlocked: false,
+        newMutationOrEffectAuthorityGranted: false,
+      },
+      backend: assessment.backend,
+      effectExposure: semantic
+        ? {
+            state: semantic.effectState,
+            retryPolicy: semantic.retryPolicy,
+            effectKeyCount: semantic.effectKeys.length,
+            effectKeysDigestSha256: semantic.effectKeys.length > 0
+              ? sha256(canonicalJson(semantic.effectKeys))
+              : undefined,
+          }
+        : {
+            state: "unobserved",
+            source: "no_valid_explicit_semantic_capsule",
+          },
+      safeBoundary: {
+        cleanCommitPermittedWhenNaturalAndValidated: true,
+        intentionalDirtyStatePermittedWithExactEnvelopeAndSemanticFrontier: true,
+        partialCommitRequired: false,
+        inFlightOrUnknownEffectIsCompleted: false,
+      },
+      policy: {
+        authority: "executor_local_operational_landing_evidence_only",
+        semanticStateSource: "explicit_recovery_capsule_only",
+        transcriptCaptured: false,
+        promptsCaptured: false,
+        privateReasoningCaptured: false,
+        toolOutputCaptured: false,
+        rawCommandsCaptured: false,
+        arbitraryPathsCaptured: false,
+        credentialsPermitted: false,
+        canonicalTaskOrDecisionAuthority: false,
+        writerLeaseAuthority: false,
+        effectOutcomeAuthority: false,
+        publicationAuthority: false,
+        toolsBlocked: false,
+      },
+      evidenceObservedAt: iso(
+        assessment.windowEndedAtMs ?? row.last_activity_at_ms,
+      ),
+    };
+  }
+
+  private persistLandingEnvelope(
+    scopeRef: string,
+    epochId: string,
+    triggerKind: string,
+    envelope: Record<string, unknown>,
+    nowMs: number,
+  ): LandingEnvelopeRow {
+    let envelopeJson = canonicalJson(envelope);
+    if (envelopeJson.length > MAX_LANDING_ENVELOPE_CHARACTERS) {
+      envelopeJson = canonicalJson({
+        schemaVersion: 1,
+        scopeRef,
+        epochId,
+        boundedSummaryOnly: true,
+        originalCharacterCount: envelopeJson.length,
+        originalDigestSha256: sha256(envelopeJson),
+        policy: {
+          authority: "executor_local_operational_landing_evidence_only",
+          rawContentCaptured: false,
+        },
+      });
+    }
+    const digest = sha256(envelopeJson);
+    const existing = this.landingEnvelopeForEpoch(scopeRef, epochId);
+    if (existing?.envelope_digest_sha256 === digest) return existing;
+    if (existing) {
+      this.database.sqlite
+        .prepare(`
+          update execution_turn_landing_envelopes
+             set generation = generation + 1,
+                 trigger_kind = ?, envelope_json = ?,
+                 envelope_digest_sha256 = ?, updated_at_ms = ?
+           where id = ?
+        `)
+        .run(triggerKind, envelopeJson, digest, nowMs, existing.id);
+    } else {
+      this.database.sqlite
+        .prepare(`
+          insert into execution_turn_landing_envelopes (
+            id, scope_ref, epoch_id, generation, trigger_kind,
+            envelope_json, envelope_digest_sha256, created_at_ms, updated_at_ms
+          ) values (?, ?, ?, 1, ?, ?, ?, ?, ?)
+        `)
+        .run(
+          `tle_${randomUUID().replaceAll("-", "")}`,
+          scopeRef,
+          epochId,
+          triggerKind,
+          envelopeJson,
+          digest,
+          nowMs,
+          nowMs,
+        );
+    }
+    this.pruneLandingEnvelopesForScope(scopeRef, nowMs);
+    return this.landingEnvelopeForEpoch(scopeRef, epochId) as LandingEnvelopeRow;
+  }
+
+  private buildLandingProjection(
+    scopeRef: string,
+    nowMs: number,
+    assessment: TurnInstabilityAssessment,
+  ): Record<string, unknown> {
+    const row = this.getHorizon(scopeRef);
+    const envelope = this.latestLandingEnvelopeForScope(scopeRef);
+    const envelopeValue = envelope
+      ? parseOptionalRecordJson(envelope.envelope_json)
+      : undefined;
+    const capsule = assessment.latestCapsule;
+    const semantic = assessment.latestSemantic;
+    const processOrEffectReconciliationRequired =
+      assessment.effectReconciliationRequired
+      || assessment.runningTools.length > 0
+      || assessment.runningProcesses.length > 0;
+    const currentCapsuleForObservedMutation = capsule !== undefined
+      && !assessment.mutationAfterCapsule;
+    let classification = "no_material_landing_envelope";
+    if (processOrEffectReconciliationRequired) {
+      classification = "effect_or_process_reconciliation_required";
+    } else if (
+      row?.sealed_at_ms !== null
+      && row?.sealed_at_ms !== undefined
+      && capsule?.intent === "turn_boundary"
+      && row.sealed_by_capsule_id === capsule.id
+      && semantic?.worktreeState === "clean"
+      && capsuleRecordedCleanGitState(capsule)
+    ) {
+      classification = "clean_turn_boundary_landing";
+    } else if (envelope) {
+      classification = currentCapsuleForObservedMutation
+        ? "automatic_envelope_with_fresh_semantic_capsule"
+        : "automatic_envelope_with_stale_or_missing_semantic_capsule";
+    }
+    const sameMissionContinuationExpected = semantic?.missionRef !== undefined
+      && (
+        capsule?.intent === "turn_boundary"
+        || envelope !== undefined
+      );
+    const capsuleState = capsule === undefined
+      ? "missing"
+      : assessment.mutationAfterCapsule
+        ? "changed_since_capsule"
+        : assessment.capsuleRefreshDebt
+          ? "current_for_observed_mutation_with_refresh_debt"
+          : "current_for_observed_mutation";
+    let recommendedAction = "Continue the current mission normally.";
+    if (classification === "effect_or_process_reconciliation_required") {
+      recommendedAction =
+        "Preserve and reconcile the exact running process or in-flight/unknown effect identity before retry, mutation, publication, or claiming a safe completed effect.";
+    } else if (classification === "clean_turn_boundary_landing") {
+      recommendedAction =
+        "Begin the next assistant turn as the same mission, re-read current canonical/runtime/writer/effect owners, then continue the recorded frontier without restarting research or architecture by default.";
+    } else if (
+      classification === "automatic_envelope_with_fresh_semantic_capsule"
+    ) {
+      recommendedAction =
+        "Use the operational envelope and explicit semantic capsule to resume the same mission after current authority reconciliation; do not replay a terminal or indeterminate effect.";
+    } else if (
+      classification === "automatic_envelope_with_stale_or_missing_semantic_capsule"
+    ) {
+      recommendedAction =
+        "Use the machine envelope only to locate operational state. Reconstruct or refresh the semantic frontier explicitly, rehydrate current owners, and do not infer mission or exact next action from tool events alone.";
+    }
+    return {
+      schemaVersion: 1,
+      classification,
+      sameMissionContinuationExpected,
+      currentEpochId: row?.epoch_id,
+      envelopeEpochRelation: envelope === undefined
+        ? "absent"
+        : envelope.epoch_id === row?.epoch_id
+          ? "current_epoch"
+          : "previous_epoch",
+      semanticCapsuleState: capsuleState,
+      processOrEffectReconciliationRequired,
+      recommendedAction,
+      exactActionRequiresCurrentAuthorityReconciliation: true,
+      operationalEnvelope: envelope
+        ? {
+            envelopeId: envelope.id,
+            epochId: envelope.epoch_id,
+            generation: envelope.generation,
+            triggerKind: envelope.trigger_kind,
+            createdAt: iso(envelope.created_at_ms),
+            updatedAt: iso(envelope.updated_at_ms),
+            digestSha256: envelope.envelope_digest_sha256,
+            evidence: envelopeValue,
+          }
+        : undefined,
+      safeBoundaryForms: [
+        "natural_clean_commit_with_appropriate_validation_and_capsule",
+        "intentional_dirty_state_with_exact_operational_envelope_and_semantic_frontier",
+      ],
+      policy: {
+        authority: "executor_local_turn_resume_projection_only",
+        sameMissionIsGuidanceNotCanonicalTaskAuthority: true,
+        timeAloneInvalidatesSemanticCapsule: false,
+        currentOwnerReadbackRequired: true,
+        toolsBlocked: false,
+        taskCompletionRequired: false,
+        commitRequired: false,
+        qualityReductionAuthorized: false,
+        writerEffectOrPublicationAuthorityGranted: false,
+      },
+      assessedAt: iso(nowMs),
+    };
+  }
+
+  private landingEnvelopeForEpoch(
+    scopeRef: string,
+    epochId: string,
+  ): LandingEnvelopeRow | undefined {
+    return this.database.sqlite
+      .prepare(`
+        select * from execution_turn_landing_envelopes
+         where scope_ref = ? and epoch_id = ?
+      `)
+      .get(scopeRef, epochId) as LandingEnvelopeRow | undefined;
+  }
+
+  private latestLandingEnvelopeForScope(
+    scopeRef: string,
+  ): LandingEnvelopeRow | undefined {
+    return this.database.sqlite
+      .prepare(`
+        select * from execution_turn_landing_envelopes
+         where scope_ref = ?
+         order by updated_at_ms desc, generation desc
+         limit 1
+      `)
+      .get(scopeRef) as LandingEnvelopeRow | undefined;
+  }
+
+  private pruneLandingEnvelopesForScope(scopeRef: string, nowMs: number): void {
+    const cutoff = nowMs - this.config.capsuleRetentionMs;
+    this.database.sqlite
+      .prepare(`
+        delete from execution_turn_landing_envelopes
+         where scope_ref = ? and updated_at_ms < ?
+      `)
+      .run(scopeRef, cutoff);
+    const stale = this.database.sqlite
+      .prepare(`
+        select id from execution_turn_landing_envelopes
+         where scope_ref = ?
+         order by updated_at_ms desc, generation desc
+         limit -1 offset ?
+      `)
+      .all(scopeRef, MAX_LANDING_ENVELOPES_PER_SCOPE) as Array<{ id: string }>;
+    const remove = this.database.sqlite.prepare(
+      "delete from execution_turn_landing_envelopes where id = ?",
+    );
+    for (const entry of stale) remove.run(entry.id);
   }
 
   private getHorizon(scopeRef: string): HorizonRow | undefined {
@@ -1307,6 +2463,24 @@ export class TurnContinuityManager {
          where scope_ref = ?
       `)
       .run(nowMs, capsuleId, scopeRef);
+  }
+
+  private sealHorizon(
+    scopeRef: string,
+    capsuleId: string,
+    nowMs: number,
+    reason: string,
+  ): void {
+    this.database.sqlite
+      .prepare(`
+        update execution_turn_horizons
+           set sealed_at_ms = coalesce(sealed_at_ms, ?),
+               sealed_by_capsule_id = coalesce(sealed_by_capsule_id, ?),
+               sealed_reason = coalesce(sealed_reason, ?),
+               last_activity_at_ms = ?
+         where scope_ref = ?
+      `)
+      .run(nowMs, capsuleId, reason, nowMs, scopeRef);
   }
 
   private normalizeSemantic(input: RecoveryCapsuleInput): RecoverySemanticState {
@@ -1389,6 +2563,9 @@ export class TurnContinuityManager {
       this.database.sqlite
         .prepare("delete from execution_turn_horizons where last_activity_at_ms < ?")
         .run(cutoff);
+      this.database.sqlite
+        .prepare("delete from execution_turn_landing_envelopes where updated_at_ms < ?")
+        .run(cutoff);
     });
     transaction.immediate();
     this.nextPruneAtMs = nowMs + Math.max(
@@ -1438,7 +2615,21 @@ export class TurnContinuityManager {
       estimatedTurnMs: this.config.estimatedTurnMs,
       awarenessAfterMs: this.config.awarenessAfterMs,
       landingAfterMs: this.config.landingAfterMs,
+      urgentAfterMs: this.config.urgentAfterMs,
+      implicitEpochOnFirstNonControlTool: true,
+      turnBoundaryCapsuleSealsEpoch: true,
+      nextNonControlToolStartsFreshEpochAfterSeal: true,
+      instabilityAwareLandingGuidance: true,
+      operationalLandingEnvelopePersisted: true,
+      instabilityWindowMs: this.config.instabilityWindowMs,
+      capsuleRefreshAfterMs: this.config.capsuleRefreshAfterMs,
+      staleRunningToolMs: this.config.staleRunningToolMs,
+      staleRunningProcessMs: this.config.staleRunningProcessMs,
       capsuleAdoptionNoticeOncePerTurn: true,
+      operationalEnvelopeBackgroundRefreshMs:
+        this.operationalRefreshIntervalMs === false
+          ? undefined
+          : this.operationalRefreshIntervalMs,
     };
   }
 
@@ -1454,6 +2645,8 @@ export class TurnContinuityManager {
       currentGitRuntimeAndEffectReadbackRequiredBeforeReliance: true,
       localWorkspaceFreshnessDoesNotImplyCanonicalFreshness: true,
       exactActionRequiresCurrentAuthorityReconciliation: true,
+      operationalLandingEnvelopeIsSeparateMachineEvidence: true,
+      turnBoundaryCapsuleSealsOnlyAssistantTurnEpoch: true,
       suppliedAuthorityRefProvenanceAttestedByDevSpace: false,
       timeOrTtlAloneDeterminesValidity: false,
       retentionMs: this.config.capsuleRetentionMs,
@@ -1484,6 +2677,8 @@ export class TurnContinuityManager {
       localWorkspaceFreshnessDoesNotImplyCanonicalFreshness: true,
       currentAuthorityReadbackRequiredBeforeExactActionReliance: true,
       capsuleAgeIsNotValidityEvidence: true,
+      operationalLandingEnvelopeIsSemanticAuthority: false,
+      sameMissionContinuationIsGuidanceOnly: true,
     };
   }
 }
@@ -1606,6 +2801,18 @@ function parseSemantic(value: string): RecoverySemanticState {
     throw new Error("Stored recovery capsule semantic state is invalid.");
   }
   return parsed as unknown as RecoverySemanticState;
+}
+
+function capsuleRecordedCleanGitState(capsule: CapsuleRow | undefined): boolean {
+  if (!capsule) return false;
+  try {
+    const fingerprint = parseFingerprint(capsule.fingerprint_json);
+    return fingerprint.kind === "git"
+      && fingerprint.complete
+      && fingerprint.dirty === false;
+  } catch {
+    return false;
+  }
 }
 
 function compareFingerprint(

@@ -64,8 +64,13 @@ const DEFAULT_EXECUTION_MAILBOX_TERMINAL_RETENTION_HOURS = 7 * 24;
 const DEFAULT_EXECUTION_MAILBOX_MAX_PENDING_PER_SCOPE = 500;
 const DEFAULT_EXECUTION_MAILBOX_MAX_BODY_CHARACTERS = 12_000;
 const DEFAULT_TURN_HORIZON_MINUTES = 120;
-const DEFAULT_TURN_HORIZON_AWARENESS_MINUTES = 95;
-const DEFAULT_TURN_HORIZON_LANDING_MINUTES = 110;
+const DEFAULT_TURN_HORIZON_AWARENESS_MINUTES = 90;
+const DEFAULT_TURN_HORIZON_LANDING_MINUTES = 100;
+const DEFAULT_TURN_HORIZON_URGENT_MINUTES = 108;
+const DEFAULT_TURN_INSTABILITY_WINDOW_MINUTES = 15;
+const DEFAULT_TURN_CAPSULE_REFRESH_MINUTES = 30;
+const DEFAULT_TURN_STALE_TOOL_MINUTES = 5;
+const DEFAULT_TURN_STALE_PROCESS_MINUTES = 20;
 const DEFAULT_RECOVERY_CAPSULE_RETENTION_HOURS = 30 * 24;
 const DEFAULT_RECOVERY_CAPSULE_MAX_PER_WORKSPACE = 50;
 const DEFAULT_RECOVERY_CAPSULE_MAX_CHARACTERS = 64_000;
@@ -494,14 +499,25 @@ function parseTurnContinuityConfig(
     "DEVSPACE_TURN_HORIZON_LANDING_MINUTES",
     24 * 60,
   );
+  const urgentMinutes = parsePositiveInteger(
+    env.DEVSPACE_TURN_HORIZON_URGENT_MINUTES,
+    DEFAULT_TURN_HORIZON_URGENT_MINUTES,
+    "DEVSPACE_TURN_HORIZON_URGENT_MINUTES",
+    24 * 60,
+  );
   if (awarenessMinutes >= landingMinutes) {
     throw new Error(
       "DEVSPACE_TURN_HORIZON_AWARENESS_MINUTES must be less than DEVSPACE_TURN_HORIZON_LANDING_MINUTES",
     );
   }
-  if (landingMinutes >= estimatedMinutes) {
+  if (landingMinutes >= urgentMinutes) {
     throw new Error(
-      "DEVSPACE_TURN_HORIZON_LANDING_MINUTES must be less than DEVSPACE_TURN_HORIZON_MINUTES",
+      "DEVSPACE_TURN_HORIZON_LANDING_MINUTES must be less than DEVSPACE_TURN_HORIZON_URGENT_MINUTES",
+    );
+  }
+  if (urgentMinutes >= estimatedMinutes) {
+    throw new Error(
+      "DEVSPACE_TURN_HORIZON_URGENT_MINUTES must be less than DEVSPACE_TURN_HORIZON_MINUTES",
     );
   }
   return {
@@ -512,6 +528,31 @@ function parseTurnContinuityConfig(
     estimatedTurnMs: estimatedMinutes * 60 * 1_000,
     awarenessAfterMs: awarenessMinutes * 60 * 1_000,
     landingAfterMs: landingMinutes * 60 * 1_000,
+    urgentAfterMs: urgentMinutes * 60 * 1_000,
+    instabilityWindowMs: parsePositiveInteger(
+      env.DEVSPACE_TURN_INSTABILITY_WINDOW_MINUTES,
+      DEFAULT_TURN_INSTABILITY_WINDOW_MINUTES,
+      "DEVSPACE_TURN_INSTABILITY_WINDOW_MINUTES",
+      24 * 60,
+    ) * 60 * 1_000,
+    capsuleRefreshAfterMs: parsePositiveInteger(
+      env.DEVSPACE_TURN_CAPSULE_REFRESH_MINUTES,
+      DEFAULT_TURN_CAPSULE_REFRESH_MINUTES,
+      "DEVSPACE_TURN_CAPSULE_REFRESH_MINUTES",
+      24 * 60,
+    ) * 60 * 1_000,
+    staleRunningToolMs: parsePositiveInteger(
+      env.DEVSPACE_TURN_STALE_TOOL_MINUTES,
+      DEFAULT_TURN_STALE_TOOL_MINUTES,
+      "DEVSPACE_TURN_STALE_TOOL_MINUTES",
+      24 * 60,
+    ) * 60 * 1_000,
+    staleRunningProcessMs: parsePositiveInteger(
+      env.DEVSPACE_TURN_STALE_PROCESS_MINUTES,
+      DEFAULT_TURN_STALE_PROCESS_MINUTES,
+      "DEVSPACE_TURN_STALE_PROCESS_MINUTES",
+      24 * 60,
+    ) * 60 * 1_000,
     capsuleRetentionMs: parsePositiveInteger(
       env.DEVSPACE_RECOVERY_CAPSULE_RETENTION_HOURS,
       DEFAULT_RECOVERY_CAPSULE_RETENTION_HOURS,

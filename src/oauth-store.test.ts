@@ -53,6 +53,7 @@ async function testDatabaseConfiguration(stateDir: string): Promise<void> {
       { version: 10, name: "recovery-capsule-adoption-nudge" },
       { version: 11, name: "workspace-preservation-refs" },
       { version: 12, name: "conversation-transport-and-wake-coordination" },
+      { version: 13, name: "instability-aware-turn-safe-landing" },
     ]);
   } finally {
     database.close();

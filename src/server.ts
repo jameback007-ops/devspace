@@ -126,6 +126,7 @@ import {
   type RecoveryValidationState,
   type RecoveryWorktreeState,
   type RecoveryWriterState,
+  type TurnContinuityBackendObservation,
   type TurnHorizonBeginReason,
 } from "./turn-continuity.js";
 import {
@@ -516,13 +517,13 @@ function serverInstructions(config: ServerConfig): string {
     ? ""
     : " For a workspace containing the ZES control-kernel marker, use zes_research_cycle_open before material design or mutation, then prepare exact action bindings and obtain a native capability-bound ZES Research Reflex v3 admission with zes_research_cycle_assess. Use zes_research_provider_invoke when external evidence is required: Context7 covers exact upstream documentation; Exa search is the open-world discovery operation; Exa fetch and targeted Web fetch remain known-source lanes and cannot substitute for open-world discovery. Reopen judgment with zes_research_cycle_invalidate when evidence, scope, architecture, dependencies, currentness, owner direction, or failure causality changes. Before commit, use zes_research_cycle_verify_pre_commit; close the episode after the exact commit or terminal no-change/deferred/abandoned outcome. observe mode reports lifecycle drift without blocking; enforce mode holds source mutation, commit preparation, commit, and publication when the exact current lifecycle is absent or stale. Historical v1/v2 receipts may be decoded but cannot create a new admission through this action gate. These executor-local tools verify native receipts but never create semantic, writer, publication, release, activation, runtime, or effect authority.";
   const executionScopeInstruction = config.executionObservability.enabled
-    ? " Use execution_scope_list to discover recent DevSpace execution scopes. When a target explicitly recorded a recovery capsule, the list includes a compact capsule-derived semantic label/frontier hint; it is not a host chat title and absent capsule means unknown mission. Use execution_scope_status for linked workspaces, live processes, explicit semantic recovery state, the observation gap since the last MCP/tool event, and additive read-only stable control-plane projections. Scope inspection also returns the current backend runtime instance and an exact fingerprint of the registered model-facing tool surface. The server cannot see the host's cached tools/list result. A frozen catalog may still consume compatible additive control state through execution_scope_status; refresh or reconnect is needed only when the task genuinely requires a newer top-level tool or changed input schema rather than a compatible stable projection. A no-tool interval does not reveal whether the model is reasoning, queued, generating, or hung; model progress and provider generation remain unobservable between MCP calls. Use execution_scope_audit for bounded metadata-only tool lifecycle. Semantic state is never inferred from filenames or tool events, cross-scope authority freshness remains unverified unless a fixed rightful-owner projection explicitly revalidates it, and a recorded exact action remains historical until current canonical/runtime/writer/effect owners are rehydrated. These views never replace Git, canonical product state, runtime/effect readback, or writer/lease reconciliation, and they do not contain transcripts, prompts, private reasoning, tool outputs, patches, credentials, or raw commands."
+    ? " Use execution_scope_list to discover recent DevSpace execution scopes. When a target explicitly recorded a recovery capsule, the list includes a compact capsule-derived semantic label/frontier hint; it is not a host chat title and absent capsule means unknown mission. Use execution_scope_status for linked workspaces, live processes, explicit semantic recovery state, the observation gap since the last MCP/tool event, the additive turnLanding resume projection, and additive read-only stable control-plane projections. turnLanding joins a bounded persisted machine envelope to the latest explicit semantic capsule and distinguishes a clean turn boundary, a fresh or stale/missing semantic frontier, and process/effect reconciliation requirements without inferring mission from operational events. Scope inspection also returns the current backend runtime instance and an exact fingerprint of the registered model-facing tool surface. The server cannot see the host's cached tools/list result. A frozen catalog may still consume compatible additive control state through execution_scope_status; refresh or reconnect is needed only when the task genuinely requires a newer top-level tool or changed input schema rather than a compatible stable projection. A no-tool interval does not reveal whether the model is reasoning, queued, generating, or hung; model progress and provider generation remain unobservable between MCP calls. Use execution_scope_audit for bounded metadata-only tool lifecycle. Semantic state is never inferred from filenames or tool events, cross-scope authority freshness remains unverified unless a fixed rightful-owner projection explicitly revalidates it, and a recorded exact action remains historical until current canonical/runtime/writer/effect owners are rehydrated. These views never replace Git, canonical product state, runtime/effect readback, or writer/lease reconciliation, and they do not contain transcripts, prompts, private reasoning, tool outputs, patches, credentials, raw commands, or arbitrary paths."
     : "";
   const executionMailboxInstruction = config.executionMailbox.enabled
     ? " Use execution_scope_message_send to leave a durable message for another known scope, reusing one idempotencyKey for retries. Acceptance means stored, not observed. When a tool result reports pending mail, call execution_scope_message_inbox before opening a new major frontier, then record acknowledged or acted state with execution_scope_message_receipt. Use execution_scope_message_status to inspect a message you sent or received. The mailbox is executor-local coordination, not task, decision, effect, writer, or canonical-memory authority, and it cannot wake or inject text directly into an inactive WebChat transcript."
     : "";
   const turnContinuityInstruction = config.turnContinuity.enabled
-    ? " When the host supplies no exact assistant-turn identity, call turn_horizon_begin once near the first tool call of each assistant turn with a new idempotencyKey. The horizon is advisory only: never rush task completion, reduce validation, force a commit, abandon dynamic replanning, or stop because of elapsed time. At material transitions and before ending a long turn, use recovery_capsule_record to persist the current causal frontier, exact next action, validation/effect safety, do-not-repeat constraints, and exact authorityStateRefs from current rightful-owner readback, then read it back with recovery_capsule_status before ending the turn. A capsule may describe an intentional dirty worktree and never claims task completion or canonical authority. On resumption, local workspace freshness is insufficient: rehydrate current canonical Git/main, task, decision, writer, runtime, and effect owners, then pass exact currentAuthorityStateRefs to recovery_capsule_status. Stale Git or changed authority state requires reconciliation and replanning, not blind replay."
+    ? " Turn continuity is continuous-work, bounded-turn guidance only. When the host supplies no exact assistant-turn identity, the first non-control tool starts an implicit epoch automatically; use turn_horizon_begin only for an explicit or recovered boundary. Nominal awareness, landing, urgent, and estimated-horizon phases never block tools, require task completion, reduce scope, weaken validation, force a commit, or suppress dynamic replanning. Sanitized tool/process/backend lifecycle evidence also classifies normal, degraded, unstable, or critical recovery risk: degraded asks for a rolling capsule at the next material transition; unstable asks to finish the coherent slice and seek the nearest landing; critical asks not to begin a new mutation/effect while preserving and reconciling the exact running process or effect identity. A bounded machine operational envelope is persisted when timing or instability becomes material, but it has no semantic, task, writer, effect, or publication authority. At a natural safe cut, use recovery_capsule_record to persist the explicit mission/frontier, exact next action, validation/effect safety, do-not-repeat constraints, and current authorityStateRefs. A turn_boundary capsule seals only the current assistant-turn epoch; the next non-control tool starts a fresh epoch and should continue the same mission after current owner reconciliation rather than restart research or architecture by default. Safe boundaries may be a natural clean commit with appropriate validation or an intentional dirty state with an exact operational envelope and semantic frontier. An in-flight or unknown effect is reconcile-before-retry, never a completed safe effect. On resumption, local workspace freshness is insufficient: rehydrate current canonical Git/main, task, decision, writer, runtime, and effect owners, then pass exact currentAuthorityStateRefs to recovery_capsule_status."
     : "";
   const localAgentInstruction = config.subagents
     ? " Use local_agent_session_list and local_agent_session_status to discover DevSpace-managed provider sessions. Provider availability is constrained by the configured billing policy; do not bypass an unavailable provider by supplying API credentials unless the Owner explicitly enabled payg_allowed. local_agent_message_send enqueues one idempotent turn for an existing qualified provider session; one worker lease serializes provider turns and acceptance means queued, not completed. Inspect local_agent_turn_status for the result. local_agent_turn_cancel is best-effort for running providers. An ordinary provider failure pauses later queued turns; use local_agent_session_resume after inspecting the failure. Never retry an indeterminate turn without explicit evidence-backed reconciliation through local_agent_turn_resolve because the prior provider effect may be unknown. Local-agent sessions and queues are executor-local coordination, not standing ZES identity, task, decision, writer, effect, or canonical-memory authority."
@@ -1224,7 +1225,7 @@ function registerExecutionScopeTools(
     {
       title: "Inspect DevSpace execution scope",
       description:
-        "Read one DevSpace execution scope by opaque scopeRef, including linked workspaces, live process sessions, the observation gap since the last MCP/tool event, the current backend runtime/tool-surface fingerprint, and—when the target explicitly recorded one—the latest bounded semantic recovery capsule joined with local workspace freshness and later activity. Omit scopeRef for the current host scope. This stable bootstrap route can also carry additive read-only server-owned control-plane capability projections, so a frozen client catalog does not have to discover a newer top-level tool before reading a fixed continuation preflight. When configured, a publication projection may perform bounded fresh observation of its fixed remote authority but never imports a missing Git object through this status route. The server reports which critical tools are currently registered but cannot observe the host's cached tools/list result. Model progress and provider generation are not observable between MCP calls, so status never claims that a silent interval is normal reasoning or a hang. Semantic state is never inferred from filenames or tool events. Raw host session IDs, prompts, private reasoning, credentials, tool outputs, patches, and raw commands are never returned; capsule and control-plane projections remain executor-local observation rather than task, decision, writer, effect, or publication authority.",
+        "Read one DevSpace execution scope by opaque scopeRef, including linked workspaces, live process sessions, the observation gap since the last MCP/tool event, the current backend runtime/tool-surface fingerprint, the persisted turnLanding machine-envelope/resume projection, and—when the target explicitly recorded one—the latest bounded semantic recovery capsule joined with local workspace freshness and later activity. Omit scopeRef for the current host scope. turnLanding distinguishes clean turn boundaries, fresh versus stale/missing semantic capsules, and running process/effect reconciliation without inferring mission from operational events. This stable bootstrap route can also carry additive read-only server-owned control-plane capability projections, so a frozen client catalog does not have to discover a newer top-level tool before reading a fixed continuation preflight. When configured, a publication projection may perform bounded fresh observation of its fixed remote authority but never imports a missing Git object through this status route. The server reports which critical tools are currently registered but cannot observe the host's cached tools/list result. Model progress and provider generation are not observable between MCP calls, so status never claims that a silent interval is normal reasoning or a hang. Semantic state is never inferred from filenames or tool events. Raw host session IDs, prompts, private reasoning, credentials, tool outputs, patches, raw commands, and arbitrary paths are never returned; capsule, landing, and control-plane projections remain executor-local observation rather than task, decision, writer, effect, or publication authority.",
       inputSchema: {
         scopeRef: scopeRefSchema.optional(),
         ...clientCatalogInputSchema,
@@ -1261,6 +1262,9 @@ function registerExecutionScopeTools(
                 : undefined,
             observedScopeTotalEventCount: totalEventCount,
           })
+        : undefined;
+      const turnLanding = targetScopeRef
+        ? turnContinuity.landingProjectionForScope(targetScopeRef)
         : undefined;
       const backendRuntime = runtimeCapabilities.snapshot({
         clientInput: {
@@ -1312,6 +1316,7 @@ function registerExecutionScopeTools(
           ? {}
           : { runtimeRelation: scopeRuntimeRelation(scope, backendRuntime) }),
         ...(semanticRecovery === undefined ? {} : { semanticRecovery }),
+        ...(turnLanding === undefined ? {} : { turnLanding }),
         ...(stableControlPlane === undefined ? {} : { stableControlPlane }),
       });
     },
@@ -1533,7 +1538,7 @@ function registerTurnContinuityTools(
     {
       title: "Begin advisory turn horizon",
       description:
-        "Begin or recover one advisory assistant-turn horizon when the MCP host supplies no exact turn identity. This never creates, limits, completes, or schedules a task; it never blocks tools. Reuse the exact idempotencyKey only when retrying the same begin call.",
+        "Explicitly begin or recover one advisory assistant-turn horizon when the MCP host supplies no exact turn identity. A normal first non-control tool starts an implicit horizon automatically, so this route is optional except for explicit/recovery boundaries. It never creates, limits, completes, or schedules a task and never blocks tools. Reuse the exact idempotencyKey only when retrying the same begin call.",
       inputSchema: {
         idempotencyKey: z
           .string()
@@ -1564,11 +1569,11 @@ function registerTurnContinuityTools(
     {
       title: "Read advisory turn horizon",
       description:
-        "Read the current advisory horizon, estimated or exact remaining time, and whether observed mutations occurred after the latest capsule. This is scheduling guidance only: tools remain available and no task completion, commit, yield, or quality reduction is required.",
+        "Read the current advisory timing phase, sanitized instability assessment, effective guidance, and operational landing/resume projection. The call may idempotently persist or refresh bounded machine landing evidence when timing or instability becomes material, so it is not a pure read. Timing uses normal, checkpoint-awareness, landing-opportunity, and urgent-landing phases; instability uses normal, degraded, unstable, and critical states. This is executor-local guidance only: tools remain available and no task completion, forced commit, effect retry, yield, scope reduction, or quality reduction is authorized.",
       inputSchema: {},
       outputSchema: resultOutputSchema({ data: z.unknown() }),
       ...toolWidgetDescriptorMeta(config, "read"),
-      annotations: CODEX_SESSION_TOOL_ANNOTATIONS,
+      annotations: advisoryWriteAnnotations,
     },
     async (_input, { _meta }) => jsonToolResponse(
       turnContinuity.status(
@@ -1584,7 +1589,7 @@ function registerTurnContinuityTools(
     {
       title: "Record executor recovery capsule",
       description:
-        "Persist one Git-bound executor-local recovery capsule for the exact opened workspace. It records a recoverable causal frontier, not task completion or canonical truth. Include exact authorityStateRefs from current rightful-owner readback when available; local Git freshness alone never proves canonical freshness. Intentional dirty state is valid. Do not include credentials, transcripts, or private model reasoning; reuse the exact idempotencyKey only for the same semantic payload and workspace state.",
+        "Persist one Git-bound executor-local semantic recovery capsule for the exact opened workspace and refresh the separate machine operational landing envelope when material. It records a recoverable causal frontier, not task completion or canonical truth. Intent turn_boundary seals only the current assistant-turn epoch; the next non-control tool starts a fresh epoch and resumes the same mission after current owner reconciliation. Include exact authorityStateRefs from current rightful-owner readback when available; local Git freshness alone never proves canonical freshness. Intentional dirty state is valid and must not be replaced by a forced partial commit. In-flight or unknown effects remain reconcile-before-retry. Do not include credentials, transcripts, or private model reasoning; reuse the exact idempotencyKey only for the same semantic payload and workspace state.",
       inputSchema: {
         workspaceId: z.string().describe(workspaceIdDescription),
         idempotencyKey: z
@@ -1695,7 +1700,7 @@ function registerTurnContinuityTools(
     {
       title: "Read executor recovery capsule",
       description:
-        "Read the latest capsule for the exact opened workspace root across retained execution scopes and compare it with current Git-bound state. Optionally supply exact currentAuthorityStateRefs obtained from fresh rightful-owner readback; without them, canonical freshness remains unverified even when the local workspace matches. A stale capsule is returned for reconciliation but cannot authorize blind replay, mutation, effect retry, or publication.",
+        "Read the latest capsule for the exact opened workspace root across retained execution scopes, compare it with current Git-bound state, and join it to the persisted operational landing projection. Optionally supply exact currentAuthorityStateRefs obtained from fresh rightful-owner readback; without them, canonical freshness remains unverified even when the local workspace matches. A stale capsule or machine envelope is returned for reconciliation but cannot authorize blind replay, mutation, effect retry, or publication.",
       inputSchema: {
         workspaceId: z.string().describe(workspaceIdDescription),
         currentAuthorityStateRefs: listSchema.describe(
@@ -2171,6 +2176,63 @@ function registerCodexProcessTools(
   );
 }
 
+function createTurnContinuityOperationalObservation(
+  processSessions: ProcessSessionManager,
+  runtimeCapabilities: RuntimeCapabilityRegistry,
+): (scopeRef: string) => {
+  runningProcesses: Array<{
+    sessionId: number;
+    workspaceId: string;
+    startedAt: string;
+    lastOutputAt?: string;
+    wallTimeMs: number;
+  }>;
+  backend?: TurnContinuityBackendObservation;
+} {
+  let cachedBackend: TurnContinuityBackendObservation | undefined;
+  return (scopeRef) => {
+    if (!cachedBackend) {
+      const runtime = runtimeCapabilities.snapshot();
+      const backend = isRecord(runtime.backend) ? runtime.backend : undefined;
+      const toolSurface = isRecord(runtime.toolSurface)
+        ? runtime.toolSurface
+        : undefined;
+      const startedAtMs = typeof backend?.startedAt === "string"
+        ? Date.parse(backend.startedAt)
+        : undefined;
+      cachedBackend = {
+        instanceRef: typeof backend?.instanceRef === "string"
+          ? backend.instanceRef
+          : undefined,
+        startedAtMs:
+          startedAtMs !== undefined && Number.isFinite(startedAtMs)
+            ? startedAtMs
+            : undefined,
+        surfaceEpoch: typeof toolSurface?.surfaceEpoch === "string"
+          ? toolSurface.surfaceEpoch
+          : undefined,
+        fingerprintSha256:
+          typeof toolSurface?.fingerprintSha256 === "string"
+            ? toolSurface.fingerprintSha256
+            : undefined,
+      };
+    }
+    return {
+      runningProcesses: processSessions
+        .inspect(undefined, [scopeRef])
+        .filter((process) => process.running)
+        .map((process) => ({
+          sessionId: process.sessionId,
+          workspaceId: process.workspaceId,
+          startedAt: process.startedAt,
+          lastOutputAt: process.lastOutputAt,
+          wallTimeMs: process.wallTimeMs,
+        })),
+      backend: cachedBackend,
+    };
+  };
+}
+
 export function createMcpServer(
   config: ServerConfig,
   workspaces: WorkspaceRegistry,
@@ -2203,12 +2265,18 @@ export function createMcpServer(
     config.executionMailbox,
     config.stateDir,
   );
+  const activeRuntimeCapabilities = runtimeCapabilities
+    ?? new RuntimeCapabilityRegistry(config);
   const activeTurnContinuity = turnContinuity ?? new TurnContinuityManager(
     config.turnContinuity,
     config.stateDir,
+    {
+      operationalObservation: createTurnContinuityOperationalObservation(
+        processSessions,
+        activeRuntimeCapabilities,
+      ),
+    },
   );
-  const activeRuntimeCapabilities = runtimeCapabilities
-    ?? new RuntimeCapabilityRegistry(config);
   const activeResearchCycle = researchCycle
     ?? new ZesResearchCycleManager(config.zesResearchCycle);
   const activeConversationTransportRuntime = config.conversationTransport.enabled
@@ -3837,6 +3905,12 @@ export function createServer(
   const turnContinuity = new TurnContinuityManager(
     config.turnContinuity,
     config.stateDir,
+    {
+      operationalObservation: createTurnContinuityOperationalObservation(
+        processSessions,
+        runtimeCapabilities,
+      ),
+    },
   );
   const localAgentCoordinator = config.subagents
     ? new LocalAgentCoordinator(config, {

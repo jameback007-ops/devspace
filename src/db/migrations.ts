@@ -72,6 +72,11 @@ const migrations: Migration[] = [
     name: "conversation-transport-and-wake-coordination",
     up: migrateConversationTransportAndWakeCoordination,
   },
+  {
+    version: 13,
+    name: "instability-aware-turn-safe-landing",
+    up: migrateInstabilityAwareTurnSafeLanding,
+  },
 ];
 
 export function migrateDatabase(sqlite: Database.Database): void {
@@ -510,9 +515,70 @@ function migrateConversationTransportAndWakeCoordination(
   `).run(EXECUTION_WAKE_COORDINATION_SCHEMA_VERSION, Date.now());
 }
 
+function migrateInstabilityAwareTurnSafeLanding(
+  sqlite: Database.Database,
+): void {
+  addColumnIfMissing(
+    sqlite,
+    "execution_turn_horizons",
+    "urgent_emitted_at_ms",
+    "integer",
+  );
+  addColumnIfMissing(
+    sqlite,
+    "execution_turn_horizons",
+    "instability_notice_state",
+    "text",
+  );
+  addColumnIfMissing(
+    sqlite,
+    "execution_turn_horizons",
+    "instability_notice_emitted_at_ms",
+    "integer",
+  );
+  addColumnIfMissing(
+    sqlite,
+    "execution_turn_horizons",
+    "sealed_at_ms",
+    "integer",
+  );
+  addColumnIfMissing(
+    sqlite,
+    "execution_turn_horizons",
+    "sealed_by_capsule_id",
+    "text",
+  );
+  addColumnIfMissing(
+    sqlite,
+    "execution_turn_horizons",
+    "sealed_reason",
+    "text",
+  );
+  sqlite.exec(`
+    create table if not exists execution_turn_landing_envelopes (
+      id text primary key,
+      scope_ref text not null,
+      epoch_id text not null,
+      generation integer not null,
+      trigger_kind text not null,
+      envelope_json text not null,
+      envelope_digest_sha256 text not null,
+      created_at_ms integer not null,
+      updated_at_ms integer not null,
+      unique (scope_ref, epoch_id)
+    );
+
+    create index if not exists execution_turn_landing_envelopes_scope_time_idx
+      on execution_turn_landing_envelopes(scope_ref, updated_at_ms desc);
+  `);
+}
+
 function addColumnIfMissing(
   sqlite: Database.Database,
-  table: "workspace_sessions" | "local_agent_sessions",
+  table:
+    | "workspace_sessions"
+    | "local_agent_sessions"
+    | "execution_turn_horizons",
   column: string,
   definition: string,
 ): void {

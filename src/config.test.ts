@@ -180,8 +180,13 @@ assert.deepEqual(loadConfig(baseEnv).executionMailbox, {
 assert.deepEqual(loadConfig(baseEnv).turnContinuity, {
   enabled: true,
   estimatedTurnMs: 120 * 60 * 1_000,
-  awarenessAfterMs: 95 * 60 * 1_000,
-  landingAfterMs: 110 * 60 * 1_000,
+  awarenessAfterMs: 90 * 60 * 1_000,
+  landingAfterMs: 100 * 60 * 1_000,
+  urgentAfterMs: 108 * 60 * 1_000,
+  instabilityWindowMs: 15 * 60 * 1_000,
+  capsuleRefreshAfterMs: 30 * 60 * 1_000,
+  staleRunningToolMs: 5 * 60 * 1_000,
+  staleRunningProcessMs: 20 * 60 * 1_000,
   capsuleRetentionMs: 30 * 24 * 60 * 60 * 1_000,
   maxCapsulesPerWorkspace: 50,
   maxCapsuleCharacters: 64_000,
@@ -270,6 +275,11 @@ assert.deepEqual(
     DEVSPACE_TURN_HORIZON_MINUTES: "150",
     DEVSPACE_TURN_HORIZON_AWARENESS_MINUTES: "115",
     DEVSPACE_TURN_HORIZON_LANDING_MINUTES: "135",
+    DEVSPACE_TURN_HORIZON_URGENT_MINUTES: "142",
+    DEVSPACE_TURN_INSTABILITY_WINDOW_MINUTES: "12",
+    DEVSPACE_TURN_CAPSULE_REFRESH_MINUTES: "24",
+    DEVSPACE_TURN_STALE_TOOL_MINUTES: "4",
+    DEVSPACE_TURN_STALE_PROCESS_MINUTES: "18",
     DEVSPACE_RECOVERY_CAPSULE_RETENTION_HOURS: "168",
     DEVSPACE_RECOVERY_CAPSULE_MAX_PER_WORKSPACE: "25",
     DEVSPACE_RECOVERY_CAPSULE_MAX_CHARACTERS: "32000",
@@ -279,6 +289,11 @@ assert.deepEqual(
     estimatedTurnMs: 150 * 60 * 1_000,
     awarenessAfterMs: 115 * 60 * 1_000,
     landingAfterMs: 135 * 60 * 1_000,
+    urgentAfterMs: 142 * 60 * 1_000,
+    instabilityWindowMs: 12 * 60 * 1_000,
+    capsuleRefreshAfterMs: 24 * 60 * 1_000,
+    staleRunningToolMs: 4 * 60 * 1_000,
+    staleRunningProcessMs: 18 * 60 * 1_000,
     capsuleRetentionMs: 168 * 60 * 60 * 1_000,
     maxCapsulesPerWorkspace: 25,
     maxCapsuleCharacters: 32_000,
@@ -339,10 +354,19 @@ assert.throws(
 assert.throws(
   () => loadConfig({
     ...baseEnv,
-    DEVSPACE_TURN_HORIZON_MINUTES: "120",
+    DEVSPACE_TURN_HORIZON_MINUTES: "130",
     DEVSPACE_TURN_HORIZON_LANDING_MINUTES: "120",
+    DEVSPACE_TURN_HORIZON_URGENT_MINUTES: "120",
   }),
-  /LANDING_MINUTES must be less than DEVSPACE_TURN_HORIZON_MINUTES/,
+  /LANDING_MINUTES must be less than DEVSPACE_TURN_HORIZON_URGENT_MINUTES/,
+);
+assert.throws(
+  () => loadConfig({
+    ...baseEnv,
+    DEVSPACE_TURN_HORIZON_MINUTES: "120",
+    DEVSPACE_TURN_HORIZON_URGENT_MINUTES: "120",
+  }),
+  /URGENT_MINUTES must be less than DEVSPACE_TURN_HORIZON_MINUTES/,
 );
 assert.equal(loadConfig({ ...baseEnv, DEVSPACE_ARTIFACTS: "1" }).artifactsEnabled, true);
 assert.equal(

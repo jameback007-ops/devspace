@@ -348,6 +348,11 @@ test("turn continuity is advisory-only and recovery capsules detect later worksp
     tools.tools.find((tool) => tool.name === "turn_horizon_begin")?.description ?? "",
     /never blocks tools/i,
   );
+  assert.equal(
+    tools.tools.find((tool) => tool.name === "turn_horizon_status")
+      ?.annotations?.readOnlyHint,
+    false,
+  );
 
   const begun = await context.client.callTool({
     name: "turn_horizon_begin",
@@ -460,6 +465,69 @@ test("turn continuity is advisory-only and recovery capsules detect later worksp
   assert.equal(staleData.exactActionCandidateAvailable, false);
   assert.ok(
     (staleData.workspaceStaleReasons as string[]).includes("tracked_content_changed"),
+  );
+
+  const boundary = await context.client.callTool({
+    name: "recovery_capsule_record",
+    arguments: {
+      workspaceId,
+      idempotencyKey: "server-capsule-turn-boundary",
+      intent: "turn_boundary",
+      missionRef: "TEST-MISSION",
+      authorityOwnerRefs: ["owner:git-main"],
+      authorityStateRefs: ["git-main:initial"],
+      currentFrontier: "continue the same test mission next turn",
+      currentCausalSlice: "preserve the intentional dirty state",
+      established: ["workspace change is intentional"],
+      validationState: "partial",
+      validationRefs: ["validation:focused:partial"],
+      worktreeState: "intentional_dirty",
+      effectState: "none",
+      writerState: "none",
+      retryPolicy: "normal",
+      safeToMutate: true,
+      safeToPublish: false,
+      exactNextAction: "continue the same source slice",
+      doNotRepeat: [],
+      unresolved: ["complete focused validation"],
+      checkpointRefs: ["git:HEAD"],
+    },
+    _meta: { "openai/session": session },
+  } as Parameters<Client["callTool"]>[0]);
+  assert.equal(structuredData(boundary).recorded, true);
+  const boundaryLanding = structuredData(boundary).landing as Record<string, unknown>;
+  assert.equal(boundaryLanding.sameMissionContinuationExpected, true);
+  assert.equal(
+    boundaryLanding.classification,
+    "automatic_envelope_with_fresh_semantic_capsule",
+  );
+
+  const horizonStatus = await context.client.callTool({
+    name: "turn_horizon_status",
+    arguments: {},
+    _meta: { "openai/session": session },
+  } as Parameters<Client["callTool"]>[0]);
+  const horizonData = structuredData(horizonStatus).status as Record<string, unknown>;
+  assert.equal(horizonData.sealed, true);
+  assert.equal(horizonData.toolsBlocked, false);
+  assert.ok(horizonData.instability);
+  assert.ok(horizonData.landing);
+
+  const scopeStatus = await context.client.callTool({
+    name: "execution_scope_status",
+    arguments: {},
+    _meta: { "openai/session": session },
+  } as Parameters<Client["callTool"]>[0]);
+  const scopeTurnLanding = structuredData(scopeStatus).turnLanding as Record<string, unknown>;
+  assert.equal(scopeTurnLanding.sameMissionContinuationExpected, true);
+  assert.equal(
+    scopeTurnLanding.classification,
+    "automatic_envelope_with_fresh_semantic_capsule",
+  );
+  assert.equal(
+    (scopeTurnLanding.policy as Record<string, unknown>)
+      .writerEffectOrPublicationAuthorityGranted,
+    false,
   );
 });
 

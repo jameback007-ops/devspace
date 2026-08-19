@@ -30,7 +30,15 @@ mandatory `AGENTS.md`; it does not replace it.
   project it read-only, but it is not evidence that executor capability is
   absent and inspection alone must not create durable audit state.
 - **Turn horizon** — advisory assistant-turn timing derived from exact host
-  metadata or one explicit begin call. It never blocks tools or limits a task.
+  metadata, an explicit begin call, or the first non-control tool in an
+  implicit epoch. It never blocks tools or limits a task.
+- **Turn instability assessment** — a bounded classification of sanitized tool,
+  process, capsule, effect, and backend lifecycle evidence as normal, degraded,
+  unstable, or critical. It is guidance, not hang detection or authority.
+- **Operational landing envelope** — a persisted bounded machine envelope for
+  one scope/turn epoch containing safe lifecycle IDs, timing, checkpoint,
+  backend, and effect-disposition facts. It excludes semantic inference,
+  prompts, output, commands, paths, credentials, and private reasoning.
 - **Recovery capsule** — a bounded semantic executor handoff bound to current
   Git state. It is not canonical task, decision, writer, effect, publication,
   or memory authority.

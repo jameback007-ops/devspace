@@ -203,12 +203,43 @@ export const executionTurnHorizons = sqliteTable(
     lastCheckpointId: text("last_checkpoint_id"),
     awarenessEmittedAtMs: integer("awareness_emitted_at_ms"),
     landingEmittedAtMs: integer("landing_emitted_at_ms"),
+    urgentEmittedAtMs: integer("urgent_emitted_at_ms"),
+    instabilityNoticeState: text("instability_notice_state"),
+    instabilityNoticeEmittedAtMs: integer("instability_notice_emitted_at_ms"),
     staleCheckpointNoticeEmittedAtMs: integer("stale_checkpoint_notice_emitted_at_ms"),
     capsuleNudgeEmittedAtMs: integer("capsule_nudge_emitted_at_ms"),
+    sealedAtMs: integer("sealed_at_ms"),
+    sealedByCapsuleId: text("sealed_by_capsule_id"),
+    sealedReason: text("sealed_reason"),
   },
   (table) => [
     index("execution_turn_horizons_activity_idx").on(table.lastActivityAtMs),
     uniqueIndex("execution_turn_horizons_epoch_idx").on(table.epochId),
+  ],
+);
+
+export const executionTurnLandingEnvelopes = sqliteTable(
+  "execution_turn_landing_envelopes",
+  {
+    id: text("id").primaryKey(),
+    scopeRef: text("scope_ref").notNull(),
+    epochId: text("epoch_id").notNull(),
+    generation: integer("generation").notNull(),
+    triggerKind: text("trigger_kind").notNull(),
+    envelopeJson: text("envelope_json").notNull(),
+    envelopeDigestSha256: text("envelope_digest_sha256").notNull(),
+    createdAtMs: integer("created_at_ms").notNull(),
+    updatedAtMs: integer("updated_at_ms").notNull(),
+  },
+  (table) => [
+    uniqueIndex("execution_turn_landing_envelopes_epoch_idx").on(
+      table.scopeRef,
+      table.epochId,
+    ),
+    index("execution_turn_landing_envelopes_scope_time_idx").on(
+      table.scopeRef,
+      table.updatedAtMs,
+    ),
   ],
 );
 

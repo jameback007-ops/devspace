@@ -138,7 +138,7 @@ DevSpace gives ChatGPT tools to:
 - run shell commands for tests, builds, git, and package scripts
 - use isolated Git worktrees for parallel coding sessions
 - keep every new managed worktree on a durable executor-owned preservation branch, inventory publication debt with task/scope hints, and block close/GC until candidate finalizers are satisfied
-- receive advisory long-turn notices and persist Git-bound recovery capsules without blocking tools or forcing task completion
+- receive timing- and instability-aware turn-safe-landing guidance, persist a bounded machine operational envelope, and record Git-bound semantic recovery capsules without blocking tools or forcing task completion
 - inspect independent host execution scopes without merging their conversations
 - send durable target-bound messages between execution scopes with receipts
 - optionally bind material ZES mutations to capability-bound Research Reflex
