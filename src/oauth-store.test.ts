@@ -54,7 +54,25 @@ async function testDatabaseConfiguration(stateDir: string): Promise<void> {
       { version: 11, name: "workspace-preservation-refs" },
       { version: 12, name: "conversation-transport-and-wake-coordination" },
       { version: 13, name: "instability-aware-turn-safe-landing" },
+      { version: 14, name: "host-turn-lifecycle-observability" },
     ]);
+    assert.deepEqual(
+      database.sqlite
+        .prepare(`
+          select name from sqlite_master
+           where type = 'table' and name like 'host_turn_%'
+           order by name
+        `)
+        .pluck()
+        .all(),
+      [
+        "host_turn_commands",
+        "host_turn_events",
+        "host_turn_lifecycle_schema_versions",
+        "host_turn_records",
+        "host_turn_sessions",
+      ],
+    );
   } finally {
     database.close();
   }

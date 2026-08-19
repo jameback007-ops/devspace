@@ -4,6 +4,10 @@ import {
   EXECUTION_WAKE_COORDINATION_SCHEMA_VERSION,
 } from "../execution-wake-coordination-schema.js";
 import { CONVERSATION_TRANSPORT_SCHEMA_SQL } from "../conversation-transport-schema.js";
+import {
+  HOST_TURN_LIFECYCLE_SCHEMA_SQL,
+  HOST_TURN_LIFECYCLE_SCHEMA_VERSION,
+} from "../host-turn-lifecycle-schema.js";
 
 interface Migration {
   version: number;
@@ -76,6 +80,11 @@ const migrations: Migration[] = [
     version: 13,
     name: "instability-aware-turn-safe-landing",
     up: migrateInstabilityAwareTurnSafeLanding,
+  },
+  {
+    version: 14,
+    name: "host-turn-lifecycle-observability",
+    up: migrateHostTurnLifecycleObservability,
   },
 ];
 
@@ -571,6 +580,17 @@ function migrateInstabilityAwareTurnSafeLanding(
     create index if not exists execution_turn_landing_envelopes_scope_time_idx
       on execution_turn_landing_envelopes(scope_ref, updated_at_ms desc);
   `);
+}
+
+function migrateHostTurnLifecycleObservability(
+  sqlite: Database.Database,
+): void {
+  sqlite.exec(HOST_TURN_LIFECYCLE_SCHEMA_SQL);
+  sqlite.prepare(`
+    insert into host_turn_lifecycle_schema_versions(version, installed_at_ms)
+    values (?, ?)
+    on conflict(version) do nothing
+  `).run(HOST_TURN_LIFECYCLE_SCHEMA_VERSION, Date.now());
 }
 
 function addColumnIfMissing(

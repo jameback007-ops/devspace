@@ -20,8 +20,9 @@ SPEC.loader.exec_module(bridge_module)
 
 
 class FakeRpc:
-    def __init__(self, thread_id: str = "thread-1") -> None:
+    def __init__(self, thread_id: str = "thread-1", lifecycle: str = "idle") -> None:
         self.thread_id = thread_id
+        self.lifecycle = lifecycle
 
     def __enter__(self) -> "FakeRpc":
         return self
@@ -38,7 +39,7 @@ class FakeRpc:
             return {
                 "thread": {
                     "id": self.thread_id,
-                    "status": {"type": "idle"},
+                    "status": {"type": self.lifecycle},
                     "canAcceptDirectInput": True,
                 }
             }
@@ -152,6 +153,52 @@ class ConversationTransportBridgeTests(unittest.TestCase):
         bridge = make_bridge(target)
         with self.assertRaisesRegex(bridge_module.BridgeError, "not configured"):
             bridge.target("thread-canary")
+
+    def test_bridge_effect_lock_rejects_an_active_host_turn(self) -> None:
+        target = {
+            "targetAlias": "codex-active",
+            "targetKind": "codex_thread",
+            "bindingGeneration": 1,
+            "native": {"threadId": "thread-active"},
+        }
+        bridge = make_bridge(target)
+        bridge.config["effectsEnabled"] = True
+        bridge.rpc = lambda: FakeRpc("thread-active", "active")
+        status = bridge.status("codex-active")
+        selected = status["candidates"][0]
+        route = bridge_module.route_digest(
+            target_alias=status["targetAlias"],
+            target_kind=status["targetKind"],
+            target_ref_digest=status["targetRefDigestSha256"],
+            binding_ref=status["bindingRef"],
+            binding_generation=status["bindingGeneration"],
+            transport=selected,
+            evidence_digest=status["evidenceDigestSha256"],
+        )
+        prompt = "continue exact pending work"
+        receipt = bridge.deliver({
+            "targetAlias": status["targetAlias"],
+            "targetRefDigestSha256": status["targetRefDigestSha256"],
+            "bindingRef": status["bindingRef"],
+            "bindingGeneration": status["bindingGeneration"],
+            "permitRef": "permit:active-host-turn",
+            "transportId": selected["transportId"],
+            "transportKind": selected["kind"],
+            "routeDigestSha256": route,
+            "messageId": "message:active-host-turn",
+            "prompt": prompt,
+            "promptDigestSha256": bridge_module.sha256(prompt),
+        })
+        self.assertEqual(receipt["state"], "no_effect")
+        self.assertEqual(receipt["failureCode"], "HOST_TURN_NOT_WAKE_ELIGIBLE")
+        self.assertEqual(
+            bridge_module.wake_eligible_session_lifecycle("responsive_idle"),
+            True,
+        )
+        self.assertEqual(
+            bridge_module.wake_eligible_session_lifecycle("not_observed"),
+            False,
+        )
 
     def test_unix_socket_protocol_is_line_bounded_and_peer_checked(self) -> None:
         with tempfile.TemporaryDirectory(prefix="zes-bridge-socket-") as root:

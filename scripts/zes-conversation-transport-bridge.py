@@ -36,6 +36,25 @@ MAX_PROMPT_CHARACTERS = 12_000
 SHA256_PATTERN = re.compile(r"^[a-f0-9]{64}$")
 ALIAS_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$")
 REF_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,999}$")
+WAKE_ELIGIBLE_LIFECYCLES = {
+    "idle",
+    "responsiveidle",
+    "awaitinginput",
+    "ready",
+    "completed",
+    "succeeded",
+    "success",
+    "done",
+    "taskcomplete",
+    "failed",
+    "error",
+    "systemerror",
+    "terminalerror",
+    "cancelled",
+    "canceled",
+    "interrupted",
+    "aborted",
+}
 
 AUTHORITY = {
     "authority": "bounded_privileged_conversation_transport_bridge",
@@ -79,6 +98,13 @@ def sha256(value: str | bytes) -> str:
 
 def digest_ref(prefix: str, *values: str) -> str:
     return f"{prefix}:{sha256(canonical_json(list(values)))}"
+
+
+def wake_eligible_session_lifecycle(value: Any) -> bool:
+    if not isinstance(value, str):
+        return False
+    normalized = re.sub(r"[^a-z0-9]+", "", value.strip().lower())
+    return normalized in WAKE_ELIGIBLE_LIFECYCLES
 
 
 def require_string(
@@ -620,6 +646,8 @@ class Bridge:
                 )
                 if selected is None or selected["kind"] != normalized["transportKind"]:
                     return self._no_effect_receipt(target, normalized, "TRANSPORT_NOT_CURRENTLY_ATTESTED")
+                if not wake_eligible_session_lifecycle(selected.get("sessionLifecycle")):
+                    return self._no_effect_receipt(target, normalized, "HOST_TURN_NOT_WAKE_ELIGIBLE")
                 expected_route = route_digest(
                     target_alias=target["targetAlias"],
                     target_kind=target["targetKind"],

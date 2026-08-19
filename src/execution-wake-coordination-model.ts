@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import type { HostTurnWakeGateBinding } from "./host-turn-lifecycle-model.js";
 
 export const EXECUTION_WAKE_COORDINATION_AUTHORITY = {
   authority: "executor_local_wake_coordination_only",
@@ -119,6 +120,7 @@ export interface LowerPlaneWakeReadiness {
   maximumAutomaticRecoveryTier: WakeAutomaticRecoveryTier;
   observationRef: string;
   generationBoundaryRefBefore?: string;
+  hostTurnGate?: HostTurnWakeGateBinding;
   evidenceDigestSha256: string;
   evidenceRefs: string[];
   reasonCodes: string[];
@@ -167,6 +169,7 @@ export interface WakePermit {
   observationRef: string;
   evidenceDigestSha256: string;
   generationBoundaryRefBefore?: string;
+  hostTurnGate: HostTurnWakeGateBinding;
   recoveryTier: "minimal_continuation";
   allowedEffect: "submit_correlated_continuation";
   forbiddenEffects: readonly [
@@ -297,6 +300,18 @@ export interface WakeReconciliationInput {
   verificationRefs: string[];
 }
 
+export interface WakeLowerPlaneReconciliationInput {
+  permit: WakePermit;
+  resolution: "effect_absent" | "effect_verified";
+  interactionReconciliationRef: string;
+  authorityReadbackRef: string;
+  effectReadbackRef: string;
+  promptAdmissionRef?: string;
+  generationBoundaryRefAfter?: string;
+  verificationRefs: string[];
+  observedAt: string;
+}
+
 export interface ExecutionWakeLowerPlanePort {
   assessReadiness(input: {
     targetExecutionScopeRef: string;
@@ -309,6 +324,8 @@ export interface ExecutionWakeLowerPlanePort {
   }): Promise<LowerPlaneWakeReadiness>;
 
   consumeWakePermit(permit: WakePermit): Promise<WakeLowerPlaneDispatchResult>;
+
+  recordWakeReconciliation?(input: WakeLowerPlaneReconciliationInput): void;
 }
 
 export function pendingWorkSemanticDigest(input: {
@@ -397,6 +414,9 @@ export function wakeKey(input: {
   transportId?: string;
   transportKind?: string;
   transportRouteDigestSha256?: string;
+  hostTurnStateDigestSha256?: string;
+  hostTurnGeneration?: number;
+  hostTurnRevision?: number;
   attemptSequence: number;
 }): string {
   return `wky_${sha256(canonicalJson(input)).slice(0, 32)}`;
@@ -430,6 +450,38 @@ export function validateLowerPlaneReadiness(
     reasons.add("BINDING_GENERATION_INVALID");
   }
   if (!readiness.observationRef) reasons.add("OBSERVATION_REF_MISSING");
+  const hostTurnGate = readiness.hostTurnGate;
+  if (!hostTurnGate) {
+    reasons.add("HOST_TURN_WAKE_GATE_MISSING");
+  } else {
+    if (hostTurnGate.targetExecutionScopeRef !== pendingWork.targetExecutionScopeRef) {
+      reasons.add("HOST_TURN_GATE_TARGET_SCOPE_MISMATCH");
+    }
+    if (hostTurnGate.missionRef !== pendingWork.missionRef) {
+      reasons.add("HOST_TURN_GATE_MISSION_MISMATCH");
+    }
+    if (hostTurnGate.conversationBindingRef !== readiness.sessionUiBindingRef
+      || hostTurnGate.conversationBindingGeneration !== readiness.bindingGeneration) {
+      reasons.add("HOST_TURN_GATE_BINDING_MISMATCH");
+    }
+    if (!/^[a-f0-9]{64}$/.test(hostTurnGate.stateDigestSha256)) {
+      reasons.add("HOST_TURN_GATE_STATE_DIGEST_INVALID");
+    }
+    if (!/^[a-f0-9]{64}$/.test(hostTurnGate.evidenceDigestSha256)) {
+      reasons.add("HOST_TURN_GATE_EVIDENCE_DIGEST_INVALID");
+    }
+    if (hostTurnGate.evidenceRefs.length === 0
+      || hostTurnGate.authorityReadbackRefs.length === 0) {
+      reasons.add("HOST_TURN_GATE_EVIDENCE_MISSING");
+    }
+    if (readiness.generationBoundaryRefBefore
+      !== hostTurnGate.generationBoundaryRef) {
+      reasons.add("HOST_TURN_GATE_GENERATION_BOUNDARY_MISMATCH");
+    }
+    if (Date.parse(hostTurnGate.expiresAt) <= nowMs) {
+      reasons.add("HOST_TURN_GATE_EXPIRED");
+    }
+  }
   if (!/^[a-f0-9]{64}$/.test(readiness.evidenceDigestSha256)) {
     reasons.add("READINESS_EVIDENCE_DIGEST_INVALID");
   }

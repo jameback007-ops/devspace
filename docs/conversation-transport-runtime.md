@@ -8,8 +8,11 @@ durable pending work
   -> exact scope/mission target binding
   -> bridge-attested transport observations
   -> deterministic native_rpc > local_agent > web_ui route
+  -> explicit fresh host-turn wake gate
   -> transport-bound wake permit
+  -> post-lease route and host-turn readback
   -> persist-before-dispatch delivery
+  -> new host-turn generation or durable indeterminate state
   -> exact admission reconciliation
   -> fallback only after no-effect proof
 ```
@@ -69,9 +72,14 @@ delivery call.
 
 - executor-local scope/mission target bindings;
 - provider-neutral route selection;
+- durable provider-neutral host-turn lifecycle and evidence expiry;
 - wake scheduling and attempt throttles;
-- permit issuance with `transportId`, `transportKind`, and route digest;
+- permit issuance with transport route plus an exact host-turn gate snapshot;
+- shared transactional reconciliation across scheduler and lifecycle state;
 - MCP tools for bind, status, pending work, assess, execute, and reconcile.
+
+The detailed state model, evidence rules, and failure semantics are documented
+in [`host-turn-lifecycle.md`](./host-turn-lifecycle.md).
 
 ## Root-owned bridge configuration
 
@@ -114,16 +122,19 @@ The safe rollout is:
 1. deploy both services with both gates off;
 2. validate bridge config and Unix peer authorization;
 3. verify Codex native status is `available/exact`;
-4. verify Chat/Work reports the typed native limitation;
-5. verify no Web UI route is eligible without an exact binding;
-6. create a disposable Codex thread and perform one native canary;
-7. prove one `clientUserMessageId` admission and one terminal attempt;
-8. enable DevSpace effects only after the bridge canary passes;
-9. enable Web UI effects separately after a reversible observation/staging
+4. verify explicit host-turn state is wake-eligible and fresh;
+5. verify Chat/Work reports the typed native limitation;
+6. verify no Web UI route is eligible without an exact binding;
+7. create a disposable Codex thread and perform one native canary;
+8. prove one `clientUserMessageId` admission and one new turn boundary;
+9. enable DevSpace effects only after the bridge canary passes;
+10. enable Web UI effects separately after a reversible observation/staging
    canary proves the current selector contract.
 
 An attempt in `accepted`, `sending`, or `indeterminate` state blocks retry and
 cross-transport fallback. Reconcile it first. Silence is never effect evidence.
+Likewise, `started`, `running`, `disconnected`, or `indeterminate` host-turn
+state blocks a wake even when no MCP tool or process is currently visible.
 
 ## Systemd hardening
 

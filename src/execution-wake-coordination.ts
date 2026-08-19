@@ -714,6 +714,18 @@ export class ExecutionWakeCoordinationManager {
         }
       }
 
+      this.lowerPlane.recordWakeReconciliation?.({
+        permit: current.permit,
+        resolution: normalized.resolution,
+        interactionReconciliationRef: normalized.interactionReconciliationRef,
+        authorityReadbackRef: normalized.authorityReadbackRef,
+        effectReadbackRef: normalized.effectReadbackRef,
+        promptAdmissionRef: normalized.promptAdmissionRef,
+        generationBoundaryRefAfter: normalized.generationBoundaryRefAfter,
+        verificationRefs: normalized.verificationRefs,
+        observedAt: iso(nowMs),
+      });
+
       const nextState: WakeAttemptState = normalized.resolution === "effect_verified"
         ? "reconciled_effect_verified"
         : "reconciled_effect_absent";
@@ -796,7 +808,6 @@ export class ExecutionWakeCoordinationManager {
     const target = requireScopeRef(targetExecutionScopeRef);
     const mission = this.reference(missionRef, "missionRef");
     const nowMs = this.now();
-    this.maybeCleanup(nowMs);
     const currentPending = this.store.currentPendingWork(target, mission);
     const pending = currentPending ? materializePendingWork(currentPending, nowMs) : undefined;
     const throttle = this.currentThrottle(target, mission, nowMs);
@@ -1170,8 +1181,14 @@ export class ExecutionWakeCoordinationManager {
         transportId: readiness.transportId,
         transportKind: readiness.transportKind,
         transportRouteDigestSha256: readiness.transportRouteDigestSha256,
+        hostTurnStateDigestSha256: readiness.hostTurnGate?.stateDigestSha256,
+        hostTurnGeneration: readiness.hostTurnGate?.hostTurnGeneration,
+        hostTurnRevision: readiness.hostTurnGate?.hostTurnRevision,
         attemptSequence,
       });
+      if (!readiness.hostTurnGate) {
+        throw new Error("Cannot prepare a wake permit without a host-turn wake gate.");
+      }
       const permit = {
         schemaVersion: 1 as const,
         permitRef,
@@ -1193,6 +1210,7 @@ export class ExecutionWakeCoordinationManager {
         observationRef: readiness.observationRef,
         evidenceDigestSha256: readiness.evidenceDigestSha256,
         generationBoundaryRefBefore: readiness.generationBoundaryRefBefore,
+        hostTurnGate: readiness.hostTurnGate,
         recoveryTier: "minimal_continuation" as const,
         allowedEffect: "submit_correlated_continuation" as const,
         forbiddenEffects: [

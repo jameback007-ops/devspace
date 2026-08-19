@@ -3,6 +3,10 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import * as z from "zod/v4";
 import type { ConversationTransportConfig, ServerConfig } from "./config.js";
 import {
+  openDatabase,
+  type DatabaseHandle,
+} from "./db/client.js";
+import {
   ConversationTransportBridgeClient,
   type ConversationTransportBridgePort,
 } from "./conversation-transport-bridge-client.js";
@@ -13,6 +17,11 @@ import {
   ExecutionWakeCoordinationManager,
   type ExecutionWakeCoordinationConfig,
 } from "./execution-wake-coordination.js";
+import {
+  DEFAULT_HOST_TURN_LIFECYCLE_CONFIG,
+  HostTurnLifecycleManager,
+  type HostTurnLifecycleConfig,
+} from "./host-turn-lifecycle.js";
 import type { ExecutionScopeIdentity } from "./request-meta.js";
 
 type AppToolRegistrar = typeof registerAppToolType;
@@ -49,18 +58,25 @@ export const conversationTransportToolNames = {
 } as const;
 
 export interface ConversationTransportRuntimeOptions {
+  database?: DatabaseHandle;
   bridge?: ConversationTransportBridgePort;
   bindings?: ConversationTargetBindingStore;
+  hostTurnConfig?: HostTurnLifecycleConfig;
+  hostTurnManager?: HostTurnLifecycleManager;
   wakeConfig?: ExecutionWakeCoordinationConfig;
   wakeManager?: ExecutionWakeCoordinationManager;
 }
 
 export class ConversationTransportRuntime {
+  readonly database: DatabaseHandle;
   readonly bridge: ConversationTransportBridgePort;
   readonly bindings: ConversationTargetBindingStore;
+  readonly hostTurns: HostTurnLifecycleManager;
   readonly lowerPlane: ConversationWakeLowerPlane;
   readonly wakeManager: ExecutionWakeCoordinationManager;
+  private readonly ownsDatabase: boolean;
   private readonly ownsBindings: boolean;
+  private readonly ownsHostTurns: boolean;
   private readonly ownsWakeManager: boolean;
   private closed = false;
 
@@ -69,18 +85,29 @@ export class ConversationTransportRuntime {
     stateDir: string,
     options: ConversationTransportRuntimeOptions = {},
   ) {
+    this.database = options.database ?? openDatabase(stateDir);
+    this.ownsDatabase = options.database === undefined;
     this.bridge = options.bridge ?? new ConversationTransportBridgeClient(config);
-    this.bindings = options.bindings ?? new ConversationTargetBindingStore(stateDir);
+    this.bindings = options.bindings
+      ?? new ConversationTargetBindingStore(stateDir, this.database);
     this.ownsBindings = options.bindings === undefined;
+    this.hostTurns = options.hostTurnManager ?? new HostTurnLifecycleManager(
+      options.hostTurnConfig ?? DEFAULT_HOST_TURN_LIFECYCLE_CONFIG,
+      stateDir,
+      { database: this.database },
+    );
+    this.ownsHostTurns = options.hostTurnManager === undefined;
     this.lowerPlane = new ConversationWakeLowerPlane(
       config,
       this.bindings,
       this.bridge,
+      this.hostTurns,
     );
     this.wakeManager = options.wakeManager ?? new ExecutionWakeCoordinationManager(
       options.wakeConfig ?? DEFAULT_EXECUTION_WAKE_COORDINATION_CONFIG,
       stateDir,
       this.lowerPlane,
+      { database: this.database },
     );
     this.ownsWakeManager = options.wakeManager === undefined;
   }
@@ -89,7 +116,9 @@ export class ConversationTransportRuntime {
     if (this.closed) return;
     this.closed = true;
     if (this.ownsWakeManager) this.wakeManager.close();
+    if (this.ownsHostTurns) this.hostTurns.close();
     if (this.ownsBindings) this.bindings.close();
+    if (this.ownsDatabase) this.database.close();
   }
 
   async bind(input: {
@@ -111,6 +140,53 @@ export class ConversationTransportRuntime {
       ],
     });
     return { binding, status };
+  }
+
+  async status(input: {
+    targetExecutionScopeRef: string;
+    missionRef: string;
+  }) {
+    const assessment = await this.lowerPlane.inspect(input);
+    const binding = this.bindings.get(
+      input.targetExecutionScopeRef,
+      input.missionRef,
+    );
+    return {
+      ...assessment,
+      hostTurnLifecycle: this.hostTurns.status(
+        input.targetExecutionScopeRef,
+        input.missionRef,
+        binding?.bindingRef,
+        binding?.bindingGeneration,
+      ),
+    };
+  }
+
+  wakeStatus(
+    identity: ExecutionScopeIdentity | undefined,
+    input: {
+      targetExecutionScopeRef: string;
+      missionRef: string;
+    },
+  ) {
+    const coordination = this.wakeManager.status(
+      identity,
+      input.targetExecutionScopeRef,
+      input.missionRef,
+    );
+    const binding = this.bindings.get(
+      input.targetExecutionScopeRef,
+      input.missionRef,
+    );
+    return {
+      ...coordination,
+      hostTurnLifecycle: this.hostTurns.status(
+        input.targetExecutionScopeRef,
+        input.missionRef,
+        binding?.bindingRef,
+        binding?.bindingGeneration,
+      ),
+    };
   }
 }
 
@@ -146,7 +222,7 @@ export function registerConversationTransportTools(
     {
       title: "Inspect direct-first conversation transport routing",
       description:
-        "Read the current fixed conversation binding, bridge-attested transport candidates, deterministic route selection, and upstream limitation codes. This is read-only and does not deliver a prompt.",
+        "Read the current fixed conversation binding, bridge-attested transport candidates, deterministic route selection, upstream limitation codes, and durable provider-neutral host-turn lifecycle evidence. This is read-only and does not deliver a prompt.",
       inputSchema: {
         targetExecutionScopeRef: z.string().regex(/^[a-f0-9]{16}$/),
         missionRef: z.string().min(1).max(2_000),
@@ -155,7 +231,7 @@ export function registerConversationTransportTools(
       _meta: {},
       annotations: READ_ONLY_ANNOTATIONS,
     },
-    async (input) => jsonResponse(await runtime.lowerPlane.assess(input)),
+    async (input) => jsonResponse(await runtime.status(input)),
   );
 
   registerTool(
@@ -196,7 +272,7 @@ export function registerConversationTransportTools(
     {
       title: "Inspect wake coordination status",
       description:
-        "Read pending work, attempts, throttle, and lease state for one exact scope and mission. This is executor-local observation only.",
+        "Read pending work, attempts, throttle, lease state, and the bound host-turn lifecycle for one exact scope and mission. This is executor-local observation only.",
       inputSchema: {
         targetExecutionScopeRef: z.string().regex(/^[a-f0-9]{16}$/),
         missionRef: z.string().min(1).max(2_000),
@@ -205,10 +281,9 @@ export function registerConversationTransportTools(
       _meta: {},
       annotations: READ_ONLY_ANNOTATIONS,
     },
-    async (input, context) => jsonResponse(runtime.wakeManager.status(
+    async (input, context) => jsonResponse(runtime.wakeStatus(
       identityFromMeta(context._meta),
-      input.targetExecutionScopeRef,
-      input.missionRef,
+      input,
     )),
   );
 
@@ -218,14 +293,14 @@ export function registerConversationTransportTools(
     {
       title: "Assess whether a conversation wake is ready",
       description:
-        "Read pending work, transport routing, binding freshness, throttles, and lower-plane readiness without delivering a prompt.",
+        "Assess pending work, transport routing, binding freshness, throttles, and lower-plane readiness without delivering a prompt. This records bounded executor-local host-turn evidence and may reconcile stale local attempts, but does not perform an external conversation effect.",
       inputSchema: {
         targetExecutionScopeRef: z.string().regex(/^[a-f0-9]{16}$/),
         missionRef: z.string().min(1).max(2_000),
       },
       outputSchema: resultOutputSchema(),
       _meta: {},
-      annotations: READ_ONLY_ANNOTATIONS,
+      annotations: LOCAL_MUTATION_ANNOTATIONS,
     },
     async (input, context) => jsonResponse(await runtime.wakeManager.assessWake(
       identityFromMeta(context._meta),

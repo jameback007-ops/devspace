@@ -17,6 +17,7 @@ import {
   type WakeLowerPlaneDispatchResult,
   type WakePermit,
 } from "./execution-wake-coordination-model.js";
+import { HOST_TURN_LIFECYCLE_AUTHORITY } from "./host-turn-lifecycle-model.js";
 import { executionScopeIdentity, type ExecutionScopeIdentity } from "./request-meta.js";
 
 class FakeLowerPlane implements ExecutionWakeLowerPlanePort {
@@ -174,12 +175,39 @@ function eligibleReadiness(
   nowMs: number,
   overrides: Partial<LowerPlaneWakeReadiness> = {},
 ): LowerPlaneWakeReadiness {
+  const sessionUiBindingRef = `session-ui-binding:${input.targetExecutionScopeRef}`;
+  const generationBoundaryRefBefore = "generation:before:1";
+  const evidenceRef = `evidence:${input.pendingWorkId}`;
+  const authorityReadbackRef = `authority:${input.pendingWorkId}`;
+  const assessedAt = new Date(nowMs).toISOString();
+  const expiresAt = new Date(nowMs + 5_000).toISOString();
+  const hostTurnGate = {
+    schemaVersion: 1 as const,
+    sessionRef: `host-turn-session:${input.targetExecutionScopeRef}`,
+    sessionRevision: 1,
+    targetExecutionScopeRef: input.targetExecutionScopeRef,
+    missionRef: input.missionRef,
+    conversationBindingRef: sessionUiBindingRef,
+    conversationBindingGeneration: 3,
+    hostTurnRef: `host-turn:${input.pendingWorkId}`,
+    hostTurnGeneration: 1,
+    hostTurnRevision: 1,
+    state: "awaiting_input" as const,
+    stateDigestSha256: sha256(`host-turn-state:${input.pendingWorkId}`),
+    generationBoundaryRef: generationBoundaryRefBefore,
+    evidenceDigestSha256: sha256(`host-turn-evidence:${input.pendingWorkId}`),
+    evidenceRefs: [evidenceRef],
+    authorityReadbackRefs: [authorityReadbackRef],
+    assessedAt,
+    expiresAt,
+    authority: HOST_TURN_LIFECYCLE_AUTHORITY,
+  };
   return {
     schemaVersion: 1,
     assessmentRef: `assessment:${input.pendingWorkId}:${input.pendingWorkGeneration}`,
     targetExecutionScopeRef: input.targetExecutionScopeRef,
     missionRef: input.missionRef,
-    sessionUiBindingRef: `session-ui-binding:${input.targetExecutionScopeRef}`,
+    sessionUiBindingRef,
     bindingGeneration: 3,
     operationalState: "responsive_idle",
     exactTargetVerified: true,
@@ -188,12 +216,13 @@ function eligibleReadiness(
     wakePermitted: true,
     maximumAutomaticRecoveryTier: "minimal_continuation",
     observationRef: `observation:${input.pendingWorkId}`,
-    generationBoundaryRefBefore: "generation:before:1",
+    generationBoundaryRefBefore,
+    hostTurnGate,
     evidenceDigestSha256: sha256(`evidence:${input.pendingWorkId}`),
-    evidenceRefs: [`evidence:${input.pendingWorkId}`],
+    evidenceRefs: [evidenceRef],
     reasonCodes: ["RESPONSIVE_IDLE_PROVEN"],
-    assessedAt: new Date(nowMs).toISOString(),
-    expiresAt: new Date(nowMs + 5_000).toISOString(),
+    assessedAt,
+    expiresAt,
     lowerPlaneAuthorityRef: "interaction-lifecycle:classifier:v1",
     ...overrides,
   };

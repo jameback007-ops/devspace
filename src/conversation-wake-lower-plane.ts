@@ -1,11 +1,20 @@
 import { randomUUID } from "node:crypto";
 import type { ConversationTransportConfig } from "./config.js";
+import {
+  classifyConversationHostTurnLifecycle,
+  conversationHostTurnGenerationBoundary,
+  observeConversationHostTurn,
+} from "./conversation-host-turn-lifecycle-adapter.js";
 import type { ConversationTransportBridgePort } from "./conversation-transport-bridge-client.js";
 import {
   conversationRouteDigest,
   deterministicConversationMessageId,
+  type ConversationBridgeDeliveryReceipt,
 } from "./conversation-transport-bridge-protocol.js";
-import type { ConversationTargetBindingStore } from "./conversation-target-binding-store.js";
+import type {
+  ConversationTargetBinding,
+  ConversationTargetBindingStore,
+} from "./conversation-target-binding-store.js";
 import {
   routeConversationTransport,
   type ConversationDeliveryState,
@@ -17,8 +26,10 @@ import {
   type ExecutionWakeLowerPlanePort,
   type LowerPlaneWakeReadiness,
   type WakeLowerPlaneDispatchResult,
+  type WakeLowerPlaneReconciliationInput,
   type WakePermit,
 } from "./execution-wake-coordination-model.js";
+import type { HostTurnLifecycleManager } from "./host-turn-lifecycle.js";
 
 export const CONVERSATION_WAKE_LOWER_PLANE_AUTHORITY = {
   authority: "executor_local_conversation_transport_lower_plane",
@@ -45,6 +56,7 @@ export class ConversationWakeLowerPlane implements ExecutionWakeLowerPlanePort {
     readonly config: ConversationTransportConfig,
     readonly bindings: ConversationTargetBindingStore,
     readonly bridge: ConversationTransportBridgePort,
+    readonly hostTurns: HostTurnLifecycleManager,
   ) {}
 
   async assessReadiness(input: {
@@ -59,6 +71,15 @@ export class ConversationWakeLowerPlane implements ExecutionWakeLowerPlanePort {
     return (await this.assess(input)).readiness;
   }
 
+  async inspect(input: {
+    targetExecutionScopeRef: string;
+    missionRef: string;
+    previousDeliveryState?: ConversationDeliveryState;
+    assessmentTimeCeiling?: string;
+  }): Promise<ConversationTransportAssessment> {
+    return this.assessInternal(input, false);
+  }
+
   async assess(input: {
     targetExecutionScopeRef: string;
     missionRef: string;
@@ -69,6 +90,19 @@ export class ConversationWakeLowerPlane implements ExecutionWakeLowerPlanePort {
     previousDeliveryState?: ConversationDeliveryState;
     assessmentTimeCeiling?: string;
   }): Promise<ConversationTransportAssessment> {
+    return this.assessInternal(input, true);
+  }
+
+  private async assessInternal(input: {
+    targetExecutionScopeRef: string;
+    missionRef: string;
+    pendingWorkId?: string;
+    pendingWorkGeneration?: number;
+    pendingWorkSemanticDigestSha256?: string;
+    correlationRef?: string;
+    previousDeliveryState?: ConversationDeliveryState;
+    assessmentTimeCeiling?: string;
+  }, persistHostTurnObservation: boolean): Promise<ConversationTransportAssessment> {
     const ceilingMs = input.assessmentTimeCeiling === undefined
       ? Date.now()
       : Date.parse(input.assessmentTimeCeiling);
@@ -162,7 +196,108 @@ export class ConversationWakeLowerPlane implements ExecutionWakeLowerPlanePort {
       ...selected.evidenceRefs,
       `route-sha256:${routeDigestSha256}`,
     ])].sort();
-    const evidenceDigestSha256 = sha256(canonicalJson(evidenceRefs));
+    let hostTurnObservation;
+    if (persistHostTurnObservation) {
+      try {
+        hostTurnObservation = observeConversationHostTurn({
+          manager: this.hostTurns,
+          observerExecutionScopeRef: input.targetExecutionScopeRef,
+          targetExecutionScopeRef: input.targetExecutionScopeRef,
+          missionRef: input.missionRef,
+          binding,
+          status,
+          selected,
+          routeDigestSha256,
+          correlationRef: input.correlationRef,
+          pendingWorkRef: input.pendingWorkId,
+          idempotencyKey: `host-turn-assess:${sha256(canonicalJson({
+            targetExecutionScopeRef: input.targetExecutionScopeRef,
+            missionRef: input.missionRef,
+            bindingRef: binding.bindingRef,
+            bindingGeneration: binding.bindingGeneration,
+            transportId: selected.transportId,
+            sessionLifecycle: selected.sessionLifecycle,
+            evidenceDigestSha256: status.evidenceDigestSha256,
+            observedAt: status.observedAt,
+            expiresAt: status.expiresAt,
+            routeDigestSha256,
+            correlationRef: input.correlationRef,
+            pendingWorkRef: input.pendingWorkId,
+          }))}`,
+        });
+      } catch (error) {
+        return {
+          bindingRef: binding.bindingRef,
+          route,
+          readiness: blockedReadiness(input, now, [
+            "HOST_TURN_OBSERVATION_REJECTED",
+            `host-turn-error:${sha256(error instanceof Error ? error.message : String(error))}`,
+          ], binding, status),
+        };
+      }
+    } else {
+      const classification = classifyConversationHostTurnLifecycle(
+        selected.sessionLifecycle,
+      );
+      const wakeGate = this.hostTurns.wakeGate(
+        input.targetExecutionScopeRef,
+        input.missionRef,
+        binding.bindingRef,
+        binding.bindingGeneration,
+      );
+      const currentBoundary = conversationHostTurnGenerationBoundary({
+        binding,
+        status,
+        selected,
+      });
+      const exactGate = Boolean(classification
+        && wakeGate.wakeAllowed
+        && wakeGate.binding
+        && wakeGate.binding.state === classification.state
+        && wakeGate.binding.generationBoundaryRef === currentBoundary);
+      hostTurnObservation = {
+        observed: exactGate,
+        classification,
+        generationBoundaryRef: currentBoundary,
+        wakeGate: exactGate
+          ? wakeGate
+          : {
+              ...wakeGate,
+              wakeAllowed: false,
+              binding: undefined,
+              reasonCodes: [...new Set([
+                ...wakeGate.reasonCodes,
+                classification
+                  ? "HOST_TURN_READ_ONLY_OBSERVATION_NOT_DURABLY_BOUND"
+                  : "HOST_TURN_LIFECYCLE_UNRECOGNIZED",
+              ])].sort(),
+            },
+        reasonCodes: exactGate
+          ? []
+          : ["HOST_TURN_READ_ONLY_INSPECTION_ONLY"],
+      };
+    }
+    if (!hostTurnObservation.observed
+      || !hostTurnObservation.wakeGate.wakeAllowed
+      || !hostTurnObservation.wakeGate.binding) {
+      return {
+        bindingRef: binding.bindingRef,
+        route,
+        readiness: blockedReadiness(input, now, [
+          ...hostTurnObservation.reasonCodes,
+          ...hostTurnObservation.wakeGate.reasonCodes,
+          `HOST_TURN_GATE_${hostTurnObservation.wakeGate.decision}`,
+        ], binding, status),
+      };
+    }
+    const hostTurnGate = hostTurnObservation.wakeGate.binding;
+    const combinedEvidenceRefs = [...new Set([
+      ...evidenceRefs,
+      ...hostTurnGate.evidenceRefs,
+      ...hostTurnGate.authorityReadbackRefs,
+      `host-turn-state-sha256:${hostTurnGate.stateDigestSha256}`,
+    ])].sort();
+    const evidenceDigestSha256 = sha256(canonicalJson(combinedEvidenceRefs));
     return {
       bindingRef: binding.bindingRef,
       route,
@@ -177,26 +312,35 @@ export class ConversationWakeLowerPlane implements ExecutionWakeLowerPlanePort {
         transportId: selected.transportId,
         transportKind: selected.kind,
         transportRouteDigestSha256: routeDigestSha256,
-        operationalState: `transport_selected:${selected.kind}`,
+        operationalState:
+          `transport_selected:${selected.kind};host_turn:${hostTurnGate.state}`,
         exactTargetVerified: selected.binding === "exact",
         selectorContractVerified:
           selected.kind !== "web_ui" || selected.surfaceTrust === "ui_contract",
         accountAutomationWarningAbsent: true,
-        wakePermitted: this.config.enabled && this.config.effectsEnabled,
+        wakePermitted:
+          this.config.enabled
+          && this.config.effectsEnabled
+          && hostTurnObservation.wakeGate.wakeAllowed,
         maximumAutomaticRecoveryTier:
           this.config.enabled && this.config.effectsEnabled
             ? "minimal_continuation"
             : "observe_only",
         observationRef: `bridge:${status.evidenceDigestSha256}`,
-        generationBoundaryRefBefore: undefined,
+        generationBoundaryRefBefore: hostTurnGate.generationBoundaryRef,
+        hostTurnGate,
         evidenceDigestSha256,
-        evidenceRefs,
+        evidenceRefs: combinedEvidenceRefs,
         reasonCodes: this.config.effectsEnabled
           ? []
           : ["CONVERSATION_TRANSPORT_EFFECTS_DISABLED"],
         assessedAt: now,
         expiresAt: new Date(
-          Math.min(Date.parse(status.expiresAt), nowMs + 60_000),
+          Math.min(
+            Date.parse(status.expiresAt),
+            Date.parse(hostTurnGate.expiresAt),
+            nowMs + 60_000,
+          ),
         ).toISOString(),
         lowerPlaneAuthorityRef: "conversation-transport-lower-plane:v1",
       },
@@ -232,6 +376,10 @@ export class ConversationWakeLowerPlane implements ExecutionWakeLowerPlanePort {
       || binding.bindingRef !== permit.sessionUiBindingRef
       || binding.bindingGeneration !== permit.bindingGeneration) {
       return failedNoEffect(permit, completedAt, "PERMIT_BINDING_STALE");
+    }
+    const preflightFailure = await this.preflightPermit(permit, binding);
+    if (preflightFailure) {
+      return failedNoEffect(permit, completedAt, preflightFailure);
     }
     const promptDigestSha256 = permit.envelope.bodyDigestSha256;
     const messageId = deterministicConversationMessageId({
@@ -270,6 +418,12 @@ export class ConversationWakeLowerPlane implements ExecutionWakeLowerPlanePort {
         };
       }
       if (receipt.state !== "delivered" || !receipt.itemRef || !receipt.turnRef) {
+        const lifecycleEvidence = this.recordIndeterminateHostTurn(
+          permit,
+          binding,
+          receipt,
+          receipt.failureCode ?? "DELIVERY_NOT_FULLY_RECONCILED",
+        );
         return {
           schemaVersion: 1,
           permitRef: permit.permitRef,
@@ -277,8 +431,70 @@ export class ConversationWakeLowerPlane implements ExecutionWakeLowerPlanePort {
           interactionSessionRef: receipt.deliveryRef,
           interactionActionId: receipt.deliveryRef,
           interactionReceiptRef: receipt.deliveryRef,
-          verificationRefs: receipt.verificationRefs,
+          verificationRefs: [...new Set([
+            ...receipt.verificationRefs,
+            ...lifecycleEvidence,
+          ])].sort(),
           failureCode: receipt.failureCode ?? "DELIVERY_NOT_FULLY_RECONCILED",
+          completedAt: receipt.recordedAt,
+        };
+      }
+      const generationBoundaryRefAfter =
+        receipt.generationBoundaryRefAfter ?? receipt.turnRef;
+      try {
+        this.hostTurns.recordWakeDispatchStarted({
+          idempotencyKey: `host-turn-delivered:${permit.permitRef}`,
+          observerExecutionScopeRef: permit.actorScopeRef,
+          gate: permit.hostTurnGate,
+          targetExecutionScopeRef: permit.targetExecutionScopeRef,
+          missionRef: permit.missionRef,
+          conversationBindingRef: binding.bindingRef,
+          conversationBindingGeneration: binding.bindingGeneration,
+          targetKind: binding.targetKind,
+          targetRefDigestSha256: binding.bridgeTargetRefDigestSha256,
+          providerAdapterId: permit.transportId,
+          providerSessionRef: binding.targetAlias,
+          providerTurnRef: receipt.turnRef,
+          generationBoundaryRef: generationBoundaryRefAfter,
+          workCycleRef: permit.envelope.workCycleRef,
+          correlationRef: permit.envelope.correlationRef,
+          pendingWorkRef: permit.pendingWorkId,
+          wakePermitRef: permit.permitRef,
+          evidenceRefs: [...new Set([
+            ...receipt.verificationRefs,
+            `conversation-delivery:${receipt.deliveryRef}`,
+            `prompt-admission:${receipt.itemRef}`,
+            `provider-turn:${receipt.turnRef}`,
+          ])].sort(),
+          authorityReadbackRefs: [...new Set([
+            ...permit.hostTurnGate.authorityReadbackRefs,
+            `conversation-bridge-authority:${receipt.authority.authority}`,
+            `conversation-delivery-readback:${receipt.deliveryRef}`,
+          ])].sort(),
+          effectReadbackRefs: [`conversation-delivery-effect:${receipt.deliveryRef}`],
+          observedAt: receipt.recordedAt,
+          evidenceExpiresAt: boundedEvidenceExpiry(receipt.recordedAt),
+        });
+      } catch (error) {
+        const lifecycleEvidence = this.recordIndeterminateHostTurn(
+          permit,
+          binding,
+          receipt,
+          "HOST_TURN_DURABILITY_FAILED_AFTER_DELIVERY",
+          error,
+        );
+        return {
+          schemaVersion: 1,
+          permitRef: permit.permitRef,
+          disposition: "indeterminate",
+          interactionSessionRef: receipt.deliveryRef,
+          interactionActionId: receipt.deliveryRef,
+          interactionReceiptRef: receipt.deliveryRef,
+          verificationRefs: [...new Set([
+            ...receipt.verificationRefs,
+            ...lifecycleEvidence,
+          ])].sort(),
+          failureCode: "HOST_TURN_DURABILITY_FAILED_AFTER_DELIVERY",
           completedAt: receipt.recordedAt,
         };
       }
@@ -290,23 +506,221 @@ export class ConversationWakeLowerPlane implements ExecutionWakeLowerPlanePort {
         interactionActionId: receipt.deliveryRef,
         interactionReceiptRef: receipt.deliveryRef,
         promptAdmissionRef: receipt.itemRef,
-        generationBoundaryRefAfter:
-          receipt.generationBoundaryRefAfter ?? receipt.turnRef,
+        generationBoundaryRefAfter,
         verificationRefs: receipt.verificationRefs,
         completedAt: receipt.recordedAt,
       };
     } catch (error) {
+      const lifecycleEvidence = this.recordIndeterminateHostTurn(
+        permit,
+        binding,
+        undefined,
+        "BRIDGE_DELIVERY_OUTCOME_UNKNOWN",
+        error,
+      );
       return {
         schemaVersion: 1,
         permitRef: permit.permitRef,
         disposition: "indeterminate",
         interactionSessionRef: binding.bindingRef,
-        verificationRefs: [
+        verificationRefs: [...new Set([
           `bridge-error-sha256:${sha256(error instanceof Error ? error.message : String(error))}`,
-        ],
+          ...lifecycleEvidence,
+        ])].sort(),
         failureCode: "BRIDGE_DELIVERY_OUTCOME_UNKNOWN",
         completedAt,
       };
+    }
+  }
+
+  recordWakeReconciliation(input: WakeLowerPlaneReconciliationInput): void {
+    const generationBoundaryRef = input.resolution === "effect_verified"
+      ? input.generationBoundaryRefAfter
+      : `reconciled-absent:${sha256(canonicalJson({
+          permitRef: input.permit.permitRef,
+          interactionReconciliationRef: input.interactionReconciliationRef,
+          effectReadbackRef: input.effectReadbackRef,
+        }))}`;
+    if (!generationBoundaryRef) {
+      throw new Error(
+        "Verified wake reconciliation requires a generation boundary after delivery.",
+      );
+    }
+    this.hostTurns.reconcileWakeDispatch({
+      idempotencyKey:
+        `host-turn-reconcile:${input.permit.permitRef}:${input.resolution}`,
+      observerExecutionScopeRef: input.permit.actorScopeRef,
+      targetExecutionScopeRef: input.permit.targetExecutionScopeRef,
+      missionRef: input.permit.missionRef,
+      wakePermitRef: input.permit.permitRef,
+      resolution: input.resolution,
+      generationBoundaryRef,
+      evidenceRefs: [...new Set([
+        input.interactionReconciliationRef,
+        ...input.verificationRefs,
+        ...(input.promptAdmissionRef
+          ? [`prompt-admission:${input.promptAdmissionRef}`]
+          : []),
+      ])].sort(),
+      authorityReadbackRefs: [...new Set([
+        ...input.permit.hostTurnGate.authorityReadbackRefs,
+        input.authorityReadbackRef,
+      ])].sort(),
+      effectReadbackRefs: [input.effectReadbackRef],
+      observedAt: input.observedAt,
+      evidenceExpiresAt: boundedEvidenceExpiry(input.observedAt),
+    });
+  }
+
+  private async preflightPermit(
+    permit: WakePermit,
+    binding: ConversationTargetBinding,
+  ): Promise<string | undefined> {
+    try {
+      const status = await this.bridge.status(binding.targetAlias);
+      if (status.targetRefDigestSha256 !== binding.bridgeTargetRefDigestSha256
+        || status.targetKind !== binding.targetKind) {
+        return "PREFLIGHT_TARGET_BINDING_CHANGED";
+      }
+      const route = routeConversationTransport({
+        targetKind: binding.targetKind,
+        transports: status.candidates,
+      });
+      if (route.state !== "selected") return "PREFLIGHT_TRANSPORT_NOT_ELIGIBLE";
+      const selected = route.selected;
+      if (selected.transportId !== permit.transportId
+        || selected.kind !== permit.transportKind) {
+        return "PREFLIGHT_TRANSPORT_CHANGED";
+      }
+      const routeDigestSha256 = conversationRouteDigest({
+        targetAlias: binding.targetAlias,
+        targetKind: binding.targetKind,
+        targetRefDigestSha256: status.targetRefDigestSha256,
+        bindingRef: binding.bindingRef,
+        bindingGeneration: binding.bindingGeneration,
+        transportId: selected.transportId,
+        transportKind: selected.kind,
+        evidenceDigestSha256: status.evidenceDigestSha256,
+      });
+      const classification = classifyConversationHostTurnLifecycle(
+        selected.sessionLifecycle,
+      );
+      if (!classification
+        || !["awaiting_input", "completed", "failed", "cancelled"].includes(
+          classification.state,
+        )) {
+        if (classification) {
+          try {
+            observeConversationHostTurn({
+              manager: this.hostTurns,
+              observerExecutionScopeRef: permit.actorScopeRef,
+              targetExecutionScopeRef: permit.targetExecutionScopeRef,
+              missionRef: permit.missionRef,
+              binding,
+              status,
+              selected,
+              routeDigestSha256,
+              correlationRef: permit.envelope.correlationRef,
+              pendingWorkRef: permit.pendingWorkId,
+              idempotencyKey: `host-turn-preflight-hold:${sha256(canonicalJson({
+                permitRef: permit.permitRef,
+                sessionLifecycle: selected.sessionLifecycle,
+                evidenceDigestSha256: status.evidenceDigestSha256,
+                observedAt: status.observedAt,
+                expiresAt: status.expiresAt,
+                routeDigestSha256,
+              }))}`,
+            });
+          } catch {
+            return "PREFLIGHT_HOST_TURN_OBSERVATION_FAILED";
+          }
+        }
+        return "PREFLIGHT_HOST_TURN_NOT_WAKE_ELIGIBLE";
+      }
+      if (routeDigestSha256 !== permit.transportRouteDigestSha256) {
+        return "PREFLIGHT_TRANSPORT_ROUTE_CHANGED";
+      }
+      this.hostTurns.assertGateCurrent(permit.hostTurnGate, {
+        targetExecutionScopeRef: permit.targetExecutionScopeRef,
+        missionRef: permit.missionRef,
+        conversationBindingRef: binding.bindingRef,
+        conversationBindingGeneration: binding.bindingGeneration,
+        targetKind: binding.targetKind,
+        targetRefDigestSha256: binding.bridgeTargetRefDigestSha256,
+        authorityReadbackRefs: permit.hostTurnGate.authorityReadbackRefs,
+      });
+      return undefined;
+    } catch (error) {
+      return `PREFLIGHT_HOST_TURN_GATE_REJECTED:${sha256(
+        error instanceof Error ? error.message : String(error),
+      )}`;
+    }
+  }
+
+  private recordIndeterminateHostTurn(
+    permit: WakePermit,
+    binding: ConversationTargetBinding,
+    receipt: ConversationBridgeDeliveryReceipt | undefined,
+    failureCode: string,
+    error?: unknown,
+  ): string[] {
+    const errorRef = error === undefined
+      ? undefined
+      : `host-turn-error-sha256:${sha256(
+          error instanceof Error ? error.message : String(error),
+        )}`;
+    const evidenceRefs = [...new Set([
+      ...(receipt?.verificationRefs ?? []),
+      ...(receipt ? [`conversation-delivery:${receipt.deliveryRef}`] : []),
+      `failure:${failureCode}`,
+      ...(errorRef ? [errorRef] : []),
+    ])].sort();
+    try {
+      this.hostTurns.recordWakeDispatchIndeterminate({
+        idempotencyKey: `host-turn-indeterminate:${permit.permitRef}`,
+        observerExecutionScopeRef: permit.actorScopeRef,
+        gate: permit.hostTurnGate,
+        targetExecutionScopeRef: permit.targetExecutionScopeRef,
+        missionRef: permit.missionRef,
+        conversationBindingRef: binding.bindingRef,
+        conversationBindingGeneration: binding.bindingGeneration,
+        targetKind: binding.targetKind,
+        targetRefDigestSha256: binding.bridgeTargetRefDigestSha256,
+        providerAdapterId: permit.transportId ?? "conversation-transport:unknown",
+        providerSessionRef: binding.targetAlias,
+        providerTurnRef: receipt?.turnRef,
+        generationBoundaryRef:
+          receipt?.generationBoundaryRefAfter
+          ?? receipt?.turnRef
+          ?? `indeterminate:${sha256(canonicalJson({
+            permitRef: permit.permitRef,
+            failureCode,
+          }))}`,
+        workCycleRef: permit.envelope.workCycleRef,
+        correlationRef: permit.envelope.correlationRef,
+        pendingWorkRef: permit.pendingWorkId,
+        wakePermitRef: permit.permitRef,
+        evidenceRefs,
+        authorityReadbackRefs: [...new Set([
+          ...permit.hostTurnGate.authorityReadbackRefs,
+          ...(receipt
+            ? [`conversation-bridge-authority:${receipt.authority.authority}`]
+            : []),
+        ])].sort(),
+        effectReadbackRefs: receipt
+          ? [`conversation-delivery-outcome:${receipt.deliveryRef}`]
+          : [`conversation-delivery-outcome-unknown:${permit.permitRef}`],
+        observedAt: receipt?.recordedAt ?? new Date().toISOString(),
+        evidenceExpiresAt: boundedEvidenceExpiry(
+          receipt?.recordedAt ?? new Date().toISOString(),
+        ),
+        indeterminateReasonCodes: [failureCode],
+      });
+      return [...evidenceRefs, `host-turn-indeterminate:${permit.permitRef}`];
+    } catch (recordError) {
+      return [...evidenceRefs, `host-turn-record-error-sha256:${sha256(
+        recordError instanceof Error ? recordError.message : String(recordError),
+      )}`];
     }
   }
 }
@@ -369,4 +783,10 @@ function failedNoEffect(
     failureCode,
     completedAt,
   };
+}
+
+function boundedEvidenceExpiry(observedAt: string): string {
+  const observedAtMs = Date.parse(observedAt);
+  const base = Number.isFinite(observedAtMs) ? observedAtMs : Date.now();
+  return new Date(base + 60_000).toISOString();
 }

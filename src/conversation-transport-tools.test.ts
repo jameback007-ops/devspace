@@ -31,6 +31,7 @@ function config(effectsEnabled = true): ConversationTransportConfig {
 }
 
 function nativeStatus(alias = "codex-canary"): ConversationBridgeTargetStatus {
+  const observedAtMs = Date.now();
   return {
     schemaVersion: 1,
     targetAlias: alias,
@@ -66,8 +67,8 @@ function nativeStatus(alias = "codex-canary"): ConversationBridgeTargetStatus {
         evidenceRefs: ["playwright:exact-binding"],
       },
     ],
-    observedAt: "2026-08-18T00:00:00.000Z",
-    expiresAt: "2099-01-01T00:00:00.000Z",
+    observedAt: new Date(observedAtMs).toISOString(),
+    expiresAt: new Date(observedAtMs + 30_000).toISOString(),
     evidenceDigestSha256: "b".repeat(64),
     evidenceRefs: ["bridge-protocol:v1"],
     limitationCodes: [],
@@ -120,6 +121,10 @@ class FakeBridge implements ConversationTransportBridgePort {
     this.deliveries.push(request);
     const target = this.statuses[request.targetAlias];
     assert.ok(target);
+    const selected = target.candidates.find(
+      (candidate) => candidate.transportId === request.transportId,
+    );
+    if (selected) selected.sessionLifecycle = "active";
     return {
       schemaVersion: 1,
       targetAlias: request.targetAlias,
@@ -172,6 +177,7 @@ class FakeBridge implements ConversationTransportBridgePort {
     assert.equal(assessment.route.selected.kind, "native_rpc");
     assert.equal(assessment.readiness.transportId, "codex-app-server:codex-canary");
     assert.equal(assessment.readiness.transportKind, "native_rpc");
+    assert.equal(assessment.readiness.hostTurnGate?.state, "awaiting_input");
     assert.match(assessment.readiness.transportRouteDigestSha256 ?? "", /^[a-f0-9]{64}$/);
 
     const pending = runtime.wakeManager.recordPendingWork(actor, {
@@ -209,6 +215,52 @@ class FakeBridge implements ConversationTransportBridgePort {
     assert.equal("url" in delivery, false);
     assert.equal(delivery.targetAlias, "codex-canary");
     assert.equal(delivery.promptDigestSha256, result.attempt?.permit.envelope.bodyDigestSha256);
+    const lifecycle = runtime.hostTurns.status(
+      targetExecutionScopeRef,
+      missionRef,
+      bound.binding.bindingRef,
+      bound.binding.bindingGeneration,
+    );
+    assert.equal(lifecycle.currentTurn?.state, "started");
+    assert.equal(lifecycle.currentTurn?.generation, 2);
+    assert.equal(lifecycle.currentTurn?.wakePermitRef, result.attempt?.permit.permitRef);
+    const activeAssessment = await runtime.lowerPlane.assess({
+      targetExecutionScopeRef,
+      missionRef,
+    });
+    assert.equal(activeAssessment.readiness.wakePermitted, false);
+    assert.ok(activeAssessment.readiness.reasonCodes.some((code) =>
+      code.includes("HOLD_ACTIVE_TURN")));
+    const revisionBeforeStatus = runtime.hostTurns.status(
+      targetExecutionScopeRef,
+      missionRef,
+      bound.binding.bindingRef,
+      bound.binding.bindingGeneration,
+    ).currentTurn?.revision;
+    const transportStatus = await runtime.status({
+      targetExecutionScopeRef,
+      missionRef,
+    });
+    assert.equal(transportStatus.hostTurnLifecycle.currentTurn?.state, "running");
+    assert.equal(
+      transportStatus.hostTurnLifecycle.wakeGate.decision,
+      "HOLD_ACTIVE_TURN",
+    );
+    assert.equal(
+      runtime.hostTurns.status(
+        targetExecutionScopeRef,
+        missionRef,
+        bound.binding.bindingRef,
+        bound.binding.bindingGeneration,
+      ).currentTurn?.revision,
+      revisionBeforeStatus,
+    );
+    const wakeStatus = runtime.wakeStatus(actor, {
+      targetExecutionScopeRef,
+      missionRef,
+    });
+    assert.equal(wakeStatus.hostTurnLifecycle.currentTurn?.generation, 2);
+    assert.equal(wakeStatus.currentPendingWork?.state, "wake_verified");
 
     const replay = await runtime.wakeManager.executeWake(actor, {
       idempotencyKey: "execute-wake-1",
