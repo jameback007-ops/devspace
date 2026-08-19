@@ -24,6 +24,7 @@ import {
   type ToolSurfaceIdentity,
 } from "./tool-surface-freshness.js";
 import { DEVSPACE_PACKAGE_VERSION } from "./version.js";
+import { assessStableToolAbi } from "./stable-tool-abi.js";
 
 interface RuntimeCapabilityRegistryOptions {
   now?: () => number;
@@ -174,6 +175,12 @@ export class RuntimeCapabilityRegistry {
     this.toolSurfaceIdentity = identity;
     const toolNames = identity.toolNames;
     const safeConfiguration = this.safeConfiguration();
+    const stableToolAbi = assessStableToolAbi(toolEntries, {
+      selfRepositoryPublicationConfigured:
+        this.config.selfRepositoryPublication.enabled,
+      selfRepositoryPublicationEffectsEnabled:
+        this.config.selfRepositoryPublication.effectsEnabled,
+    });
     const surfaceEpoch = this.runtimeBindings.surfaceEpoch
       ?? `nexus:${identity.fingerprintSha256.slice(0, 16)}`;
     const initialized = toolNames.length > 0;
@@ -197,6 +204,7 @@ export class RuntimeCapabilityRegistry {
         toolNames,
         requiredClientTools: [...REQUIRED_CLIENT_TOOLS],
         fingerprintBasis: "canonical_complete_mcp_tools_list_descriptors",
+        stableToolAbi,
         configuration: safeConfiguration,
         criticalToolGroups: this.criticalToolGroups(new Set(toolNames)),
       },
@@ -204,6 +212,8 @@ export class RuntimeCapabilityRegistry {
       policy: {
         authority: "executor_local_runtime_observation_only",
         controlsToolRegistration: false,
+        stableToolAbiControlsRegistration: false,
+        stableToolAbiIsCompatibilityAssessmentOnly: true,
         canonicalTaskOrDecisionAuthority: false,
         transcriptCaptured: false,
         promptsCaptured: false,

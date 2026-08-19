@@ -171,13 +171,27 @@ effect is unresolved. Once the candidate is eligible, enter publication-only
 terminal mode: no new research or feature expansion is allowed unless a
 reproducible defect is itself publication-blocking.
 
-`execution_scope_status` may return the global continuation projection as
-`deferred` while a repository candidate is on this fast path. That state means
-no automatic multi-owner runtime refresh was started because it cannot change
-the repository publication decision. Invoke the fixed direct continuation tool
-only for governed-checkout mutation, runtime deployment/takeover, runtime-state
-reliance, or exact material-effect reconciliation. The embedded advisory cache
-is bounded and never substitutes for those pre-effect readbacks.
+Repository publication may internally use a deferred continuation projection
+because global runtime refresh cannot change the repository CAS decision. The
+client-facing stable control plane must still request and expose the ordinary
+fixed continuation projection independently. This prevents a linked repository
+candidate from trapping a frozen client in a direct-tool discovery dead end.
+For governed-checkout mutation, runtime deployment/takeover, runtime-state
+reliance, or exact material-effect reconciliation, a frozen client may consume
+the embedded projection as the read-only preflight; a fresh catalog may use the
+fixed direct continuation tool as an ergonomic alias. Neither route grants
+writer, takeover, retry, or effect authority, and the downstream effect gate
+must revalidate current authority immediately before mutation.
+
+Treat top-level MCP tools as a versioned call ABI rather than an unbounded
+feature catalog. Keep the bootstrap names and their existing accepted input
+domains compatible, add only optional inputs, and place evolving read-only
+control state inside additive `execution_scope_status.data` projections. New
+direct tools may improve ergonomics for refreshed clients but do not extend the
+stable ABI. A new required input, removed bootstrap tool, narrowed accepted
+input domain, or new privileged action requires an explicit ABI-major review
+and host action refresh. `tools/list_changed` is defense in depth only and
+cannot replace this compatibility boundary.
 
 The effect gate serializes publication with a repository-local lease, requires
 the unchanged plan digest, rereads remote `main`, pushes the exact candidate SHA

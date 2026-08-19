@@ -649,6 +649,37 @@ test("execution-scope status carries the stable continuation control plane witho
     project: async (request) => {
       projectionCalls += 1;
       projectionRequests.push(structuredClone(request));
+      if (request?.refresh === false) {
+        return {
+          schemaVersion: 1,
+          capabilityRef: "zes.continuation.preflight.v2",
+          status: "deferred",
+          projectionRef: "zes-control-plane://continuation/deferred/test",
+          route: "execution_scope_status_embedded_control_plane",
+          directToolName: "zes_continuation_preflight",
+          reason:
+            "repository_publication_fast_path_does_not_require_global_runtime_refresh",
+          nextAction:
+            "invoke_direct_tool_only_for_governed_checkout_runtime_or_effect_intent",
+          policy: {
+            authority:
+              "fixed_live_ZES_continuation_readback_without_new_tool_discovery",
+            readOnly: true,
+            fixedRoute: true,
+            arbitraryCredentialPathAccepted: false,
+            arbitraryRepositoryPathAccepted: false,
+            directToolDiscoveryRequired: false,
+            clientCatalogFreshnessRequiredForReadback: false,
+            catalogStalenessDoesNotEstablishWriterUncertainty: true,
+            cacheIsReadOptimizationOnly: true,
+            cacheDoesNotGrantAuthority: true,
+            downstreamEffectGateMustRevalidate: true,
+            repositoryFastPathMayDeferAutomaticRefresh: true,
+            canonicalOrProviderStateMutated: false,
+            newWriterPublicationTakeoverOrEffectAuthorityGranted: false,
+          },
+        };
+      }
       return {
         schemaVersion: 1,
         capabilityRef: "zes.continuation.preflight.v2",
@@ -835,18 +866,36 @@ test("execution-scope status carries the stable continuation control plane witho
     _meta: { "openai/session": "frozen-catalog-compatible-session" },
   } as Parameters<Client["callTool"]>[0]);
   assert.equal(status.isError, undefined, responseText(status));
-  assert.equal(projectionCalls, 1);
+  assert.equal(projectionCalls, 2);
   assert.deepEqual(projectionRequests, [{
     refresh: false,
     deferReason:
       "repository_publication_fast_path_does_not_require_global_runtime_refresh",
-  }]);
+  }, undefined]);
   assert.equal(scopePublicationCalls, 1);
   const stable = structuredData(status).stableControlPlane as Record<string, any>;
   assert.equal(stable.route, "execution_scope_status");
   assert.equal(stable.policy.stableBootstrapTool, "execution_scope_status");
   assert.equal(stable.policy.frozenClientCatalogCompatible, true);
   assert.equal(stable.policy.newTopLevelToolDiscoveryRequired, false);
+  assert.equal(
+    stable.policy.compatibilityProjectionMaySatisfyReadOnlyPreflight,
+    true,
+  );
+  assert.equal(
+    stable.policy.materialEffectsMustFreshlyRevalidateAtTheirEffectGate,
+    true,
+  );
+  assert.equal(
+    stable.policy.missingDirectToolDoesNotBlockUnrelatedMissionWork,
+    true,
+  );
+  assert.equal(
+    stable.capabilityDirectory.find(
+      (entry: Record<string, unknown>) => entry.name === "continuationPreflight",
+    ).clientDiscoveryRequiredForReadback,
+    false,
+  );
   assert.equal(
     stable.capabilities.continuationPreflight.status,
     "available",
@@ -939,6 +988,7 @@ test("one host scope can inspect another through bounded execution-scope tools",
     string,
     Record<string, unknown>
   >;
+  const stableToolAbi = toolSurface.stableToolAbi as Record<string, unknown>;
   const clientCatalogObservation = backendRuntime.clientCatalogObservation as Record<
     string,
     unknown
@@ -963,6 +1013,9 @@ test("one host scope can inspect another through bounded execution-scope tools",
     tools.tools.map((tool) => tool.name).sort(),
   );
   assert.equal(toolSurface.toolCount, tools.tools.length);
+  assert.equal(stableToolAbi.abiRef, "devspace.stable-tool-abi.v1");
+  assert.equal(stableToolAbi.status, "compatible");
+  assert.deepEqual(stableToolAbi.findings, []);
   assert.equal(criticalToolGroups.recoveryCapsules?.configured, true);
   assert.equal(criticalToolGroups.recoveryCapsules?.registeredComplete, true);
   assert.equal(criticalToolGroups.recoveryCapsules?.available, true);

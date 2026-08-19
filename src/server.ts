@@ -512,7 +512,7 @@ function serverInstructions(config: ServerConfig): string {
   const codexSessionInstruction =
     " To inspect the allowlisted AOQ Codex executor adapter, use codex_session_status, codex_session_tail, or codex_session_audit. These tools report adapter transport health separately from the Codex thread lifecycle and never represent DevSpace, VPS, workspace, or ZES product health. To inspect the exact live AOQ worktree, use codex_workspace_git_status, codex_workspace_tree, codex_workspace_read, codex_workspace_search, or codex_workspace_diff. These brokered commands are read-only and independent from the Codex thread lifecycle.";
   const zesContinuationInstruction =
-    " For repository publication of a linked candidate, read stableControlPlane.capabilities.scopePublicationPreflight or the fixed self_repository_publication_preflight route. Those candidate-bound routes obtain fresh fixed remote-main authority directly, verify exact clean candidate identity and unchanged HEAD-bound validation evidence, expose required versus skipped evidence with stage timings, and require compare-and-swap plus authoritative post-push readback. Do not use unrelated Codex/AOQ thread, runtime-service, material-work, local branch-tracking, or local-hook state as proxy repository-writer authority. Use zes_continuation_preflight only when the action actually mutates the governed checkout, deploys or takes over runtime, relies on runtime state, or retries/reconciles a declared material effect. Once a candidate is eligible, treat it as publication-only terminal state: do not reopen research or feature expansion unless a reproducible defect blocks publication, and any candidate mutation invalidates the plan. A frozen catalog may consume these additive projections through execution_scope_status; catalog staleness never creates writer uncertainty. No route grants publication authority, and the fixed effect gate must still serialize publication, revalidate the plan, use an exact remote lease, and derive terminal outcome from remote readback.";
+    " For repository publication of a linked candidate, read stableControlPlane.capabilities.scopePublicationPreflight or the fixed self_repository_publication_preflight route. Those candidate-bound routes obtain fresh fixed remote-main authority directly, verify exact clean candidate identity and unchanged HEAD-bound validation evidence, expose required versus skipped evidence with stage timings, and require compare-and-swap plus authoritative post-push readback. Do not use unrelated Codex/AOQ thread, runtime-service, material-work, local branch-tracking, or local-hook state as proxy repository-writer authority. For governed-checkout mutation, runtime deployment/takeover, runtime-state reliance, or exact material-effect reconciliation, use the fixed continuation projection returned inside execution_scope_status; use zes_continuation_preflight as an ergonomic direct alias when the host catalog exposes it. A frozen catalog may rely on the embedded projection for the read-only preflight, but the downstream mutation/effect gate must still revalidate current authority and never inherits writer, takeover, retry, or effect authority from the projection. Once a candidate is eligible, treat it as publication-only terminal state: do not reopen research or feature expansion unless a reproducible defect blocks publication, and any candidate mutation invalidates the plan. Catalog staleness never creates writer uncertainty and blocks only a direct invocation lane that genuinely has no compatible projection, not unrelated mission work. No route grants publication authority, and the fixed effect gate must still serialize publication, revalidate the plan, use an exact remote lease, and derive terminal outcome from remote readback.";
   const zesResearchCycleInstruction = config.zesResearchCycle.mode === "off"
     ? ""
     : " For a workspace containing the ZES control-kernel marker, use zes_research_cycle_open before material design or mutation, then prepare exact action bindings and obtain a native capability-bound ZES Research Reflex v3 admission with zes_research_cycle_assess. Use zes_research_provider_invoke when external evidence is required: Context7 covers exact upstream documentation; Exa search is the open-world discovery operation; Exa fetch and targeted Web fetch remain known-source lanes and cannot substitute for open-world discovery. Reopen judgment with zes_research_cycle_invalidate when evidence, scope, architecture, dependencies, currentness, owner direction, or failure causality changes. Before commit, use zes_research_cycle_verify_pre_commit; close the episode after the exact commit or terminal no-change/deferred/abandoned outcome. observe mode reports lifecycle drift without blocking; enforce mode holds source mutation, commit preparation, commit, and publication when the exact current lifecycle is absent or stale. Historical v1/v2 receipts may be decoded but cannot create a new admission through this action gate. These executor-local tools verify native receipts but never create semantic, writer, publication, release, activation, runtime, or effect authority.";
@@ -1064,6 +1064,20 @@ function stableControlPlaneProjection(
     capabilityRefs: Object.values(capabilities).map(
       (capability) => capability.capabilityRef,
     ),
+    capabilityDirectory: Object.entries(capabilities).map(
+      ([name, capability]) => ({
+        name,
+        capabilityRef: capability.capabilityRef,
+        readRoute: "execution_scope_status",
+        directToolName:
+          "directToolName" in capability
+          && typeof capability.directToolName === "string"
+            ? capability.directToolName
+            : undefined,
+        clientDiscoveryRequiredForReadback: false,
+        materialEffectPerformedByProjection: false,
+      }),
+    ),
     capabilities,
     policy: {
       authority: "read_only_additive_projection_of_fixed_server_owned_capabilities",
@@ -1071,6 +1085,11 @@ function stableControlPlaneProjection(
       stableBootstrapTool: "execution_scope_status",
       frozenClientCatalogCompatible: true,
       newTopLevelToolDiscoveryRequired: false,
+      directToolsAreErgonomicAliasesForFreshCatalogs: true,
+      compatibilityProjectionMaySatisfyReadOnlyPreflight: true,
+      materialEffectsMustFreshlyRevalidateAtTheirEffectGate: true,
+      missingDirectToolBlocksOnlyThatDirectInvocationLane: true,
+      missingDirectToolDoesNotBlockUnrelatedMissionWork: true,
       clientCatalogAttestationRequiredForControlPlaneReadback: false,
       unknownClientCatalogDoesNotEstablishWriterUncertainty: true,
       canonicalTaskDecisionWriterEffectOrPublicationAuthorityGranted: false,
@@ -1293,15 +1312,15 @@ function registerExecutionScopeTools(
             ? selfRepositoryPublication.scopeProjection(status.workspaces)
             : Promise.resolve(undefined),
         ]);
-      const repositoryCandidatePresent =
-        (scopePublication?.candidateCount ?? 0) > 0
-        || scopePublication?.status === "unavailable"
-        || (selfRepositoryPublicationPreflight?.candidateCount ?? 0) > 0;
+      // The repository publication projection may deliberately use a deferred
+      // global continuation readback because it cannot affect the repository
+      // CAS decision. The stable compatibility envelope must still expose the
+      // normal fixed continuation projection. Otherwise a host with a frozen
+      // catalog can be trapped in a direct-tool discovery dead end whenever
+      // any linked repository candidate exists.
       const continuationPreflight = continuationPreflightProjector
-        && !repositoryCandidatePresent
-        && repositoryFastPathContinuation?.status === "deferred"
         ? await continuationPreflightProjector.project()
-        : repositoryFastPathContinuation;
+        : undefined;
       const stableControlPlane = continuationPreflight || selfRepositoryPublicationPreflight
         ? stableControlPlaneProjection({
             continuationPreflight,
