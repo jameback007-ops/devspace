@@ -152,10 +152,16 @@ may similarly consume an optional `CONTEXT7_API_KEY`; the public pinned CLI
 route remains usable without it when the upstream permits anonymous access.
 The generic command-environment passthrough also rejects both reserved names.
 Provider timeouts and output ceilings terminate the complete child process
-group, and receipt/evidence files are opened no-follow, owner-checked,
-single-link, identity-stable, and bound back to the exact requested provider,
-operation, route ref, transport, capability refs, open-world-performed proof,
-purpose, and cycle framing before admission.
+group. The fixed ZES accelerator first writes its receipt below the configured
+ZES repository's private Git metadata, which is already inside the
+accelerator-owned receipt allowlist and outside the worktree. DevSpace opens
+that staging file no-follow, owner-checks it as a single-link private file,
+imports the exact bytes once into the cycle-private evidence directory with an
+exclusive write, verifies the imported digest, and removes the staging file on
+every terminal path. The retained receipt/evidence files are then rebound to
+the exact requested provider, operation, route ref, transport, capability
+refs, open-world-performed proof, purpose, and cycle framing before admission.
+Neither the model nor provider request may select a staging or receipt root.
 
 ## Configuration
 
@@ -174,9 +180,12 @@ The repository root supplies the fixed native application port. The default is
 `/srv/zes-codex/ZES-SYSTEM-BLUEPRINT`; the existing
 `DEVSPACE_ZES_REPOSITORY_ROOT` is accepted as a compatibility fallback.
 
-State defaults to `<DEVSPACE_STATE_DIR>/zes-research-cycles`. State and copied
-receipts are owner-local executor evidence, not canonical ZES task or memory
-state.
+State defaults to `<DEVSPACE_STATE_DIR>/zes-research-cycles`. State and the
+byte-exact imported receipts are owner-local executor evidence, not canonical
+ZES task or memory state. The temporary accelerator staging directory is
+`<DEVSPACE_ZES_RESEARCH_REPOSITORY_ROOT>/.git/devspace-research-provider-receipts`;
+only unique receipt files are created there, they are removed after import,
+and no repository source or Git index entry is changed.
 
 Provider trace files used by native `verify-admission` must resolve under the
 opened workspace, the cycle-private evidence directory, or an explicitly

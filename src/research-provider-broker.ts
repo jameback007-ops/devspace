@@ -2,7 +2,9 @@ import { createHash, randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { constants } from "node:fs";
 import {
+  chmod,
   lstat,
+  mkdir,
   open,
   realpath,
   rm,
@@ -229,7 +231,11 @@ async function readPrivateJsonFile(
   path: string,
   evidenceDirectory: string,
   label: string,
-): Promise<{ value: Record<string, unknown>; sha256: string }> {
+): Promise<{
+  value: Record<string, unknown>;
+  sha256: string;
+  bytes: Buffer;
+}> {
   const directory = await realpath(evidenceDirectory);
   const requestedPath = resolve(path);
   if (!pathInside(requestedPath, directory)) {
@@ -306,9 +312,140 @@ async function readPrivateJsonFile(
     return {
       value: parseJsonObject(bytes.toString("utf8"), label),
       sha256: createHash("sha256").update(bytes).digest("hex"),
+      bytes,
     };
   } finally {
     await handle.close();
+  }
+}
+
+async function providerReceiptStagingDirectory(
+  repositoryRoot: string,
+): Promise<string> {
+  const canonicalRepositoryRoot = await realpath(repositoryRoot);
+  const gitDirectory = resolve(canonicalRepositoryRoot, ".git");
+  let gitMetadata;
+  try {
+    gitMetadata = await lstat(gitDirectory);
+  } catch (error) {
+    throw new ResearchCycleError(
+      "RESEARCH_PROVIDER_STAGING_ROOT_UNAVAILABLE",
+      "the fixed ZES repository has no private Git metadata directory for provider receipt staging",
+      { errorCode: (error as NodeJS.ErrnoException).code },
+    );
+  }
+  if (!gitMetadata.isDirectory() || gitMetadata.isSymbolicLink()) {
+    throw new ResearchCycleError(
+      "RESEARCH_PROVIDER_STAGING_ROOT_INVALID",
+      "the fixed ZES repository Git metadata path is not one local directory",
+    );
+  }
+  const stagingDirectory = resolve(
+    gitDirectory,
+    "devspace-research-provider-receipts",
+  );
+  try {
+    await mkdir(stagingDirectory, { mode: 0o700 });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+      throw new ResearchCycleError(
+        "RESEARCH_PROVIDER_STAGING_ROOT_UNAVAILABLE",
+        "the private provider receipt staging directory could not be created",
+        { errorCode: (error as NodeJS.ErrnoException).code },
+      );
+    }
+  }
+  let stagingMetadata = await lstat(stagingDirectory);
+  if (!stagingMetadata.isDirectory() || stagingMetadata.isSymbolicLink()) {
+    throw new ResearchCycleError(
+      "RESEARCH_PROVIDER_STAGING_ROOT_INVALID",
+      "the provider receipt staging path is not one local directory",
+    );
+  }
+  const canonicalStagingDirectory = await realpath(stagingDirectory);
+  if (!pathInside(canonicalStagingDirectory, canonicalRepositoryRoot)) {
+    throw new ResearchCycleError(
+      "RESEARCH_PROVIDER_STAGING_ROOT_INVALID",
+      "the provider receipt staging directory escaped the fixed ZES repository",
+    );
+  }
+  if (
+    (
+      typeof process.getuid === "function"
+      && stagingMetadata.uid !== process.getuid()
+    )
+  ) {
+    throw new ResearchCycleError(
+      "RESEARCH_PROVIDER_STAGING_ROOT_INVALID",
+      "the provider receipt staging directory is not service-owned",
+    );
+  }
+  await chmod(canonicalStagingDirectory, 0o700);
+  stagingMetadata = await lstat(canonicalStagingDirectory);
+  if (
+    !stagingMetadata.isDirectory()
+    || stagingMetadata.isSymbolicLink()
+    || (stagingMetadata.mode & 0o077) !== 0
+  ) {
+    throw new ResearchCycleError(
+      "RESEARCH_PROVIDER_STAGING_ROOT_INVALID",
+      "the provider receipt staging directory is not one private local directory",
+    );
+  }
+  return canonicalStagingDirectory;
+}
+
+async function writePrivateJsonBytes(
+  path: string,
+  evidenceDirectory: string,
+  bytes: Buffer,
+  label: string,
+): Promise<Awaited<ReturnType<typeof readPrivateJsonFile>>> {
+  const directory = await realpath(evidenceDirectory);
+  const requestedPath = resolve(path);
+  if (!pathInside(requestedPath, directory)) {
+    throw new ResearchCycleError(
+      "RESEARCH_PROVIDER_FILE_OUTSIDE_EVIDENCE_DIRECTORY",
+      `${label} escaped the cycle evidence directory`,
+    );
+  }
+  const noFollow = process.platform === "win32" ? 0 : constants.O_NOFOLLOW;
+  let handle;
+  let importError: unknown;
+  try {
+    handle = await open(
+      requestedPath,
+      constants.O_WRONLY
+        | constants.O_CREAT
+        | constants.O_EXCL
+        | noFollow,
+      0o600,
+    );
+    await handle.writeFile(bytes);
+    await handle.sync();
+    await handle.chmod(0o600);
+  } catch (error) {
+    importError = error;
+  } finally {
+    await handle?.close();
+  }
+  if (importError !== undefined) {
+    await rm(requestedPath, { force: true });
+    throw new ResearchCycleError(
+      "RESEARCH_PROVIDER_FILE_IMPORT_FAILED",
+      `${label} could not be imported as one exclusive private file`,
+      { errorCode: (importError as NodeJS.ErrnoException).code },
+    );
+  }
+  try {
+    return await readPrivateJsonFile(
+      requestedPath,
+      directory,
+      label,
+    );
+  } catch (error) {
+    await rm(requestedPath, { force: true });
+    throw error;
   }
 }
 
@@ -700,6 +837,13 @@ export class ZesResearchProviderBroker {
       evidenceDirectory,
       `provider-receipt-${identity}.json`,
     );
+    const stagingDirectory = await providerReceiptStagingDirectory(
+      this.config.repositoryRoot,
+    );
+    const stagingReceiptPath = resolve(
+      stagingDirectory,
+      `provider-receipt-${identity}.json`,
+    );
     const evidencePath = resolve(
       evidenceDirectory,
       `provider-evidence-${identity}.json`,
@@ -707,6 +851,7 @@ export class ZesResearchProviderBroker {
     const evidenceRef = `provider-evidence:${request.provider}:${identity}`;
     await Promise.all([
       assertPathAbsent(receiptPath, "provider receipt path"),
+      assertPathAbsent(stagingReceiptPath, "provider staging receipt path"),
       assertPathAbsent(evidencePath, "provider evidence path"),
     ]);
     const timeoutSeconds = Math.max(
@@ -726,7 +871,7 @@ export class ZesResearchProviderBroker {
       "zes-build-runner",
       "zes-accelerate",
       "--receipt",
-      receiptPath,
+      stagingReceiptPath,
       ...providerArguments(request),
       "--timeout-seconds",
       String(timeoutSeconds),
@@ -741,11 +886,24 @@ export class ZesResearchProviderBroker {
     });
     let providerReceipt: Awaited<ReturnType<typeof readPrivateJsonFile>>;
     try {
-      providerReceipt = await readPrivateJsonFile(
+      const stagedProviderReceipt = await readPrivateJsonFile(
+        stagingReceiptPath,
+        stagingDirectory,
+        "provider staging receipt",
+      );
+      providerReceipt = await writePrivateJsonBytes(
         receiptPath,
         evidenceDirectory,
+        stagedProviderReceipt.bytes,
         "provider receipt",
       );
+      if (providerReceipt.sha256 !== stagedProviderReceipt.sha256) {
+        await rm(receiptPath, { force: true });
+        throw new ResearchCycleError(
+          "RESEARCH_PROVIDER_FILE_IMPORT_MISMATCH",
+          "the cycle-private provider receipt does not match the fixed accelerator receipt bytes",
+        );
+      }
     } catch (error) {
       if (
         error instanceof ResearchCycleError
@@ -769,6 +927,8 @@ export class ZesResearchProviderBroker {
         );
       }
       throw error;
+    } finally {
+      await rm(stagingReceiptPath, { force: true });
     }
     const providerPayload = assertProviderReceiptIdentity(
       providerReceipt.value,
@@ -916,6 +1076,9 @@ export class ZesResearchProviderBroker {
         exaFetchSubstitutesForOpenWorldDiscovery: false,
         providerOperationRouteAndCapabilityReceiptBound: true,
         openWorldCandidateDiscoveryProofRequired: true,
+        acceleratorReceiptStagedUnderFixedRepositoryMetadata: true,
+        cyclePrivateReceiptImportedByteExact: true,
+        acceleratorStagingReceiptRetained: false,
         automaticRetryPerformed: false,
         semanticMutationPublicationRuntimeOrEffectAuthorityGranted: false,
       },

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   chmod,
   mkdir,
@@ -11,7 +12,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, sep } from "node:path";
 import test, { type TestContext } from "node:test";
 import { promisify } from "node:util";
 import type { ZesResearchCycleConfig } from "./config.js";
@@ -234,6 +235,17 @@ test("Exa uses only the fixed service credential broker", async (t) => {
   assert.equal(invocations[0]?.command, "uv");
   assert.equal(invocations[0]?.args.includes("--provider"), true);
   assert.equal(invocations[0]?.args.includes("exa"), true);
+  const stagedReceiptPath = argument(invocations[0]!.args, "--receipt");
+  assert.equal(
+    stagedReceiptPath.startsWith(
+      `${join(
+        current.config.repositoryRoot,
+        ".git",
+        "devspace-research-provider-receipts",
+      )}${sep}`,
+    ),
+    true,
+  );
   assert.equal(JSON.stringify(result).includes(secret), false);
   const providerReceipt = result.providerReceipt as {
     result: Record<string, unknown>;
@@ -270,12 +282,44 @@ test("Exa uses only the fixed service credential broker", async (t) => {
   });
   const trace = result.providerTrace as { path: string; traceRef: string };
   const evidenceFile = result.evidenceFile as { path: string };
+  const context = await current.manager.providerEvidenceContext(current.workspace);
+  assert.equal(dirname(trace.path), context.evidenceDirectory);
   assert.equal((await stat(trace.path)).mode & 0o777, 0o600);
   assert.equal((await stat(evidenceFile.path)).mode & 0o777, 0o600);
+  await assert.rejects(
+    () => stat(stagedReceiptPath),
+    (error: unknown) => (error as NodeJS.ErrnoException).code === "ENOENT",
+  );
+  const receiptBytes = await readFile(trace.path);
+  assert.equal(
+    createHash("sha256").update(receiptBytes).digest("hex"),
+    result.providerReceiptFileSha256,
+  );
+  assert.equal(
+    (await execFileAsync("git", ["status", "--porcelain"], {
+      cwd: current.config.repositoryRoot,
+    })).stdout,
+    "",
+  );
   assert.match(trace.traceRef, /^trace:provider-invocation:/u);
   assert.equal(
     (result.policy as Record<string, unknown>)
       .targetedWebSubstitutesForOpenWorldDiscovery,
+    false,
+  );
+  assert.equal(
+    (result.policy as Record<string, unknown>)
+      .acceleratorReceiptStagedUnderFixedRepositoryMetadata,
+    true,
+  );
+  assert.equal(
+    (result.policy as Record<string, unknown>)
+      .cyclePrivateReceiptImportedByteExact,
+    true,
+  );
+  assert.equal(
+    (result.policy as Record<string, unknown>)
+      .acceleratorStagingReceiptRetained,
     false,
   );
 });
@@ -322,6 +366,96 @@ test("Exa fetch remains a known-source lane and cannot claim open-world discover
       .exaFetchSubstitutesForOpenWorldDiscovery,
     false,
   );
+});
+
+test("provider receipt import preserves exact accelerator bytes and removes staging", async (t) => {
+  const current = await fixture(t);
+  const invocations: ResearchProviderProcessInvocation[] = [];
+  const baseRunner = fakeRunner(invocations);
+  let stagedReceiptPath = "";
+  let stagedReceiptBytes: Buffer | undefined;
+  const runner = async (invocation: ResearchProviderProcessInvocation) => {
+    const result = await baseRunner(invocation);
+    if (invocation.args.includes("zes-accelerate")) {
+      stagedReceiptPath = argument(invocation.args, "--receipt");
+      stagedReceiptBytes = await readFile(stagedReceiptPath);
+    }
+    return result;
+  };
+  const broker = new ZesResearchProviderBroker(
+    current.config,
+    current.manager,
+    {
+      processRunner: runner,
+      parentEnvironment: {
+        PATH: process.env.PATH,
+        HOME: process.env.HOME,
+        EXA_API_KEY: "service-held",
+      },
+      uuid: () => "00000000-0000-4000-8000-00000000000c",
+    },
+  );
+
+  const result = await broker.invoke(
+    current.workspace,
+    "fresh_acquisition",
+    {
+      provider: "exa",
+      operation: "search",
+      query: "Find exact byte-preserving provider evidence",
+    },
+  );
+
+  assert.ok(stagedReceiptBytes);
+  const trace = result.providerTrace as { path: string };
+  assert.deepEqual(await readFile(trace.path), stagedReceiptBytes);
+  await assert.rejects(
+    () => stat(stagedReceiptPath),
+    (error: unknown) => (error as NodeJS.ErrnoException).code === "ENOENT",
+  );
+});
+
+test("provider staging directory symlinks are rejected before target chmod or execution", async (t) => {
+  const current = await fixture(t);
+  const outsideDirectory = join(current.root, "outside-staging");
+  const stagingDirectory = join(
+    current.config.repositoryRoot,
+    ".git",
+    "devspace-research-provider-receipts",
+  );
+  await mkdir(outsideDirectory, { mode: 0o755 });
+  await chmod(outsideDirectory, 0o755);
+  const outsideModeBefore = (await stat(outsideDirectory)).mode & 0o777;
+  await symlink(outsideDirectory, stagingDirectory, "dir");
+  const invocations: ResearchProviderProcessInvocation[] = [];
+  const broker = new ZesResearchProviderBroker(
+    current.config,
+    current.manager,
+    {
+      processRunner: fakeRunner(invocations),
+      parentEnvironment: {
+        PATH: process.env.PATH,
+        HOME: process.env.HOME,
+        EXA_API_KEY: "service-held",
+      },
+    },
+  );
+
+  await assert.rejects(
+    () => broker.invoke(
+      current.workspace,
+      "fresh_acquisition",
+      {
+        provider: "exa",
+        operation: "search",
+        query: "This request must not execute through a symlinked staging root",
+      },
+    ),
+    (error: unknown) => error instanceof ResearchCycleError
+      && error.code === "RESEARCH_PROVIDER_STAGING_ROOT_INVALID",
+  );
+  assert.equal(invocations.length, 0);
+  assert.equal((await stat(outsideDirectory)).mode & 0o777, outsideModeBefore);
 });
 
 test("missing Exa service credential fails before process execution", async (t) => {
