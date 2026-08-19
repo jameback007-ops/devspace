@@ -55,6 +55,36 @@ try {
     assert.ok(definitions.get(name)?.inputSchema);
     assert.ok(definitions.get(name)?.outputSchema);
   }
+  const annotations = (name: string) => definitions.get(name)?.annotations as {
+    readOnlyHint?: boolean;
+    destructiveHint?: boolean;
+    idempotentHint?: boolean;
+    openWorldHint?: boolean;
+  };
+  assert.deepEqual(annotations("zes_research_discovery_plan"), {
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: false,
+    openWorldHint: false,
+  });
+  assert.deepEqual(annotations("zes_research_discovery_acquire"), {
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: false,
+    openWorldHint: true,
+  });
+  assert.deepEqual(annotations("zes_research_horizon_record"), {
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: false,
+    openWorldHint: false,
+  });
+  assert.deepEqual(annotations("zes_research_horizon_status"), {
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: false,
+  });
 
   const statusHandler = handlers.get("zes_research_cycle_status");
   assert.ok(statusHandler);

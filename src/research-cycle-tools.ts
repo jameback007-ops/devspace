@@ -12,10 +12,14 @@ import {
 import {
   ResearchCycleError,
   researchCommandDigest,
+  type ResearchDiscoveryAcquireInput,
+  type ResearchDiscoveryPlanInput,
   type ResearchCycleOpenInput,
   type ResearchCyclePrepareInput,
+  type ResearchHorizonInput,
   type ResearchInvalidationKind,
   type ResearchPreCommitChallenge,
+  type ResearchProviderAcquisitionResult,
   type ResearchProviderTraceInput,
   type ResearchWorkspace,
   ZesResearchCycleManager,
@@ -92,6 +96,47 @@ const invalidationKindSchema = z.enum([
   "source_currentness_expired",
   "manual",
 ]);
+
+const discoveryTemporalRegimeSchema = z.enum([
+  "rapidly_volatile",
+  "evolving_practice",
+  "version_bound_fact",
+  "durable_principle_or_invariant",
+  "historical_lineage",
+]);
+
+const discoveryProfileSchema = z.enum([
+  "balanced_frontier",
+  "community_frontier",
+  "failure_reproduction",
+  "successor_or_alternative",
+  "official_delta",
+]);
+
+const discoveryLaneSchema = z.enum([
+  "official_or_release_delta",
+  "open_source_or_independent_implementation",
+  "failure_reproduction_or_maintainer_discussion",
+  "competing_alternative_or_successor",
+  "practitioner_or_production_experience",
+  "counterevidence_or_falsifier",
+]);
+
+const discoveryLaneDispositionSchema = z.enum([
+  "required",
+  "conditional",
+  "not_applicable",
+]);
+
+const horizonEventKindSchema = z.enum([
+  "new_candidate_detected",
+  "upstream_semantics_changed",
+  "community_failure_cluster_detected",
+  "prior_selection_superseded_candidate",
+  "new_reproduction_or_counterevidence",
+]);
+
+const sha256Schema = z.string().regex(/^[0-9a-f]{64}$/u);
 
 const providerTraceSchema = z.object({
   traceRef: z.string().min(1),
@@ -262,6 +307,40 @@ function combinedInstrumentEvidenceRefs(
   return [...new Set([...referenced, ...(supplied ?? [])])].sort();
 }
 
+async function acquireFrozenDiscoveryEvidence(
+  providerBroker: ZesResearchProviderBroker,
+  workspace: ResearchWorkspace,
+  purpose: "fresh_acquisition" | "counterevidence_or_blind_challenge",
+  request: {
+    provider: "exa";
+    operation: "search";
+    query: string;
+    maxResults: number;
+  },
+): Promise<ResearchProviderAcquisitionResult> {
+  const result = await providerBroker.invoke(workspace, purpose, request);
+  const providerEvidence = result.providerEvidence as JsonObject;
+  const providerTrace = result.providerTrace as JsonObject;
+  const evidenceFile = result.evidenceFile as JsonObject;
+  return {
+    status: "acquired",
+    providerEvidenceRef: String(providerEvidence.evidence_ref ?? ""),
+    providerEvidencePath: String(evidenceFile.path ?? ""),
+    providerEvidenceFileSha256: String(
+      result.providerEvidenceFileSha256 ?? "",
+    ),
+    providerTraceRef: String(providerTrace.traceRef ?? ""),
+    providerTracePath: String(providerTrace.path ?? ""),
+    providerTraceFileSha256: String(
+      result.providerReceiptFileSha256 ?? "",
+    ),
+    providerEvidence,
+    providerReceiptFileSha256: String(
+      result.providerReceiptFileSha256 ?? "",
+    ),
+  };
+}
+
 function toolMeta(config: ServerConfig): { _meta: Record<string, unknown> } {
   if (config.widgets === "off") return { _meta: {} };
   return {
@@ -354,6 +433,10 @@ function registerLifecycleTool<Input extends object>(
 export const ZES_RESEARCH_CYCLE_TOOL_NAMES = [
   "zes_research_cycle_open",
   "zes_research_cycle_prepare",
+  "zes_research_discovery_plan",
+  "zes_research_discovery_acquire",
+  "zes_research_horizon_record",
+  "zes_research_horizon_status",
   "zes_research_instrument_plan",
   "zes_research_instrument_record",
   "zes_research_instrument_status",
@@ -595,6 +678,141 @@ export function registerZesResearchCycleTools(
     server,
     config,
     registerTool,
+    "zes_research_discovery_plan",
+    {
+      title: "Freeze a source-neutral research discovery portfolio",
+      description:
+        "Create or idempotently reread a bounded, deterministic query portfolio for the active prepared Research Reflex generation. The plan uses an explicit temporal regime, a profile plus typed required/conditional/not-applicable coverage lanes, and exact subject/incumbent/prior-snapshot refs. It freezes Exa search query text, query identities, result bounds, policy/portfolio/plan digests, lookback and revalidation dates without calling a provider. Source origin is neutral: official, open-source, failure/maintainer, successor, practitioner, and counterevidence lanes are coverage labels rather than truth claims. Replanning with changed inputs invalidates prior local acquisitions and horizon state; it grants no semantic, writer, publication, runtime, or effect authority.",
+      inputSchema: {
+        workspaceId: workspaceIdSchema,
+        subjectRef: z.string().min(1).max(2_000),
+        subjectQuestion: z.string().min(1).max(20_000),
+        temporalRegime: discoveryTemporalRegimeSchema,
+        asOf: z.string().min(1).max(200),
+        knownCandidateRefs: nonEmptyStrings.max(100).optional(),
+        incumbentRef: z.string().min(1).max(2_000).optional(),
+        priorSnapshotRef: z.string().min(1).max(2_000).optional(),
+        discoveryProfile: discoveryProfileSchema.optional(),
+        explicitCoverageLanes: z.array(z.object({
+          lane: discoveryLaneSchema,
+          disposition: discoveryLaneDispositionSchema,
+          reason: z.string().min(1).max(4_000),
+        })).max(6).optional(),
+      },
+      outputSchema,
+      ...toolMeta(config),
+      annotations: localStateAnnotations,
+    },
+    async (input: ResearchDiscoveryPlanInput & { workspaceId: string }) => {
+      const { workspaceId, ...planInput } = input;
+      return { ...await manager.discoveryPlan(
+        resolveWorkspace(workspaceId),
+        planInput,
+      ) };
+    },
+  );
+
+  registerLifecycleTool(
+    server,
+    config,
+    registerTool,
+    "zes_research_discovery_acquire",
+    {
+      title: "Acquire a frozen open-world discovery portfolio",
+      description:
+        "Execute all or an exact subset of the frozen discovery queries through the fixed Research Reflex Exa-search broker. Each query receives one durable attempt reservation before the external call; DevSpace releases its lifecycle lock during provider execution, performs no automatic retry, and preserves terminal failure rather than replaying it. Successful evidence must prove the registered open-world candidate-discovery capability and is bound to owner-seeded origin, exact receipt/trace/evidence paths, SHA-256 identities, and the current plan generation. Required-lane coverage remains held until every frozen query in that lane is acquired. This operation cannot select a winner, claim sufficiency, mutate source, publish, deploy, or execute runtime effects.",
+      inputSchema: {
+        workspaceId: workspaceIdSchema,
+        planRef: z.string().min(1).max(2_000),
+        queryRefs: nonEmptyStrings.min(1).max(18).optional(),
+        expectedGeneration: z.number().int().min(0).optional(),
+      },
+      outputSchema,
+      ...toolMeta(config),
+      annotations: externalEvidenceAnnotations,
+    },
+    async (input: ResearchDiscoveryAcquireInput & { workspaceId: string }) => {
+      const { workspaceId, ...acquireInput } = input;
+      return { ...await manager.discoveryAcquire(
+        resolveWorkspace(workspaceId),
+        acquireInput,
+        async (workspace, purpose, request) =>
+          await acquireFrozenDiscoveryEvidence(
+            providerBroker,
+            workspace,
+            purpose,
+            request,
+          ),
+      ) };
+    },
+  );
+
+  registerLifecycleTool(
+    server,
+    config,
+    registerTool,
+    "zes_research_horizon_record",
+    {
+      title: "Record a typed research horizon checkpoint",
+      description:
+        "Record the current prepared generation's post-acquisition freshness horizon before native assessment. The caller supplies only typed event observations with exact current-plan evidence refs, exact subject refs and rationale; DevSpace validates event-to-lane constraints but does not parse provider prose or infer semantic change. Expiry is derived from the temporal regime and means revalidation is required, not that prior evidence became false. Prior portfolio/evidence identity deltas remain typed stale signals. The deterministic checkpoint binds the plan, policy, portfolio, generation and immutable evidence/trace digests and grants no research-sufficiency, writer, publication, runtime, or effect authority.",
+      inputSchema: {
+        workspaceId: workspaceIdSchema,
+        planRef: z.string().min(1).max(2_000),
+        expectedGeneration: z.number().int().min(0).optional(),
+        asOf: z.string().min(1).max(200),
+        priorSnapshot: z.object({
+          snapshotRef: z.string().min(1).max(2_000),
+          portfolioDigestSha256: sha256Schema,
+          candidateRefs: nonEmptyStrings.max(100).optional(),
+          incumbentRef: z.string().min(1).max(2_000).optional(),
+          evidenceIdentities: z.array(z.object({
+            evidenceRef: z.string().min(1).max(2_000),
+            fileDigestSha256: sha256Schema,
+          })).max(100).optional(),
+        }).optional(),
+        observations: z.array(z.object({
+          kind: horizonEventKindSchema,
+          evidenceRefs: nonEmptyStrings.min(1).max(20),
+          subjectRefs: nonEmptyStrings.max(20),
+          rationale: z.string().min(1).max(20_000),
+        })).max(32).optional(),
+      },
+      outputSchema,
+      ...toolMeta(config),
+      annotations: localStateAnnotations,
+    },
+    async (input: ResearchHorizonInput & { workspaceId: string }) => {
+      const { workspaceId, ...horizonInput } = input;
+      return { ...await manager.horizonRecord(
+        resolveWorkspace(workspaceId),
+        horizonInput,
+      ) };
+    },
+  );
+
+  registerLifecycleTool(
+    server,
+    config,
+    registerTool,
+    "zes_research_horizon_status",
+    {
+      title: "Read the current research horizon checkpoint",
+      description:
+        "Read the active discovery horizon, typed signals, regime-aware dynamic expiry, plan/portfolio/policy identities and whether the next native Research Reflex assessment must refresh the decision. This is executor-local evidence lifecycle state, not canonical semantic, writer, publication, runtime, or effect authority.",
+      inputSchema: { workspaceId: workspaceIdSchema },
+      outputSchema,
+      ...toolMeta(config),
+      annotations: readOnlyAnnotations,
+    },
+    async (input: { workspaceId: string }) =>
+      await manager.horizonStatus(resolveWorkspace(input.workspaceId)),
+  );
+
+  registerLifecycleTool(
+    server,
+    config,
+    registerTool,
     "zes_research_cycle_assess",
     {
       title: "Assess through native ZES Research Reflex",
@@ -605,6 +823,7 @@ export function registerZesResearchCycleTools(
         request: jsonObjectSchema,
         providerTraces: z.array(providerTraceSchema).optional(),
         instrumentEvidenceRefs: nonEmptyStrings.min(1).optional(),
+        discoveryEvidenceRefs: nonEmptyStrings.min(1).max(18).optional(),
       },
       outputSchema,
       ...toolMeta(config),
@@ -615,6 +834,7 @@ export function registerZesResearchCycleTools(
       request: JsonObject;
       providerTraces?: ResearchProviderTraceInput[];
       instrumentEvidenceRefs?: string[];
+      discoveryEvidenceRefs?: string[];
     }) => {
       const workspace = resolveWorkspace(input.workspaceId);
       let instrumentEvidenceVerification: Record<string, unknown> | undefined;
@@ -642,6 +862,7 @@ export function registerZesResearchCycleTools(
         workspace,
         input.request,
         input.providerTraces ?? [],
+        input.discoveryEvidenceRefs ?? [],
       );
       return instrumentEvidenceVerification
         ? { ...result, instrumentEvidenceVerification }
