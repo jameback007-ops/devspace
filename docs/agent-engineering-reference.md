@@ -71,6 +71,12 @@ mandatory `AGENTS.md`; it does not replace it.
   orientation manifest injected when configured workspace markers match. Its
   named local authority sources are byte-verified at load and before projection.
   It is not current task, writer, runtime, release, memory, or effect authority.
+- **Fallback continuity plane** — a read-only policy assessment that combines
+  the primary MCP recovery result with independently verified alternate-route
+  attestations. It classifies exact operation continuity as equivalent,
+  degraded read-only, recovery-only, survival-only, or insufficient. It does
+  not invoke a route, transfer canonical authority, share primary state, or
+  authorize effect replay.
 - **Skill** — a lazy procedure selected by metadata and read only when relevant.
 - **Subagent** — a bounded model invocation coordinated by the host.
 - **Agent profile** — provider, model, tools, and instructions for a subagent.
