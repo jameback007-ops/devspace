@@ -88,6 +88,24 @@ assert.equal(compatible.status, "compatible");
 assert.deepEqual(compatible.findings, []);
 assert.equal(compatible.policy.additionalOptionalInputsCompatible, true);
 assert.equal(compatible.policy.newTopLevelToolsDoNotExtendStableAbi, true);
+assert.equal(
+  compatible.policy.clientCatalogFreshnessRequiresExplicitAttestation,
+  true,
+);
+assert.equal(compatible.policy.descriptorOrderingAndFingerprintCanonical, true);
+assert.equal(compatible.policy.listChangedDoesNotAttestHostRefresh, true);
+assert.equal(
+  compatible.policy.stableEffectReplayIdentityAndTerminalReceiptRequired,
+  true,
+);
+assert.equal(compatible.policy.semanticUsabilityDistinctFromProtocolSuccess, true);
+assert.equal(compatible.policy.genericArbitraryRpcForbidden, true);
+assert.deepEqual(compatible.effectReplayContracts, [{
+  toolName: "self_repository_publish",
+  identityInput: "planIdSha256",
+  terminalReceiptRequired: true,
+  repeatedIdentityReturnsOriginalReceipt: true,
+}]);
 
 const plain = assessStableToolAbi(baseline(), {
   selfRepositoryPublicationConfigured: true,
@@ -97,6 +115,14 @@ assert.equal(
   compatible.fingerprintSha256,
   plain.fingerprintSha256,
   "optional inputs, descriptions, and new direct tools must not change ABI v1 identity",
+);
+assert.equal(
+  assessStableToolAbi([...baseline()].reverse(), {
+    selfRepositoryPublicationConfigured: true,
+    selfRepositoryPublicationEffectsEnabled: true,
+  }).fingerprintSha256,
+  plain.fingerprintSha256,
+  "descriptor arrival order must not change the stable ABI identity",
 );
 
 const newRequired = baseline(true);
@@ -142,6 +168,21 @@ assert.ok(narrowedAssessment.findings.some(
   (finding) => finding.code === "STABLE_TOOL_INPUT_NARROWED"
     && finding.toolName === "open_workspace"
     && finding.inputName === "mode",
+));
+
+const typeNarrowed = baseline();
+const readTool = typeNarrowed.find((tool) => tool.name === "read")!;
+const readProperties = (readTool.inputSchema as Record<string, any>).properties;
+readProperties.path = { type: "number" };
+const typeNarrowedAssessment = assessStableToolAbi(typeNarrowed, {
+  selfRepositoryPublicationConfigured: true,
+  selfRepositoryPublicationEffectsEnabled: true,
+});
+assert.equal(typeNarrowedAssessment.status, "incompatible");
+assert.ok(typeNarrowedAssessment.findings.some(
+  (finding) => finding.code === "STABLE_TOOL_INPUT_NARROWED"
+    && finding.toolName === "read"
+    && finding.inputName === "path",
 ));
 
 console.log("stable tool ABI tests passed");

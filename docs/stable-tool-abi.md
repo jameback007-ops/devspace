@@ -50,6 +50,28 @@ not part of the call-compatibility fingerprint. Runtime startup assesses the
 registered descriptors against the ABI contract and returns the result under
 `backendRuntime.toolSurface.stableToolAbi`.
 
+## Evidence-bound compatibility requirements
+
+ABI v1 consumes the load-bearing requirements from compatibility evidence
+candidate `444ee06b175277fb1db2c74fecd63df10a2d5419` without merging its
+research harness into the production implementation:
+
+| Requirement | Production disposition |
+|---|---|
+| `ABI-001` / `ABI-002` / `ABI-003` | Stable names and prior input domains are frozen. New required inputs, removed inputs, and enum/type/pattern narrowing fail assessment; additive optional inputs remain compatible. |
+| `ABI-004` | New read-only control state is projected behind `execution_scope_status` instead of requiring discovery of another top-level bootstrap tool. |
+| `ABI-005` | Client catalog freshness remains unknown unless the client supplies an exact epoch/fingerprint or equivalent complete attestation. |
+| `ABI-006` | Complete descriptor identity uses canonical JSON, deterministic ordering, and SHA-256 fingerprints. |
+| `ABI-007` | `tools/list_changed` and modern list subscriptions are recovery hints only; neither attests that ChatGPT refreshed or approved its app catalog. |
+| `ABI-008` | `self_repository_publish` uses the existing digest-bound `planIdSha256` as its stable replay identity. Repeating that identity returns the durable terminal receipt and does not push twice. Adding a second required idempotency input would itself break ABI v1. |
+| `ABI-009` | Protocol success and semantically usable output are distinct. Stable high-risk effects return structured terminal state; the Transport Supervisor separately rejects empty, truncated, or ambiguous success. |
+| `ABI-010` | No generic arbitrary RPC dispatcher is admitted under a stable name. Fixed effect families retain narrow target and authority contracts. |
+
+The compatibility evidence also verified one bounded existing ChatGPT session
+remaining on 53 approved tools while the live Nexus runtime exposed 63. That
+observation establishes a stale-client case only; it does not establish the
+result of an explicit app refresh, connector reconnect, or new conversation.
+
 ## Dynamic capability fabric
 
 Evolving read-only capabilities are projected inside the open structured data
@@ -93,8 +115,10 @@ read phase; it never grants the effect.
 MCP `tools/list_changed` notifications may be emitted as defense in depth, but
 they are not the correctness mechanism. Stateless HTTP clients may not retain a
 notification channel, and ChatGPT approval policy may still require action
-review. The permanent compatibility mechanism is the stable ABI plus additive
-control-plane projection.
+review. Modern `subscriptions/listen` recovery has the same claim ceiling: it
+can repair a supporting SDK client's cache, but it does not prove ChatGPT
+updated an approved app snapshot. The permanent compatibility mechanism is the
+stable ABI plus additive control-plane projection.
 
 One explicit ChatGPT action refresh is still required to migrate an existing
 snapshot when it lacks the ABI v1 bootstrap tools or needs a newly privileged
@@ -114,3 +138,6 @@ Before publication:
    arbitrary target.
 5. Treat any incompatible ABI assessment as a publication blocker until an
    explicit ABI-major migration and host refresh plan exists.
+6. Run the Transport Supervisor fault matrix and prove that a repeated
+   digest-bound effect identity produces one physical effect and one terminal
+   receipt.

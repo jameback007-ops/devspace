@@ -15,6 +15,12 @@ interface StableInputContract {
   pattern?: string;
 }
 
+interface StableEffectReplayContract {
+  identityInput: string;
+  terminalReceiptRequired: true;
+  repeatedIdentityReturnsOriginalReceipt: true;
+}
+
 interface StableToolContract {
   name: string;
   availability:
@@ -33,6 +39,7 @@ interface StableToolContract {
     | "repository_publication_effect";
   requiredInputs: readonly string[];
   inputs: Readonly<Record<string, StableInputContract>>;
+  effectReplay?: StableEffectReplayContract;
 }
 
 const STABLE_TOOL_CONTRACTS: readonly StableToolContract[] = [
@@ -138,6 +145,11 @@ const STABLE_TOOL_CONTRACTS: readonly StableToolContract[] = [
       workspaceId: { kind: "string", pattern: "^ws_[a-f0-9]{10}$" },
       planIdSha256: { kind: "string", pattern: "^[a-f0-9]{64}$" },
     },
+    effectReplay: {
+      identityInput: "planIdSha256",
+      terminalReceiptRequired: true,
+      repeatedIdentityReturnsOriginalReceipt: true,
+    },
   },
 ] as const;
 
@@ -165,6 +177,12 @@ export interface StableToolAbiAssessment {
     availability: StableToolContract["availability"];
     requiredInCurrentRuntime: boolean;
   }>;
+  effectReplayContracts: Array<{
+    toolName: string;
+    identityInput: string;
+    terminalReceiptRequired: true;
+    repeatedIdentityReturnsOriginalReceipt: true;
+  }>;
   findings: StableToolAbiFinding[];
   policy: {
     topLevelBootstrapNamesFrozen: true;
@@ -176,7 +194,13 @@ export interface StableToolAbiAssessment {
     dynamicControlStateUsesAdditiveStatusProjection: true;
     highRiskEffectsRemainExplicitAndFreshlyRevalidated: true;
     listChangedNotificationIsDefenseInDepthOnly: true;
+    listChangedDoesNotAttestHostRefresh: true;
     refreshRequiredForAbiMajorOrNewPrivilegedAction: true;
+    clientCatalogFreshnessRequiresExplicitAttestation: true;
+    descriptorOrderingAndFingerprintCanonical: true;
+    stableEffectReplayIdentityAndTerminalReceiptRequired: true;
+    semanticUsabilityDistinctFromProtocolSuccess: true;
+    genericArbitraryRpcForbidden: true;
   };
 }
 
@@ -359,6 +383,17 @@ export function assessStableToolAbi(
       availability: contract.availability,
       requiredInCurrentRuntime: requiredInCurrentRuntime(contract, options),
     })),
+    effectReplayContracts: STABLE_TOOL_CONTRACTS.flatMap((contract) => (
+      contract.effectReplay
+        ? [{
+          toolName: contract.name,
+          identityInput: contract.effectReplay.identityInput,
+          terminalReceiptRequired: contract.effectReplay.terminalReceiptRequired,
+          repeatedIdentityReturnsOriginalReceipt:
+            contract.effectReplay.repeatedIdentityReturnsOriginalReceipt,
+        }]
+        : []
+    )),
     findings,
     policy: {
       topLevelBootstrapNamesFrozen: true,
@@ -370,7 +405,13 @@ export function assessStableToolAbi(
       dynamicControlStateUsesAdditiveStatusProjection: true,
       highRiskEffectsRemainExplicitAndFreshlyRevalidated: true,
       listChangedNotificationIsDefenseInDepthOnly: true,
+      listChangedDoesNotAttestHostRefresh: true,
       refreshRequiredForAbiMajorOrNewPrivilegedAction: true,
+      clientCatalogFreshnessRequiresExplicitAttestation: true,
+      descriptorOrderingAndFingerprintCanonical: true,
+      stableEffectReplayIdentityAndTerminalReceiptRequired: true,
+      semanticUsabilityDistinctFromProtocolSuccess: true,
+      genericArbitraryRpcForbidden: true,
     },
   };
 }
