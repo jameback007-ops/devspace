@@ -6,6 +6,7 @@ import {
   observeConversationHostTurn,
 } from "./conversation-host-turn-lifecycle-adapter.js";
 import type { ConversationTransportBridgePort } from "./conversation-transport-bridge-client.js";
+import type { ConversationWebUiInteractionBrokerPort } from "./conversation-web-ui-interaction-broker.js";
 import {
   conversationRouteDigest,
   deterministicConversationMessageId,
@@ -22,6 +23,7 @@ import {
 } from "./conversation-transport-routing.js";
 import {
   canonicalJson,
+  materializeWakeContinuationBody,
   sha256,
   type ExecutionWakeLowerPlanePort,
   type LowerPlaneWakeReadiness,
@@ -42,6 +44,8 @@ export const CONVERSATION_WAKE_LOWER_PLANE_AUTHORITY = {
   routeSelectedBeforePermit: true,
   selectedTransportBoundToPermit: true,
   fallbackRequiresPriorDeliveryReconciliation: true,
+  webUiInteractionBrokerRequired: true,
+  nativeRpcBypassesUiBroker: true,
   unknownFailsClosed: true,
 } as const;
 
@@ -57,6 +61,7 @@ export class ConversationWakeLowerPlane implements ExecutionWakeLowerPlanePort {
     readonly bindings: ConversationTargetBindingStore,
     readonly bridge: ConversationTransportBridgePort,
     readonly hostTurns: HostTurnLifecycleManager,
+    readonly webUiInteractions?: ConversationWebUiInteractionBrokerPort,
   ) {}
 
   async assessReadiness(input: {
@@ -188,6 +193,7 @@ export class ConversationWakeLowerPlane implements ExecutionWakeLowerPlanePort {
       bindingGeneration: binding.bindingGeneration,
       transportId: selected.transportId,
       transportKind: selected.kind,
+      conversationUrlDigestSha256: selected.conversationUrlDigestSha256,
       evidenceDigestSha256: status.evidenceDigestSha256,
     });
     const evidenceRefs = [...new Set([
@@ -296,6 +302,9 @@ export class ConversationWakeLowerPlane implements ExecutionWakeLowerPlanePort {
       ...hostTurnGate.evidenceRefs,
       ...hostTurnGate.authorityReadbackRefs,
       `host-turn-state-sha256:${hostTurnGate.stateDigestSha256}`,
+      ...(selected.conversationUrlDigestSha256
+        ? [`conversation-url-sha256:${selected.conversationUrlDigestSha256}`]
+        : []),
     ])].sort();
     const evidenceDigestSha256 = sha256(canonicalJson(combinedEvidenceRefs));
     return {
@@ -312,6 +321,7 @@ export class ConversationWakeLowerPlane implements ExecutionWakeLowerPlanePort {
         transportId: selected.transportId,
         transportKind: selected.kind,
         transportRouteDigestSha256: routeDigestSha256,
+        conversationUrlDigestSha256: selected.conversationUrlDigestSha256,
         operationalState:
           `transport_selected:${selected.kind};host_turn:${hostTurnGate.state}`,
         exactTargetVerified: selected.binding === "exact",
@@ -381,6 +391,16 @@ export class ConversationWakeLowerPlane implements ExecutionWakeLowerPlanePort {
     if (preflightFailure) {
       return failedNoEffect(permit, completedAt, preflightFailure);
     }
+    let prompt: string;
+    try {
+      prompt = materializeWakeContinuationBody(permit.envelope);
+    } catch {
+      return failedNoEffect(
+        permit,
+        completedAt,
+        "PERMIT_CONTINUATION_ENVELOPE_INVALID",
+      );
+    }
     const promptDigestSha256 = permit.envelope.bodyDigestSha256;
     const messageId = deterministicConversationMessageId({
       permitRef: permit.permitRef,
@@ -389,31 +409,116 @@ export class ConversationWakeLowerPlane implements ExecutionWakeLowerPlanePort {
       promptDigestSha256,
     });
     try {
-      const receipt = await this.bridge.deliver({
-        schemaVersion: 1,
-        command: "deliver",
-        targetAlias: binding.targetAlias,
-        targetRefDigestSha256: binding.bridgeTargetRefDigestSha256,
-        bindingRef: binding.bindingRef,
-        bindingGeneration: binding.bindingGeneration,
-        permitRef: permit.permitRef,
-        transportId: permit.transportId,
-        transportKind: permit.transportKind,
-        routeDigestSha256: permit.transportRouteDigestSha256,
-        messageId,
-        prompt: permit.envelope.body,
-        promptDigestSha256,
-      });
+      let receipt: ConversationBridgeDeliveryReceipt;
+      let interactionSessionRef = binding.bindingRef;
+      let interactionActionId: string | undefined;
+      let interactionVerificationRefs: string[] = [];
+      if (permit.transportKind === "web_ui") {
+        if (!this.webUiInteractions) {
+          return failedNoEffect(
+            permit,
+            completedAt,
+            "WEB_UI_INTERACTION_BROKER_UNAVAILABLE",
+          );
+        }
+        const interaction = await this.webUiInteractions.deliver({
+          permit,
+          binding,
+          prompt,
+          messageId,
+        });
+        interactionSessionRef = interaction.interactionSessionRef;
+        interactionActionId = interaction.interactionActionId;
+        interactionVerificationRefs = interaction.verificationRefs;
+        if (interaction.state === "no_effect") {
+          return {
+            schemaVersion: 1,
+            permitRef: permit.permitRef,
+            disposition: "failed_no_effect",
+            interactionSessionRef,
+            ...(interactionActionId ? { interactionActionId } : {}),
+            ...(interaction.receipt
+              ? { interactionReceiptRef: interaction.receipt.deliveryRef }
+              : {}),
+            noEffectProofRef:
+              interaction.receipt?.noEffectProofRef
+                ?? `interaction-no-effect:${sha256(canonicalJson({
+                  permitRef: permit.permitRef,
+                  interactionSessionRef,
+                  failureCode: interaction.failureCode,
+                }))}`,
+            verificationRefs: interactionVerificationRefs,
+            failureCode:
+              interaction.failureCode ?? "WEB_UI_INTERACTION_NO_EFFECT",
+            conversationUrlDigestSha256:
+              interaction.receipt?.conversationUrlDigestSha256
+                ?? permit.conversationUrlDigestSha256,
+            completedAt: interaction.receipt?.recordedAt ?? completedAt,
+          };
+        }
+        if (interaction.state === "indeterminate" || !interaction.receipt) {
+          const lifecycleEvidence = this.recordIndeterminateHostTurn(
+            permit,
+            binding,
+            interaction.receipt,
+            interaction.failureCode ?? "WEB_UI_INTERACTION_INDETERMINATE",
+          );
+          return {
+            schemaVersion: 1,
+            permitRef: permit.permitRef,
+            disposition: "indeterminate",
+            interactionSessionRef,
+            ...(interactionActionId ? { interactionActionId } : {}),
+            ...(interaction.receipt
+              ? { interactionReceiptRef: interaction.receipt.deliveryRef }
+              : {}),
+            verificationRefs: [...new Set([
+              ...interactionVerificationRefs,
+              ...lifecycleEvidence,
+            ])].sort(),
+            failureCode:
+              interaction.failureCode ?? "WEB_UI_INTERACTION_INDETERMINATE",
+            conversationUrlDigestSha256:
+              interaction.receipt?.conversationUrlDigestSha256
+                ?? permit.conversationUrlDigestSha256,
+            completedAt: interaction.receipt?.recordedAt ?? completedAt,
+          };
+        }
+        receipt = interaction.receipt;
+      } else {
+        receipt = await this.bridge.deliver({
+          schemaVersion: 1,
+          command: "deliver",
+          targetAlias: binding.targetAlias,
+          targetRefDigestSha256: binding.bridgeTargetRefDigestSha256,
+          bindingRef: binding.bindingRef,
+          bindingGeneration: binding.bindingGeneration,
+          permitRef: permit.permitRef,
+          transportId: permit.transportId,
+          transportKind: permit.transportKind,
+          routeDigestSha256: permit.transportRouteDigestSha256,
+          messageId,
+          prompt,
+          promptDigestSha256,
+          conversationUrlDigestSha256: permit.conversationUrlDigestSha256,
+        });
+      }
       if (receipt.state === "no_effect") {
         return {
           schemaVersion: 1,
           permitRef: permit.permitRef,
           disposition: "failed_no_effect",
-          interactionSessionRef: receipt.deliveryRef,
+          interactionSessionRef,
+          ...(interactionActionId ? { interactionActionId } : {}),
+          interactionReceiptRef: receipt.deliveryRef,
           noEffectProofRef:
             receipt.noEffectProofRef ?? `no-effect:${receipt.deliveryRef}`,
-          verificationRefs: receipt.verificationRefs,
+          verificationRefs: [...new Set([
+            ...interactionVerificationRefs,
+            ...receipt.verificationRefs,
+          ])].sort(),
           failureCode: receipt.failureCode,
+          conversationUrlDigestSha256: receipt.conversationUrlDigestSha256,
           completedAt: receipt.recordedAt,
         };
       }
@@ -428,14 +533,16 @@ export class ConversationWakeLowerPlane implements ExecutionWakeLowerPlanePort {
           schemaVersion: 1,
           permitRef: permit.permitRef,
           disposition: "indeterminate",
-          interactionSessionRef: receipt.deliveryRef,
-          interactionActionId: receipt.deliveryRef,
+          interactionSessionRef,
+          interactionActionId: interactionActionId ?? receipt.deliveryRef,
           interactionReceiptRef: receipt.deliveryRef,
           verificationRefs: [...new Set([
             ...receipt.verificationRefs,
+            ...interactionVerificationRefs,
             ...lifecycleEvidence,
           ])].sort(),
           failureCode: receipt.failureCode ?? "DELIVERY_NOT_FULLY_RECONCILED",
+          conversationUrlDigestSha256: receipt.conversationUrlDigestSha256,
           completedAt: receipt.recordedAt,
         };
       }
@@ -487,14 +594,16 @@ export class ConversationWakeLowerPlane implements ExecutionWakeLowerPlanePort {
           schemaVersion: 1,
           permitRef: permit.permitRef,
           disposition: "indeterminate",
-          interactionSessionRef: receipt.deliveryRef,
-          interactionActionId: receipt.deliveryRef,
+          interactionSessionRef,
+          interactionActionId: interactionActionId ?? receipt.deliveryRef,
           interactionReceiptRef: receipt.deliveryRef,
           verificationRefs: [...new Set([
             ...receipt.verificationRefs,
+            ...interactionVerificationRefs,
             ...lifecycleEvidence,
           ])].sort(),
           failureCode: "HOST_TURN_DURABILITY_FAILED_AFTER_DELIVERY",
+          conversationUrlDigestSha256: receipt.conversationUrlDigestSha256,
           completedAt: receipt.recordedAt,
         };
       }
@@ -502,12 +611,16 @@ export class ConversationWakeLowerPlane implements ExecutionWakeLowerPlanePort {
         schemaVersion: 1,
         permitRef: permit.permitRef,
         disposition: "verified",
-        interactionSessionRef: receipt.deliveryRef,
-        interactionActionId: receipt.deliveryRef,
+        interactionSessionRef,
+        interactionActionId: interactionActionId ?? receipt.deliveryRef,
         interactionReceiptRef: receipt.deliveryRef,
         promptAdmissionRef: receipt.itemRef,
         generationBoundaryRefAfter,
-        verificationRefs: receipt.verificationRefs,
+        conversationUrlDigestSha256: receipt.conversationUrlDigestSha256,
+        verificationRefs: [...new Set([
+          ...interactionVerificationRefs,
+          ...receipt.verificationRefs,
+        ])].sort(),
         completedAt: receipt.recordedAt,
       };
     } catch (error) {
@@ -528,12 +641,21 @@ export class ConversationWakeLowerPlane implements ExecutionWakeLowerPlanePort {
           ...lifecycleEvidence,
         ])].sort(),
         failureCode: "BRIDGE_DELIVERY_OUTCOME_UNKNOWN",
+        conversationUrlDigestSha256: permit.conversationUrlDigestSha256,
         completedAt,
       };
     }
   }
 
-  recordWakeReconciliation(input: WakeLowerPlaneReconciliationInput): void {
+  recordWakeReconciliation(input: WakeLowerPlaneReconciliationInput): string[] {
+    const interactionRefs = input.permit.transportKind === "web_ui"
+      ? this.webUiInteractions?.recordReconciliation(input)
+      : [];
+    if (input.permit.transportKind === "web_ui" && !interactionRefs) {
+      throw new Error(
+        "Web UI wake reconciliation requires the durable InteractionBroker.",
+      );
+    }
     const generationBoundaryRef = input.resolution === "effect_verified"
       ? input.generationBoundaryRefAfter
       : `reconciled-absent:${sha256(canonicalJson({
@@ -546,7 +668,7 @@ export class ConversationWakeLowerPlane implements ExecutionWakeLowerPlanePort {
         "Verified wake reconciliation requires a generation boundary after delivery.",
       );
     }
-    this.hostTurns.reconcileWakeDispatch({
+    const hostTurn = this.hostTurns.reconcileWakeDispatch({
       idempotencyKey:
         `host-turn-reconcile:${input.permit.permitRef}:${input.resolution}`,
       observerExecutionScopeRef: input.permit.actorScopeRef,
@@ -570,6 +692,12 @@ export class ConversationWakeLowerPlane implements ExecutionWakeLowerPlanePort {
       observedAt: input.observedAt,
       evidenceExpiresAt: boundedEvidenceExpiry(input.observedAt),
     });
+    return [...new Set([
+      ...(interactionRefs ?? []),
+      `host-turn:${hostTurn.value.hostTurnRef}`,
+      `host-turn-state:${hostTurn.value.state}`,
+      `host-turn-revision:${String(hostTurn.value.revision)}`,
+    ])].sort();
   }
 
   private async preflightPermit(
@@ -600,8 +728,13 @@ export class ConversationWakeLowerPlane implements ExecutionWakeLowerPlanePort {
         bindingGeneration: binding.bindingGeneration,
         transportId: selected.transportId,
         transportKind: selected.kind,
+        conversationUrlDigestSha256: selected.conversationUrlDigestSha256,
         evidenceDigestSha256: status.evidenceDigestSha256,
       });
+      if (selected.conversationUrlDigestSha256
+        !== permit.conversationUrlDigestSha256) {
+        return "PREFLIGHT_CONVERSATION_URL_BINDING_CHANGED";
+      }
       const classification = classifyConversationHostTurnLifecycle(
         selected.sessionLifecycle,
       );

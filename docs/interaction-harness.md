@@ -202,17 +202,21 @@ Implemented in this candidate:
 - fixed live-runtime probe;
 - focused behavioral tests.
 
-### Stage 2 — one Playwright broker
+### Stage 2 — one durable Playwright broker
 
 The provider-neutral broker contract is implemented in this candidate. It serializes an adapter with an expiring lease, uses compare-and-swap checkpoint persistence, saves `acting` before dispatch, saves outcome and verification after dispatch, blocks an externally busy adapter, and supports explicit execution-scope adoption with a handoff and authority-readback reference. Cross-scope adoption is not authorized by caller-supplied references alone: a configured external adoption verifier must validate the exact prior scope, target scope, handoff, and authority readback, and its verification reference is retained in scope lineage.
 
 An unsettled durable checkpoint is recovered as `indeterminate`. A failed pre-dispatch write restores the last durable checkpoint and performs no action. A failed post-dispatch write fences the broker, releases its lease when possible, and leaves the durable `acting` checkpoint for the next broker to recover and reconcile rather than allowing the current process to continue from ambiguous state. Before an observation, action, or verification, the broker renews the adapter lease beyond the operation's declared timeout plus a safety margin. The adapter is required to enforce that timeout; this prevents the ordinary lease from expiring while a long interaction is still in flight.
 
-Still required for live activation: implement the store against the existing DevSpace database and implement one broker-owned adapter process around the existing Playwright wrapper. The live adapter must not launch a competing extension client while Codex or another controller owns the current one.
+The durable store is now implemented in the existing DevSpace SQLite/WAL database. Lease claims, renewals, release tombstones, monotonic fencing generations, and checkpoint compare-and-swap are shared across database handles. Interaction payload text is not part of the store contract; persisted actions retain only bounded metadata and payload digests.
+
+The first production adapter seam is intentionally narrow: the fixed internal Conversation Transport `web_ui` wake actuator is wrapped by the durable broker. The broker owns the one shared Playwright serialization lease and saves `acting` before the privileged bridge may compose or submit. The bridge continues to use the already registered App Server-mediated Playwright connection and does not launch a competing extension client. Native RPC remains direct-first and does not create a browser broker checkpoint.
+
+An indeterminate Web UI wake is reconciled in the same SQLite transaction as the upper wake attempt and durable host-turn lifecycle. Exact effect-absent readback returns the broker checkpoint to `ready`; exact effect-verified readback advances it to `verified`. Neither path permits blind replay.
 
 ### Stage 3 — read-only MCP registration and durable store
 
-Register a fixed `zes_interaction_runtime_status` read-only tool first. Then persist interaction checkpoints and broker leases in the existing DevSpace database using the normal migration surface. Do not expose action tools until process-boundary and indeterminate-effect recovery tests pass against the broker.
+The durable store is present through the normal migration surface and is used by the fixed Conversation Transport wake path. A general `zes_interaction_runtime_status` projection remains a separate additive surface. Do not expose general-purpose action tools until process-boundary, lease-contention, restart, and indeterminate-effect recovery tests pass against every production adapter. The internal Web UI wake actuator does not make raw Playwright execution, arbitrary selectors, or browser credentials callable from MCP.
 
 ### Stage 4 — browser action surface
 

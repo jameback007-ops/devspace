@@ -58,6 +58,11 @@ export interface ConversationTransportObservation {
   reconciliation: ConversationReconciliationCapability;
   surfaceTrust: ConversationSurfaceTrust;
   sessionLifecycle: string;
+  /**
+   * Digest of the exact normalized browser conversation URL observed under an
+   * attested Web UI binding. Native and local-agent routes must omit it.
+   */
+  conversationUrlDigestSha256?: string;
   evidenceRefs: readonly string[];
 }
 

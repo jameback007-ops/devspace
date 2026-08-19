@@ -18,6 +18,8 @@ export const EXECUTION_WAKE_COORDINATION_AUTHORITY = {
   tierOneMayRegenerate: false,
   tierOneMayReload: false,
   tierOneMayOpenDuplicateConversation: false,
+  rawContinuationPromptPersisted: false,
+  continuationPromptMaterializedAtDispatch: true,
 } as const;
 
 export type WakePriority = "low" | "normal" | "high" | "urgent";
@@ -112,6 +114,7 @@ export interface LowerPlaneWakeReadiness {
   transportId?: string;
   transportKind?: "native_rpc" | "local_agent" | "web_ui";
   transportRouteDigestSha256?: string;
+  conversationUrlDigestSha256?: string;
   operationalState: string;
   exactTargetVerified: boolean;
   selectorContractVerified: boolean;
@@ -130,7 +133,7 @@ export interface LowerPlaneWakeReadiness {
 }
 
 export interface WakeContinuationEnvelope {
-  schemaVersion: 1;
+  schemaVersion: 2;
   envelopeRef: string;
   targetExecutionScopeRef: string;
   missionRef: string;
@@ -142,11 +145,31 @@ export interface WakeContinuationEnvelope {
   taskRefs: string[];
   messageRefs: string[];
   workItemRefs: string[];
-  body: string;
+  bodyTemplate: "zes_a2a_continuation_v1";
+  listedReferences: string[];
   bodyDigestSha256: string;
   createdAt: string;
   authority: typeof EXECUTION_WAKE_COORDINATION_AUTHORITY;
 }
+
+/**
+ * Read compatibility for wake attempts persisted before rendered continuation
+ * prompts were removed from durable state. New code never constructs this
+ * shape. The upgrade path accepts it only when the body is the exact known
+ * deterministic template and its digest still matches.
+ */
+export interface LegacyWakeContinuationEnvelopeV1
+  extends Omit<
+    WakeContinuationEnvelope,
+    "schemaVersion" | "bodyTemplate" | "listedReferences"
+  > {
+  schemaVersion: 1;
+  body: string;
+}
+
+export type PersistedWakeContinuationEnvelope =
+  | WakeContinuationEnvelope
+  | LegacyWakeContinuationEnvelopeV1;
 
 export interface WakePermit {
   schemaVersion: 1;
@@ -166,6 +189,7 @@ export interface WakePermit {
   transportId?: string;
   transportKind?: "native_rpc" | "local_agent" | "web_ui";
   transportRouteDigestSha256?: string;
+  conversationUrlDigestSha256?: string;
   observationRef: string;
   evidenceDigestSha256: string;
   generationBoundaryRefBefore?: string;
@@ -181,7 +205,7 @@ export interface WakePermit {
     "publish",
     "repeat_external_effect",
   ];
-  envelope: WakeContinuationEnvelope;
+  envelope: PersistedWakeContinuationEnvelope;
   issuedAt: string;
   expiresAt: string;
   authority: typeof EXECUTION_WAKE_COORDINATION_AUTHORITY;
@@ -196,6 +220,7 @@ export interface WakeLowerPlaneDispatchResult {
   interactionReceiptRef?: string;
   promptAdmissionRef?: string;
   generationBoundaryRefAfter?: string;
+  conversationUrlDigestSha256?: string;
   noEffectProofRef?: string;
   verificationRefs: string[];
   failureCode?: string;
@@ -325,7 +350,9 @@ export interface ExecutionWakeLowerPlanePort {
 
   consumeWakePermit(permit: WakePermit): Promise<WakeLowerPlaneDispatchResult>;
 
-  recordWakeReconciliation?(input: WakeLowerPlaneReconciliationInput): void;
+  recordWakeReconciliation?(
+    input: WakeLowerPlaneReconciliationInput,
+  ): string[] | void;
 }
 
 export function pendingWorkSemanticDigest(input: {
@@ -369,22 +396,13 @@ export function buildWakeContinuationEnvelope(input: {
     1,
     Math.min(100, Math.floor(input.maximumListedReferences ?? 20)),
   );
-  const listedReferences = [
+  const listedReferences = [...new Set([
     ...taskRefs,
     ...messageRefs,
     ...workItemRefs,
-  ].slice(0, maximumListedReferences);
-  const body = [
-    `[ZES-A2A continuation ${input.pendingWork.correlationRef}]`,
-    `Durable coordination work generation ${input.pendingWork.generation} is pending for mission ${input.pendingWork.missionRef}.`,
-    "Read the current execution-coordination status and inbox, reconcile the exact workspace/runtime/authority state, then continue only the rightful pending work.",
-    "Do not infer completion from silence. Do not repeat an external effect or publish without current authority readback, effect reconciliation, and the existing publication gate.",
-    listedReferences.length > 0
-      ? `Pending references: ${listedReferences.join(", ")}`
-      : undefined,
-  ].filter((line): line is string => line !== undefined).join("\n");
-  return {
-    schemaVersion: 1,
+  ])].slice(0, maximumListedReferences);
+  const envelope = {
+    schemaVersion: 2 as const,
     envelopeRef: input.envelopeRef,
     targetExecutionScopeRef: input.pendingWork.targetExecutionScopeRef,
     missionRef: input.pendingWork.missionRef,
@@ -396,11 +414,64 @@ export function buildWakeContinuationEnvelope(input: {
     taskRefs,
     messageRefs,
     workItemRefs,
-    body,
-    bodyDigestSha256: sha256(body),
+    bodyTemplate: "zes_a2a_continuation_v1" as const,
+    listedReferences,
+    bodyDigestSha256: "",
     createdAt: normalizeIso(input.createdAt, "createdAt"),
     authority: EXECUTION_WAKE_COORDINATION_AUTHORITY,
   };
+  const body = renderWakeContinuationBody(envelope);
+  return {
+    ...envelope,
+    bodyDigestSha256: sha256(body),
+  };
+}
+
+/**
+ * Reconstruct the bounded continuation prompt only at the lower-plane effect
+ * boundary. Durable attempts keep the deterministic template inputs and digest,
+ * never the rendered prompt text.
+ */
+export function materializeWakeContinuationBody(
+  envelope: PersistedWakeContinuationEnvelope,
+): string {
+  const current = envelope.schemaVersion === 1
+    ? upgradeLegacyWakeContinuationEnvelope(envelope)
+    : envelope;
+  const body = renderWakeContinuationBody(current);
+  if (sha256(body) !== envelope.bodyDigestSha256) {
+    throw new Error("Wake continuation envelope body digest does not match its metadata.");
+  }
+  return body;
+}
+
+export function upgradeLegacyWakeContinuationEnvelope(
+  envelope: LegacyWakeContinuationEnvelopeV1,
+): WakeContinuationEnvelope {
+  if (sha256(envelope.body) !== envelope.bodyDigestSha256) {
+    throw new Error("Legacy wake continuation body digest does not match its persisted body.");
+  }
+  const orderedReferences = [
+    ...envelope.taskRefs,
+    ...envelope.messageRefs,
+    ...envelope.workItemRefs,
+  ];
+  const maximumCandidateCount = Math.min(100, orderedReferences.length);
+  const { body: legacyBody, ...metadata } = envelope;
+  for (let count = 0; count <= maximumCandidateCount; count += 1) {
+    const candidate: WakeContinuationEnvelope = {
+      ...metadata,
+      schemaVersion: 2,
+      bodyTemplate: "zes_a2a_continuation_v1",
+      listedReferences: orderedReferences.slice(0, count),
+    };
+    if (renderWakeContinuationBody(candidate) === legacyBody) {
+      return candidate;
+    }
+  }
+  throw new Error(
+    "Legacy wake continuation body is not the exact supported deterministic template.",
+  );
 }
 
 export function wakeKey(input: {
@@ -414,6 +485,7 @@ export function wakeKey(input: {
   transportId?: string;
   transportKind?: string;
   transportRouteDigestSha256?: string;
+  conversationUrlDigestSha256?: string;
   hostTurnStateDigestSha256?: string;
   hostTurnGeneration?: number;
   hostTurnRevision?: number;
@@ -498,6 +570,13 @@ export function validateLowerPlaneReadiness(
       reasons.add("TRANSPORT_ROUTE_DIGEST_INVALID");
     }
   }
+  if (readiness.transportKind === "web_ui") {
+    if (!/^[a-f0-9]{64}$/.test(readiness.conversationUrlDigestSha256 ?? "")) {
+      reasons.add("WEB_UI_CONVERSATION_URL_DIGEST_INVALID_OR_MISSING");
+    }
+  } else if (readiness.conversationUrlDigestSha256 !== undefined) {
+    reasons.add("CONVERSATION_URL_DIGEST_UNEXPECTED_FOR_NON_WEB_UI_ROUTE");
+  }
   if (readiness.evidenceRefs.length === 0) {
     reasons.add("LOWER_PLANE_EVIDENCE_REFS_MISSING");
   }
@@ -529,6 +608,14 @@ export function validateVerifiedDispatchResult(
     if (permit.generationBoundaryRefBefore
       && result.generationBoundaryRefAfter === permit.generationBoundaryRefBefore) {
       reasons.add("GENERATION_BOUNDARY_DID_NOT_ADVANCE");
+    }
+    if (permit.transportKind === "web_ui") {
+      if (result.conversationUrlDigestSha256
+        !== permit.conversationUrlDigestSha256) {
+        reasons.add("CONVERSATION_URL_DIGEST_RECEIPT_MISMATCH");
+      }
+    } else if (result.conversationUrlDigestSha256 !== undefined) {
+      reasons.add("CONVERSATION_URL_DIGEST_RECEIPT_UNEXPECTED");
     }
   } else if (result.disposition === "failed_no_effect") {
     if (!result.noEffectProofRef) reasons.add("NO_EFFECT_PROOF_REF_MISSING");
@@ -571,6 +658,40 @@ export function sha256(value: string): string {
 
 export function uniqueSorted(values: string[]): string[] {
   return [...new Set(values)].sort();
+}
+
+function renderWakeContinuationBody(input: {
+  bodyTemplate: WakeContinuationEnvelope["bodyTemplate"];
+  correlationRef: string;
+  pendingWorkGeneration: number;
+  missionRef: string;
+  taskRefs: string[];
+  messageRefs: string[];
+  workItemRefs: string[];
+  listedReferences: string[];
+}): string {
+  if (input.bodyTemplate !== "zes_a2a_continuation_v1") {
+    throw new Error(`Unsupported wake continuation body template: ${String(input.bodyTemplate)}.`);
+  }
+  const allowedReferences = new Set([
+    ...input.taskRefs,
+    ...input.messageRefs,
+    ...input.workItemRefs,
+  ]);
+  const listedReferences = [...input.listedReferences];
+  if (listedReferences.length > 100
+    || listedReferences.some((reference) => !allowedReferences.has(reference))) {
+    throw new Error("Wake continuation envelope listed references are invalid.");
+  }
+  return [
+    `[ZES-A2A continuation ${input.correlationRef}]`,
+    `Durable coordination work generation ${input.pendingWorkGeneration} is pending for mission ${input.missionRef}.`,
+    "Read the current execution-coordination status and inbox, reconcile the exact workspace/runtime/authority state, then continue only the rightful pending work.",
+    "Do not infer completion from silence. Do not repeat an external effect or publish without current authority readback, effect reconciliation, and the existing publication gate.",
+    listedReferences.length > 0
+      ? `Pending references: ${listedReferences.join(", ")}`
+      : undefined,
+  ].filter((line): line is string => line !== undefined).join("\n");
 }
 
 function normalizeIso(value: string, name: string): string {

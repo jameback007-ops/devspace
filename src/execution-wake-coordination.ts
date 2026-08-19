@@ -8,6 +8,7 @@ import {
   buildWakeContinuationEnvelope,
   canonicalJson,
   isWakeAttemptTerminal,
+  materializeWakeContinuationBody,
   pendingWorkSemanticDigest,
   sha256,
   uniqueSorted,
@@ -714,7 +715,8 @@ export class ExecutionWakeCoordinationManager {
         }
       }
 
-      this.lowerPlane.recordWakeReconciliation?.({
+      const lowerPlaneReconciliationRefs =
+        this.lowerPlane.recordWakeReconciliation?.({
         permit: current.permit,
         resolution: normalized.resolution,
         interactionReconciliationRef: normalized.interactionReconciliationRef,
@@ -724,7 +726,7 @@ export class ExecutionWakeCoordinationManager {
         generationBoundaryRefAfter: normalized.generationBoundaryRefAfter,
         verificationRefs: normalized.verificationRefs,
         observedAt: iso(nowMs),
-      });
+      }) ?? [];
 
       const nextState: WakeAttemptState = normalized.resolution === "effect_verified"
         ? "reconciled_effect_verified"
@@ -748,9 +750,12 @@ export class ExecutionWakeCoordinationManager {
               interactionReceiptRef: current.lowerPlaneResult?.interactionReceiptRef,
               promptAdmissionRef: normalized.promptAdmissionRef,
               generationBoundaryRefAfter: normalized.generationBoundaryRefAfter,
+              conversationUrlDigestSha256:
+                current.permit.conversationUrlDigestSha256,
               verificationRefs: uniqueSorted([
                 ...(current.lowerPlaneResult?.verificationRefs ?? []),
                 ...normalized.verificationRefs,
+                ...lowerPlaneReconciliationRefs,
               ]),
               completedAt: iso(nowMs),
             }
@@ -760,8 +765,15 @@ export class ExecutionWakeCoordinationManager {
               disposition: "failed_no_effect",
               interactionSessionRef: current.lowerPlaneResult?.interactionSessionRef
                 ?? current.permit.sessionUiBindingRef,
+              interactionActionId: current.lowerPlaneResult?.interactionActionId,
+              interactionReceiptRef: current.lowerPlaneResult?.interactionReceiptRef,
               noEffectProofRef: normalized.effectReadbackRef,
-              verificationRefs: normalized.verificationRefs,
+              conversationUrlDigestSha256:
+                current.permit.conversationUrlDigestSha256,
+              verificationRefs: uniqueSorted([
+                ...normalized.verificationRefs,
+                ...lowerPlaneReconciliationRefs,
+              ]),
               completedAt: iso(nowMs),
             },
         updatedAt: iso(nowMs),
@@ -1167,7 +1179,8 @@ export class ExecutionWakeCoordinationManager {
         pendingWork: currentPending,
         createdAt: nowIso,
       });
-      if (envelope.body.length > this.config.maxContinuationBodyCharacters) {
+      if (materializeWakeContinuationBody(envelope).length
+        > this.config.maxContinuationBodyCharacters) {
         throw new Error("Wake continuation envelope exceeds the configured body limit.");
       }
       const computedWakeKey = wakeKey({
@@ -1181,6 +1194,7 @@ export class ExecutionWakeCoordinationManager {
         transportId: readiness.transportId,
         transportKind: readiness.transportKind,
         transportRouteDigestSha256: readiness.transportRouteDigestSha256,
+        conversationUrlDigestSha256: readiness.conversationUrlDigestSha256,
         hostTurnStateDigestSha256: readiness.hostTurnGate?.stateDigestSha256,
         hostTurnGeneration: readiness.hostTurnGate?.hostTurnGeneration,
         hostTurnRevision: readiness.hostTurnGate?.hostTurnRevision,
@@ -1207,6 +1221,7 @@ export class ExecutionWakeCoordinationManager {
         transportId: readiness.transportId,
         transportKind: readiness.transportKind,
         transportRouteDigestSha256: readiness.transportRouteDigestSha256,
+        conversationUrlDigestSha256: readiness.conversationUrlDigestSha256,
         observationRef: readiness.observationRef,
         evidenceDigestSha256: readiness.evidenceDigestSha256,
         generationBoundaryRefBefore: readiness.generationBoundaryRefBefore,

@@ -11,6 +11,10 @@ import {
   type ConversationTransportBridgePort,
 } from "./conversation-transport-bridge-client.js";
 import { ConversationTargetBindingStore } from "./conversation-target-binding-store.js";
+import {
+  ConversationWebUiInteractionBroker,
+  type ConversationWebUiInteractionBrokerPort,
+} from "./conversation-web-ui-interaction-broker.js";
 import { ConversationWakeLowerPlane } from "./conversation-wake-lower-plane.js";
 import {
   DEFAULT_EXECUTION_WAKE_COORDINATION_CONFIG,
@@ -23,6 +27,10 @@ import {
   type HostTurnLifecycleConfig,
 } from "./host-turn-lifecycle.js";
 import type { ExecutionScopeIdentity } from "./request-meta.js";
+import {
+  SqliteInteractionBrokerStore,
+  type DurableInteractionBrokerStore,
+} from "./interaction-broker-store.js";
 
 type AppToolRegistrar = typeof registerAppToolType;
 
@@ -63,6 +71,8 @@ export interface ConversationTransportRuntimeOptions {
   bindings?: ConversationTargetBindingStore;
   hostTurnConfig?: HostTurnLifecycleConfig;
   hostTurnManager?: HostTurnLifecycleManager;
+  interactionBrokerStore?: DurableInteractionBrokerStore;
+  webUiInteractions?: ConversationWebUiInteractionBrokerPort;
   wakeConfig?: ExecutionWakeCoordinationConfig;
   wakeManager?: ExecutionWakeCoordinationManager;
 }
@@ -72,6 +82,8 @@ export class ConversationTransportRuntime {
   readonly bridge: ConversationTransportBridgePort;
   readonly bindings: ConversationTargetBindingStore;
   readonly hostTurns: HostTurnLifecycleManager;
+  readonly interactionBrokerStore: DurableInteractionBrokerStore;
+  readonly webUiInteractions: ConversationWebUiInteractionBrokerPort;
   readonly lowerPlane: ConversationWakeLowerPlane;
   readonly wakeManager: ExecutionWakeCoordinationManager;
   private readonly ownsDatabase: boolean;
@@ -97,11 +109,19 @@ export class ConversationTransportRuntime {
       { database: this.database },
     );
     this.ownsHostTurns = options.hostTurnManager === undefined;
+    this.interactionBrokerStore = options.interactionBrokerStore
+      ?? new SqliteInteractionBrokerStore(this.database);
+    this.webUiInteractions = options.webUiInteractions
+      ?? new ConversationWebUiInteractionBroker(
+        this.interactionBrokerStore,
+        this.bridge,
+      );
     this.lowerPlane = new ConversationWakeLowerPlane(
       config,
       this.bindings,
       this.bridge,
       this.hostTurns,
+      this.webUiInteractions,
     );
     this.wakeManager = options.wakeManager ?? new ExecutionWakeCoordinationManager(
       options.wakeConfig ?? DEFAULT_EXECUTION_WAKE_COORDINATION_CONFIG,
@@ -315,7 +335,7 @@ export function registerConversationTransportTools(
     {
       title: "Execute one permit-bound conversation wake",
       description:
-        "Select an attested direct-first route, bind its transport ID and route digest into a short-lived wake permit, persist the attempt before dispatch, deliver through the bounded bridge, and reconcile the exact prompt admission. This may send one prompt and is disabled unless conversation transport effects are explicitly enabled.",
+        "Select an attested direct-first route, bind its transport ID and route digest into a short-lived wake permit, and persist the attempt before dispatch. Native RPC delivers through the bounded bridge directly. Web UI delivery additionally requires the durable single-client InteractionBroker lease and checkpoint before the bridge may compose or submit the prompt. This may send one prompt and is disabled unless conversation transport effects are explicitly enabled.",
       inputSchema: {
         idempotencyKey: z.string().min(1).max(200),
         targetExecutionScopeRef: z.string().regex(/^[a-f0-9]{16}$/),

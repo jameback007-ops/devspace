@@ -11,6 +11,7 @@ import {
 } from "./execution-wake-coordination.js";
 import {
   EXECUTION_WAKE_COORDINATION_AUTHORITY,
+  materializeWakeContinuationBody,
   sha256,
   type ExecutionWakeLowerPlanePort,
   type LowerPlaneWakeReadiness,
@@ -373,7 +374,11 @@ test("verified wake persists before dispatch, admits one prompt, and never repea
     "publish",
     "repeat_external_effect",
   ]);
-  assert.match(permit.envelope.body, /Do not infer completion from silence/i);
+  const materializedPrompt = materializeWakeContinuationBody(permit.envelope);
+  assert.match(materializedPrompt, /Do not infer completion from silence/i);
+  assert.equal(permit.envelope.schemaVersion, 2);
+  assert.equal("body" in permit.envelope, false);
+  assert.equal(sha256(materializedPrompt), permit.envelope.bodyDigestSha256);
 
   const status = context.manager.status(
     context.orchestrator,
@@ -382,6 +387,28 @@ test("verified wake persists before dispatch, admits one prompt, and never repea
   );
   assert.equal(status.currentPendingWork?.state, "wake_verified");
   assert.equal(status.attempts[0]?.state, "verified");
+  assert.doesNotMatch(
+    JSON.stringify(status.attempts),
+    /Do not infer completion from silence/i,
+  );
+  const database = openDatabase(context.stateDir);
+  try {
+    const row = database.sqlite.prepare(`
+      select payload_json from execution_wake_attempts where attempt_id = ?
+    `).get(result.attempt?.attemptId) as { payload_json: string } | undefined;
+    assert.ok(row);
+    const persisted = JSON.parse(row.payload_json) as {
+      permit?: { envelope?: Record<string, unknown> };
+    };
+    assert.equal(persisted.permit?.envelope?.schemaVersion, 2);
+    assert.equal(persisted.permit?.envelope?.body, undefined);
+    assert.doesNotMatch(
+      row.payload_json,
+      /Do not infer completion from silence/i,
+    );
+  } finally {
+    database.close();
+  }
 
   const replay = await context.manager.executeWake(context.orchestrator, {
     idempotencyKey: "wake:verified",

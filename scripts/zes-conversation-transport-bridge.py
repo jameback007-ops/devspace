@@ -238,6 +238,7 @@ def open_ledger(state_dir: Path) -> sqlite3.Connection:
           route_digest_sha256 text not null,
           message_id text not null unique,
           prompt_digest_sha256 text not null,
+          conversation_url_digest_sha256 text,
           state text not null,
           turn_ref text,
           item_ref text,
@@ -250,6 +251,14 @@ def open_ledger(state_dir: Path) -> sqlite3.Connection:
         )
         """
     )
+    columns = {
+        row[1]
+        for row in connection.execute("pragma table_info(deliveries)").fetchall()
+    }
+    if "conversation_url_digest_sha256" not in columns:
+        connection.execute(
+            "alter table deliveries add column conversation_url_digest_sha256 text"
+        )
     return connection
 
 
@@ -447,6 +456,10 @@ class Bridge:
             limitations.append("WEB_UI_EXACT_TARGET_NOT_VERIFIED")
         if exact and not actionable:
             limitations.append("WEB_UI_NOT_ACTIONABLE")
+        if exact:
+            evidence.append(
+                f"conversation-url-sha256:{web['conversationUrlDigestSha256']}"
+            )
         candidate = self._candidate(
             target,
             transport_id,
@@ -458,6 +471,9 @@ class Bridge:
             reconciliation="available" if tools_ready else "unavailable",
             surface_trust="ui_contract",
             lifecycle="responsive_idle" if actionable else "not_actionable",
+            conversation_url_digest_sha256=(
+                web["conversationUrlDigestSha256"] if exact else None
+            ),
             evidence=evidence,
         )
         return candidate, limitations, evidence
@@ -575,6 +591,7 @@ class Bridge:
         reconciliation: str,
         surface_trust: str,
         lifecycle: str,
+        conversation_url_digest_sha256: str | None = None,
         evidence: list[str],
     ) -> dict[str, Any]:
         return {
@@ -588,6 +605,11 @@ class Bridge:
             "reconciliation": reconciliation,
             "surfaceTrust": surface_trust,
             "sessionLifecycle": lifecycle,
+            **(
+                {"conversationUrlDigestSha256": conversation_url_digest_sha256}
+                if conversation_url_digest_sha256 is not None
+                else {}
+            ),
             "evidenceRefs": sorted(set(evidence)),
         }
 
@@ -666,9 +688,10 @@ class Bridge:
                     insert into deliveries (
                       delivery_ref, permit_ref, target_alias, target_ref_digest_sha256,
                       binding_ref, binding_generation, transport_id, transport_kind,
-                      route_digest_sha256, message_id, prompt_digest_sha256, state,
-                      attempts, created_at, updated_at
-                    ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'sending', 1, ?, ?)
+                      route_digest_sha256, message_id, prompt_digest_sha256,
+                      conversation_url_digest_sha256, state, attempts,
+                      created_at, updated_at
+                    ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'sending', 1, ?, ?)
                     on conflict(message_id) do update set
                       state='sending', attempts=attempts+1, updated_at=excluded.updated_at,
                       failure_code=null
@@ -685,6 +708,7 @@ class Bridge:
                         normalized["routeDigestSha256"],
                         normalized["messageId"],
                         normalized["promptDigestSha256"],
+                        normalized.get("conversationUrlDigestSha256"),
                         now,
                         now,
                     ),
@@ -746,13 +770,60 @@ class Bridge:
         prompt = require_string(request.get("prompt"), "prompt", maximum=MAX_PROMPT_CHARACTERS)
         if sha256(prompt) != normalized["promptDigestSha256"]:
             raise BridgeError("PROMPT_DIGEST_MISMATCH", "Prompt digest does not match")
+        conversation_url_digest = request.get("conversationUrlDigestSha256")
+        if transport_kind == "web_ui":
+            normalized_url_digest = require_sha256(
+                conversation_url_digest,
+                "conversationUrlDigestSha256",
+            )
+            web = target.get("webUi")
+            if not isinstance(web, dict) or normalized_url_digest != web.get(
+                "conversationUrlDigestSha256"
+            ):
+                raise BridgeError(
+                    "CONVERSATION_URL_BINDING_STALE",
+                    "Web UI conversation URL binding changed",
+                    "forbidden",
+                )
+            normalized["conversationUrlDigestSha256"] = normalized_url_digest
+        elif conversation_url_digest is not None:
+            raise BridgeError(
+                "CONVERSATION_URL_BINDING_UNEXPECTED",
+                "Native delivery must not carry a browser conversation URL digest",
+                "forbidden",
+            )
         normalized["transportKind"] = transport_kind
         normalized["prompt"] = prompt
         return target, normalized
 
     def _validate_reconcile_request(self, request: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
         target, normalized = self._validate_common(request)
-        normalized["transportKind"] = request.get("transportKind", "native_rpc")
+        transport_kind = request.get("transportKind")
+        if transport_kind not in {"native_rpc", "web_ui"}:
+            raise BridgeError("INVALID_REQUEST", "transportKind is unsupported")
+        conversation_url_digest = request.get("conversationUrlDigestSha256")
+        if transport_kind == "web_ui":
+            normalized_url_digest = require_sha256(
+                conversation_url_digest,
+                "conversationUrlDigestSha256",
+            )
+            web = target.get("webUi")
+            if not isinstance(web, dict) or normalized_url_digest != web.get(
+                "conversationUrlDigestSha256"
+            ):
+                raise BridgeError(
+                    "CONVERSATION_URL_BINDING_STALE",
+                    "Web UI conversation URL binding changed",
+                    "forbidden",
+                )
+            normalized["conversationUrlDigestSha256"] = normalized_url_digest
+        elif conversation_url_digest is not None:
+            raise BridgeError(
+                "CONVERSATION_URL_BINDING_UNEXPECTED",
+                "Native reconciliation must not carry a browser conversation URL digest",
+                "forbidden",
+            )
+        normalized["transportKind"] = transport_kind
         return target, normalized
 
     def _deliver_native(self, ledger: sqlite3.Connection, target: dict[str, Any], request: dict[str, Any]) -> dict[str, Any]:
@@ -999,8 +1070,12 @@ class Bridge:
             "binding_ref": request["bindingRef"],
             "binding_generation": request["bindingGeneration"],
             "transport_id": request["transportId"],
+            "transport_kind": request["transportKind"],
             "route_digest_sha256": request["routeDigestSha256"],
             "prompt_digest_sha256": request["promptDigestSha256"],
+            "conversation_url_digest_sha256": request.get(
+                "conversationUrlDigestSha256"
+            ),
         }
         if any(existing.get(key) != value for key, value in checks.items()):
             raise BridgeError(
@@ -1079,6 +1154,15 @@ class Bridge:
             "routeDigestSha256": request.get("routeDigestSha256", "0" * 64),
             "messageId": request.get("messageId", "unissued"),
             "promptDigestSha256": request.get("promptDigestSha256", "0" * 64),
+            **(
+                {
+                    "conversationUrlDigestSha256": request[
+                        "conversationUrlDigestSha256"
+                    ]
+                }
+                if request.get("conversationUrlDigestSha256") is not None
+                else {}
+            ),
             "state": "no_effect",
             "deliveryRef": f"ctd_{sha256(str(request.get('messageId', code)))[:32]}",
             "noEffectProofRef": digest_ref("no-effect", code, str(request.get("permitRef", ""))),
@@ -1094,16 +1178,25 @@ class Bridge:
         verification_refs: list[str] | None = None,
     ) -> dict[str, Any]:
         refs = verification_refs or [f"ledger-state:{row['state']}"]
+        target = self.target(row["target_alias"])
+        conversation_url_digest = row.get("conversation_url_digest_sha256")
+        if conversation_url_digest is not None:
+            refs = [*refs, f"conversation-url-sha256:{conversation_url_digest}"]
         receipt = {
             "schemaVersion": 1,
             "targetAlias": row["target_alias"],
-            "targetKind": self.target(row["target_alias"])["targetKind"],
+            "targetKind": target["targetKind"],
             "permitRef": row["permit_ref"],
             "transportId": row["transport_id"],
             "transportKind": row["transport_kind"],
             "routeDigestSha256": row["route_digest_sha256"],
             "messageId": row["message_id"],
             "promptDigestSha256": row["prompt_digest_sha256"],
+            **(
+                {"conversationUrlDigestSha256": conversation_url_digest}
+                if conversation_url_digest is not None
+                else {}
+            ),
             "state": row["state"],
             "deliveryRef": row["delivery_ref"],
             "verificationRefs": sorted(set(refs)),
@@ -1133,7 +1226,7 @@ def route_digest(
     transport: dict[str, Any],
     evidence_digest: str,
 ) -> str:
-    return sha256(canonical_json({
+    payload = {
         "bindingGeneration": binding_generation,
         "bindingRef": binding_ref,
         "evidenceDigestSha256": evidence_digest,
@@ -1142,7 +1235,11 @@ def route_digest(
         "targetRefDigestSha256": target_ref_digest,
         "transportId": transport["transportId"],
         "transportKind": transport["kind"],
-    }))
+    }
+    conversation_url_digest = transport.get("conversationUrlDigestSha256")
+    if conversation_url_digest is not None:
+        payload["conversationUrlDigestSha256"] = conversation_url_digest
+    return sha256(canonical_json(payload))
 
 
 def extract_tool_json(result: dict[str, Any]) -> dict[str, Any]:

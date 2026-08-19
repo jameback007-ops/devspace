@@ -46,6 +46,52 @@ class FakeRpc:
         raise AssertionError(f"unexpected RPC method: {method}")
 
 
+class FakeWebRpc:
+    def __init__(self, normalized_url: str) -> None:
+        self.normalized_url = normalized_url
+
+    def __enter__(self) -> "FakeWebRpc":
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        return None
+
+    def initialize(self) -> dict[str, object]:
+        return {"userAgent": "codex-app-server-web-test"}
+
+    def request(self, method: str, params: dict[str, object]) -> dict[str, object]:
+        if method == "mcpServerStatus/list":
+            return {
+                "data": [
+                    {
+                        "name": "playwright",
+                        "tools": {
+                            "browser_evaluate": {},
+                            "browser_wait_for": {},
+                        },
+                    }
+                ]
+            }
+        if method == "mcpServer/tool/call":
+            assert params["tool"] == "browser_evaluate"
+            observation = {
+                "normalizedUrl": self.normalized_url,
+                "visible": True,
+                "composerCount": 1,
+                "composerEmpty": True,
+                "submitCount": 1,
+                "generationInProgress": False,
+                "accountWarningPresent": False,
+                "assistantCount": 4,
+            }
+            return {
+                "structuredContent": {
+                    "result": json.dumps(observation, sort_keys=True),
+                }
+            }
+        raise AssertionError(f"unexpected RPC method: {method}")
+
+
 def make_bridge(target: dict[str, object]) -> object:
     instance = bridge_module.Bridge.__new__(bridge_module.Bridge)
     instance.config = {
@@ -111,7 +157,54 @@ class ConversationTransportBridgeTests(unittest.TestCase):
         self.assertNotIn("prompt", columns)
         self.assertNotIn("message", columns)
         self.assertIn("prompt_digest_sha256", columns)
+        self.assertIn("conversation_url_digest_sha256", columns)
         self.assertIn("message_id", columns)
+
+    def test_legacy_delivery_ledger_adds_the_url_digest_column_in_place(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="zes-bridge-legacy-ledger-") as root:
+            root_path = Path(root)
+            database_path = root_path / "bridge.sqlite3"
+            connection = sqlite3.connect(database_path)
+            connection.execute(
+                """
+                create table deliveries (
+                  delivery_ref text primary key,
+                  permit_ref text not null,
+                  target_alias text not null,
+                  target_ref_digest_sha256 text not null,
+                  binding_ref text not null,
+                  binding_generation integer not null,
+                  transport_id text not null,
+                  transport_kind text not null,
+                  route_digest_sha256 text not null,
+                  message_id text not null unique,
+                  prompt_digest_sha256 text not null,
+                  state text not null,
+                  turn_ref text,
+                  item_ref text,
+                  generation_boundary_ref_after text,
+                  failure_code text,
+                  attempts integer not null default 0,
+                  created_at text not null,
+                  updated_at text not null,
+                  unique(permit_ref, transport_id)
+                )
+                """
+            )
+            connection.commit()
+            connection.close()
+
+            migrated = bridge_module.open_ledger(root_path)
+            try:
+                columns = {
+                    row[1]
+                    for row in migrated.execute(
+                        "pragma table_info(deliveries)"
+                    ).fetchall()
+                }
+            finally:
+                migrated.close()
+        self.assertIn("conversation_url_digest_sha256", columns)
 
     def test_route_digest_is_order_stable_and_binds_transport(self) -> None:
         transport = {
@@ -142,6 +235,142 @@ class ConversationTransportBridgeTests(unittest.TestCase):
             evidence_digest="b" * 64,
         )
         self.assertNotEqual(digest, changed)
+
+    def test_web_ui_status_and_route_bind_the_exact_url_digest_without_exposing_url(self) -> None:
+        normalized_url = "https://chatgpt.com/c/opaque-conversation-ref"
+        conversation_url_digest = bridge_module.sha256(normalized_url)
+        target = {
+            "targetAlias": "chat-canary",
+            "targetKind": "chatgpt_chat",
+            "bindingGeneration": 3,
+            "webUi": {
+                "mcpThreadId": "mcp-thread-canary",
+                "expectedOrigin": "https://chatgpt.com",
+                "conversationUrlDigestSha256": conversation_url_digest,
+                "bindingAttestedAt": "2026-08-19T00:00:00+00:00",
+                "bindingExpiresAt": "2099-08-19T00:00:00+00:00",
+                "effectsEnabled": True,
+            },
+        }
+        bridge = make_bridge(target)
+        bridge.rpc = lambda: FakeWebRpc(normalized_url)
+        status = bridge.status("chat-canary")
+        web = next(
+            candidate
+            for candidate in status["candidates"]
+            if candidate["kind"] == "web_ui"
+        )
+        self.assertEqual(web["binding"], "exact")
+        self.assertEqual(
+            web["conversationUrlDigestSha256"],
+            conversation_url_digest,
+        )
+        self.assertIn(
+            f"conversation-url-sha256:{conversation_url_digest}",
+            web["evidenceRefs"],
+        )
+        self.assertNotIn(normalized_url, json.dumps(status, sort_keys=True))
+
+        route = bridge_module.route_digest(
+            target_alias=status["targetAlias"],
+            target_kind=status["targetKind"],
+            target_ref_digest=status["targetRefDigestSha256"],
+            binding_ref=status["bindingRef"],
+            binding_generation=status["bindingGeneration"],
+            transport=web,
+            evidence_digest=status["evidenceDigestSha256"],
+        )
+        changed_route = bridge_module.route_digest(
+            target_alias=status["targetAlias"],
+            target_kind=status["targetKind"],
+            target_ref_digest=status["targetRefDigestSha256"],
+            binding_ref=status["bindingRef"],
+            binding_generation=status["bindingGeneration"],
+            transport={
+                **web,
+                "conversationUrlDigestSha256": "f" * 64,
+            },
+            evidence_digest=status["evidenceDigestSha256"],
+        )
+        self.assertNotEqual(route, changed_route)
+
+        prompt = "continue the exact pending work"
+        request = {
+            "targetAlias": status["targetAlias"],
+            "targetRefDigestSha256": status["targetRefDigestSha256"],
+            "bindingRef": status["bindingRef"],
+            "bindingGeneration": status["bindingGeneration"],
+            "permitRef": "permit:web-url-binding",
+            "transportId": web["transportId"],
+            "transportKind": "web_ui",
+            "routeDigestSha256": route,
+            "messageId": "message:web-url-binding",
+            "prompt": prompt,
+            "promptDigestSha256": bridge_module.sha256(prompt),
+            "conversationUrlDigestSha256": conversation_url_digest,
+        }
+        _target, normalized = bridge._validate_delivery_request(request)
+        self.assertEqual(
+            normalized["conversationUrlDigestSha256"],
+            conversation_url_digest,
+        )
+        with self.assertRaisesRegex(
+            bridge_module.BridgeError,
+            "conversation URL binding changed",
+        ):
+            bridge._validate_delivery_request(
+                {**request, "conversationUrlDigestSha256": "f" * 64}
+            )
+
+        _target, reconciled = bridge._validate_reconcile_request(
+            {key: value for key, value in request.items() if key != "prompt"}
+        )
+        self.assertEqual(reconciled["transportKind"], "web_ui")
+        self.assertEqual(
+            reconciled["conversationUrlDigestSha256"],
+            conversation_url_digest,
+        )
+
+        receipt = bridge._receipt_from_row(
+            {
+                "target_alias": "chat-canary",
+                "permit_ref": request["permitRef"],
+                "transport_id": web["transportId"],
+                "transport_kind": "web_ui",
+                "route_digest_sha256": route,
+                "message_id": request["messageId"],
+                "prompt_digest_sha256": request["promptDigestSha256"],
+                "conversation_url_digest_sha256": conversation_url_digest,
+                "state": "delivered",
+                "delivery_ref": "delivery:web-url-binding",
+                "updated_at": "2026-08-19T05:00:00+00:00",
+            }
+        )
+        self.assertEqual(
+            receipt["conversationUrlDigestSha256"],
+            conversation_url_digest,
+        )
+
+        target["webUi"]["conversationUrlDigestSha256"] = "f" * 64
+        replayed_receipt = bridge._receipt_from_row(
+            {
+                "target_alias": "chat-canary",
+                "permit_ref": request["permitRef"],
+                "transport_id": web["transportId"],
+                "transport_kind": "web_ui",
+                "route_digest_sha256": route,
+                "message_id": request["messageId"],
+                "prompt_digest_sha256": request["promptDigestSha256"],
+                "conversation_url_digest_sha256": conversation_url_digest,
+                "state": "delivered",
+                "delivery_ref": "delivery:web-url-binding",
+                "updated_at": "2026-08-19T05:00:00+00:00",
+            }
+        )
+        self.assertEqual(
+            replayed_receipt["conversationUrlDigestSha256"],
+            conversation_url_digest,
+        )
 
     def test_unknown_alias_is_rejected_without_accepting_a_thread_id(self) -> None:
         target = {

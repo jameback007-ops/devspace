@@ -210,19 +210,28 @@ duplicate-chat creation, login, CAPTCHA handling, or account-warning bypass.
 The live VPS currently has one visible XRDP/Xorg/Cinnamon session and an
 existing Playwright extension bridge used by Codex. That bridge is exclusive.
 DevSpace must route through one broker-owned adapter lease rather than starting
-a competing Playwright client.
+a competing Playwright client. The fixed Conversation Transport Web UI path now
+does so through the SQLite-backed `InteractionBroker`; the privileged bridge's
+own lock remains only the final actuator-local guard.
 
 Activation order after shared-surface reconciliation:
 
-1. integrate the interaction candidate with the current DevSpace main;
-2. implement the existing-DB `InteractionBrokerStore` and migrations;
-3. add read-only binding/runtime/classification status tools;
-4. bind one broker-owned Playwright observer without action activation;
-5. validate selector drift, lifecycle, crash, and network evidence on a safe
-   non-mutating fixture;
-6. activate reversible composer staging in a test conversation;
-7. activate irreversible Tier 1 submit only after durable A2A permit/lease and
-   end-to-end reconciliation tests pass.
+1. integrate the durable host-turn and Conversation Transport seam with the
+   current DevSpace main;
+2. apply the existing-DB InteractionBroker migration and verify cross-handle
+   lease/CAS behavior;
+3. keep both Conversation Transport effect gates disabled while validating
+   read-only binding, route, URL-digest, and lifecycle evidence;
+4. validate selector drift, lifecycle, crash, network, lease contention, and
+   no-prompt-persistence evidence on a safe non-mutating fixture;
+5. activate reversible composer staging in a test conversation;
+6. activate irreversible Tier 1 submit only after the durable A2A permit,
+   broker lease, prompt admission, new host-turn generation, and three-plane
+   reconciliation canaries pass.
+
+A general browser action surface and a standalone interaction-runtime status
+tool remain separate follow-up capabilities. The fixed internal wake adapter
+does not expose raw Playwright execution or arbitrary selectors.
 
 ## Research basis
 

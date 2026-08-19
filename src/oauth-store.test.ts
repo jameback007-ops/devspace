@@ -5,6 +5,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { InvalidGrantError, InvalidTokenError } from "@modelcontextprotocol/sdk/server/auth/errors.js";
 import { databasePath, openDatabase } from "./db/client.js";
+import {
+  EXECUTION_WAKE_COORDINATION_AUTHORITY,
+  materializeWakeContinuationBody,
+  sha256 as wakeSha256,
+} from "./execution-wake-coordination-model.js";
 import { SingleUserOAuthProvider } from "./oauth-provider.js";
 import { SqliteOAuthClientsStore, SqliteOAuthStore } from "./oauth-store.js";
 
@@ -21,6 +26,7 @@ const redirectUri = "https://chatgpt.com/connector_platform_oauth_redirect";
 
 try {
   await testDatabaseConfiguration(join(root, "database-configuration"));
+  testLegacyWakeContinuationSanitization(join(root, "legacy-wake-sanitization"));
   testPersistenceAndTokenHashing(join(root, "persistence"));
   testExpiredTokenCleanup(join(root, "expiration"));
   testTransactionalTokenRotation(join(root, "rotation"));
@@ -55,6 +61,8 @@ async function testDatabaseConfiguration(stateDir: string): Promise<void> {
       { version: 12, name: "conversation-transport-and-wake-coordination" },
       { version: 13, name: "instability-aware-turn-safe-landing" },
       { version: 14, name: "host-turn-lifecycle-observability" },
+      { version: 15, name: "durable-interaction-broker" },
+      { version: 16, name: "sanitize-wake-continuation-envelopes" },
     ]);
     assert.deepEqual(
       database.sqlite
@@ -73,6 +81,20 @@ async function testDatabaseConfiguration(stateDir: string): Promise<void> {
         "host_turn_sessions",
       ],
     );
+    assert.deepEqual(
+      database.sqlite
+        .prepare(`
+          select name from sqlite_master
+           where type = 'table' and name like 'interaction_broker_%'
+           order by name
+        `)
+        .pluck()
+        .all(),
+      [
+        "interaction_broker_leases",
+        "interaction_broker_sessions",
+      ],
+    );
   } finally {
     database.close();
   }
@@ -80,6 +102,130 @@ async function testDatabaseConfiguration(stateDir: string): Promise<void> {
   if (process.platform !== "win32") {
     assert.equal((await stat(stateDir)).mode & 0o777, 0o700);
     assert.equal((await stat(databasePath(stateDir))).mode & 0o777, 0o600);
+  }
+}
+
+function testLegacyWakeContinuationSanitization(stateDir: string): void {
+  const database = openDatabase(stateDir);
+  const nowMs = Date.parse("2026-08-19T07:00:00.000Z");
+  const body = [
+    "[ZES-A2A continuation correlation:legacy]",
+    "Durable coordination work generation 1 is pending for mission mission:legacy.",
+    "Read the current execution-coordination status and inbox, reconcile the exact workspace/runtime/authority state, then continue only the rightful pending work.",
+    "Do not infer completion from silence. Do not repeat an external effect or publish without current authority readback, effect reconciliation, and the existing publication gate.",
+    "Pending references: task:legacy, message:legacy",
+  ].join("\n");
+  const legacyEnvelope = {
+    schemaVersion: 1 as const,
+    envelopeRef: "envelope:legacy",
+    targetExecutionScopeRef: "1111111111111111",
+    missionRef: "mission:legacy",
+    pendingWorkId: "wpw_11111111111111111111111111111111",
+    pendingWorkGeneration: 1,
+    pendingWorkSemanticDigestSha256: "a".repeat(64),
+    workCycleRef: "work-cycle:legacy",
+    correlationRef: "correlation:legacy",
+    taskRefs: ["task:legacy"],
+    messageRefs: ["message:legacy"],
+    workItemRefs: [],
+    body,
+    bodyDigestSha256: wakeSha256(body),
+    createdAt: new Date(nowMs).toISOString(),
+    authority: EXECUTION_WAKE_COORDINATION_AUTHORITY,
+  };
+  const attemptPayload = {
+    schemaVersion: 1,
+    attemptId: "wat_11111111111111111111111111111111",
+    permit: {
+      schemaVersion: 1,
+      envelope: legacyEnvelope,
+    },
+  };
+  try {
+    database.sqlite.prepare(`
+      insert into execution_wake_pending_work (
+        pending_work_id, target_execution_scope_ref, mission_ref, generation,
+        source_generation, semantic_digest_sha256, state, revision, is_current,
+        payload_json, payload_digest_sha256, created_at_ms, updated_at_ms,
+        expires_at_ms
+      ) values (?, ?, ?, 1, 1, ?, 'pending', 1, 1, '{}', ?, ?, ?, ?)
+    `).run(
+      legacyEnvelope.pendingWorkId,
+      legacyEnvelope.targetExecutionScopeRef,
+      legacyEnvelope.missionRef,
+      legacyEnvelope.pendingWorkSemanticDigestSha256,
+      "b".repeat(64),
+      nowMs,
+      nowMs,
+      nowMs + 60_000,
+    );
+    database.sqlite.prepare(`
+      insert into execution_wake_attempts (
+        attempt_id, wake_key, actor_scope_ref, target_execution_scope_ref,
+        mission_ref, pending_work_id, pending_work_generation,
+        attempt_sequence, state, revision, payload_json,
+        payload_digest_sha256, created_at_ms, updated_at_ms, cooldown_until_ms
+      ) values (?, ?, ?, ?, ?, ?, 1, 1, 'prepared', 1, ?, ?, ?, ?, ?)
+    `).run(
+      attemptPayload.attemptId,
+      "wky_11111111111111111111111111111111",
+      "2222222222222222",
+      legacyEnvelope.targetExecutionScopeRef,
+      legacyEnvelope.missionRef,
+      legacyEnvelope.pendingWorkId,
+      JSON.stringify(attemptPayload),
+      "c".repeat(64),
+      nowMs,
+      nowMs,
+      nowMs,
+    );
+    database.sqlite.prepare(`
+      insert into execution_wake_commands (
+        actor_scope_ref, idempotency_key, command_kind,
+        payload_digest_sha256, result_json, created_at_ms
+      ) values (?, ?, 'legacy_test', ?, ?, ?)
+    `).run(
+      "2222222222222222",
+      "legacy-wake-command",
+      "d".repeat(64),
+      JSON.stringify({ value: attemptPayload }),
+      nowMs,
+    );
+    database.sqlite.prepare(
+      "delete from devspace_schema_migrations where version = 16",
+    ).run();
+  } finally {
+    database.close();
+  }
+
+  const migrated = openDatabase(stateDir);
+  try {
+    const attempt = JSON.parse(
+      migrated.sqlite.prepare(`
+        select payload_json from execution_wake_attempts where attempt_id = ?
+      `).pluck().get(attemptPayload.attemptId) as string,
+    ) as typeof attemptPayload & {
+      permit: { envelope: Record<string, unknown> };
+    };
+    const command = JSON.parse(
+      migrated.sqlite.prepare(`
+        select result_json from execution_wake_commands
+        where actor_scope_ref = ? and idempotency_key = ?
+      `).pluck().get("2222222222222222", "legacy-wake-command") as string,
+    ) as { value: { permit: { envelope: Record<string, unknown> } } };
+    assert.equal(attempt.permit.envelope.schemaVersion, 2);
+    assert.equal("body" in attempt.permit.envelope, false);
+    assert.equal("body" in command.value.permit.envelope, false);
+    assert.equal(
+      materializeWakeContinuationBody(
+        attempt.permit.envelope as Parameters<
+          typeof materializeWakeContinuationBody
+        >[0],
+      ),
+      body,
+    );
+  } finally {
+    migrated.close();
   }
 }
 

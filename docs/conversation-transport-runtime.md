@@ -11,9 +11,11 @@ durable pending work
   -> explicit fresh host-turn wake gate
   -> transport-bound wake permit
   -> post-lease route and host-turn readback
-  -> persist-before-dispatch delivery
+  -> native_rpc: persist-before-dispatch delivery
+  -> web_ui: durable InteractionBroker lease and checkpoint
+  -> bounded bridge sensor/actuator delivery
   -> new host-turn generation or durable indeterminate state
-  -> exact admission reconciliation
+  -> exact admission and three-plane reconciliation
   -> fallback only after no-effect proof
 ```
 
@@ -50,12 +52,17 @@ The MCP surface accepts only:
 Raw thread IDs, conversation URLs, browser profile paths, App Server socket
 paths, cookies, extension tokens, and credentials remain in the root-owned
 bridge configuration. The DevSpace database stores only target aliases,
-digests, route IDs, permit state, and receipts.
+digests, route IDs, permit state, receipts, and bounded InteractionBroker
+checkpoints.
 
-The bridge delivery ledger never stores prompt text. It stores a prompt digest,
-deterministic message ID, route digest, permit reference, and reconciliation
-receipts. Prompt text exists in process memory only for the duration of a
-delivery call.
+Neither the upper wake attempt nor the InteractionBroker checkpoint stores the
+rendered continuation prompt. The upper plane persists a deterministic prompt
+template, bounded durable references, and the resulting SHA-256 digest. The
+prompt is materialized and digest-checked only at the lower effect boundary.
+The broker persists only that digest with the exact prepared action. The bridge
+delivery ledger likewise stores a prompt digest, deterministic message ID,
+route digest, permit reference, and reconciliation receipts. Rendered prompt
+text exists in process memory only for the duration of one delivery call.
 
 ## Runtime components
 
@@ -75,8 +82,29 @@ delivery call.
 - durable provider-neutral host-turn lifecycle and evidence expiry;
 - wake scheduling and attempt throttles;
 - permit issuance with transport route plus an exact host-turn gate snapshot;
-- shared transactional reconciliation across scheduler and lifecycle state;
+- native RPC delivery without browser ownership or UI serialization;
+- Web UI delivery through the durable single-client InteractionBroker before
+  the privileged bridge may compose or submit;
+- shared transactional reconciliation across scheduler, host-turn lifecycle,
+  and InteractionBroker state;
 - MCP tools for bind, status, pending work, assess, execute, and reconcile.
+
+`SqliteInteractionBrokerStore` and
+`ConversationWebUiInteractionBroker`
+
+- one monotonic lease generation for the shared Playwright actuator;
+- SQLite compare-and-swap checkpoints in the existing DevSpace WAL database;
+- `acting` persisted before the bridge receives the prompt;
+- exact permit, host-turn gate, route, prompt digest, and browser conversation
+  URL-digest approval binding;
+- verified, no-effect, and indeterminate outcomes mapped back into the upper
+  wake attempt;
+- exact effect reconciliation performed inside the same SQLite transaction as
+  scheduler and host-turn reconciliation.
+
+The bridge's process/file lock remains a final actuator-local concurrency
+guard. It is not a replacement for the durable InteractionBroker lease and
+checkpoint.
 
 The detailed state model, evidence rules, and failure semantics are documented
 in [`host-turn-lifecycle.md`](./host-turn-lifecycle.md).
@@ -125,14 +153,20 @@ The safe rollout is:
 4. verify explicit host-turn state is wake-eligible and fresh;
 5. verify Chat/Work reports the typed native limitation;
 6. verify no Web UI route is eligible without an exact binding;
-7. create a disposable Codex thread and perform one native canary;
-8. prove one `clientUserMessageId` admission and one new turn boundary;
-9. enable DevSpace effects only after the bridge canary passes;
-10. enable Web UI effects separately after a reversible observation/staging
-   canary proves the current selector contract.
+7. prove the InteractionBroker migration, cross-handle lease exclusion, CAS,
+   restart recovery, and indeterminate reconciliation tests;
+8. create a disposable Codex thread and perform one native canary;
+9. prove one `clientUserMessageId` admission and one new turn boundary;
+10. enable DevSpace effects only after the bridge canary passes;
+11. enable Web UI effects separately after a reversible observation/staging
+    canary proves the current selector contract and the broker lease is visible
+    as the only UI serialization owner.
 
 An attempt in `accepted`, `sending`, or `indeterminate` state blocks retry and
-cross-transport fallback. Reconcile it first. Silence is never effect evidence.
+cross-transport fallback. A Web UI attempt additionally leaves an
+InteractionBroker checkpoint in `indeterminate`; `execution_wake_reconcile`
+must close the wake attempt, broker checkpoint, and host turn atomically before
+another dispatch. Silence is never effect evidence.
 Likewise, `started`, `running`, `disconnected`, or `indeterminate` host-turn
 state blocks a wake even when no MCP tool or process is currently visible.
 

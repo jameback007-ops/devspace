@@ -3,6 +3,12 @@ import {
   EXECUTION_WAKE_COORDINATION_SCHEMA_SQL,
   EXECUTION_WAKE_COORDINATION_SCHEMA_VERSION,
 } from "../execution-wake-coordination-schema.js";
+import {
+  canonicalJson,
+  sha256,
+  upgradeLegacyWakeContinuationEnvelope,
+  type LegacyWakeContinuationEnvelopeV1,
+} from "../execution-wake-coordination-model.js";
 import { CONVERSATION_TRANSPORT_SCHEMA_SQL } from "../conversation-transport-schema.js";
 import {
   HOST_TURN_LIFECYCLE_SCHEMA_SQL,
@@ -85,6 +91,16 @@ const migrations: Migration[] = [
     version: 14,
     name: "host-turn-lifecycle-observability",
     up: migrateHostTurnLifecycleObservability,
+  },
+  {
+    version: 15,
+    name: "durable-interaction-broker",
+    up: migrateDurableInteractionBroker,
+  },
+  {
+    version: 16,
+    name: "sanitize-wake-continuation-envelopes",
+    up: migrateSanitizeWakeContinuationEnvelopes,
   },
 ];
 
@@ -591,6 +607,154 @@ function migrateHostTurnLifecycleObservability(
     values (?, ?)
     on conflict(version) do nothing
   `).run(HOST_TURN_LIFECYCLE_SCHEMA_VERSION, Date.now());
+}
+
+function migrateDurableInteractionBroker(
+  sqlite: Database.Database,
+): void {
+  sqlite.exec(`
+    create table if not exists interaction_broker_leases (
+      resource_ref text primary key,
+      lease_id text not null,
+      holder_scope_ref text not null,
+      generation integer not null,
+      acquired_at_ms integer not null,
+      expires_at_ms integer not null
+    );
+
+    create index if not exists interaction_broker_leases_expiry_idx
+      on interaction_broker_leases(expires_at_ms);
+
+    create table if not exists interaction_broker_sessions (
+      session_ref text primary key,
+      version integer not null,
+      adapter_resource_ref text not null,
+      adapter_id text not null,
+      current_execution_scope_ref text not null,
+      payload_json text not null,
+      updated_at_ms integer not null
+    );
+
+    create index if not exists interaction_broker_sessions_adapter_idx
+      on interaction_broker_sessions(adapter_resource_ref, updated_at_ms desc);
+
+    create index if not exists interaction_broker_sessions_scope_idx
+      on interaction_broker_sessions(current_execution_scope_ref, updated_at_ms desc);
+  `);
+}
+
+function migrateSanitizeWakeContinuationEnvelopes(
+  sqlite: Database.Database,
+): void {
+  if (sqliteTableExists(sqlite, "execution_wake_attempts")) {
+    const attempts = sqlite.prepare(`
+      select attempt_id, payload_json
+      from execution_wake_attempts
+    `).all() as Array<{ attempt_id: string; payload_json: string }>;
+    const updateAttempt = sqlite.prepare(`
+      update execution_wake_attempts
+      set payload_json = ?, payload_digest_sha256 = ?
+      where attempt_id = ?
+    `);
+    for (const row of attempts) {
+      const sanitized = sanitizeLegacyWakeContinuationValue(
+        JSON.parse(row.payload_json) as unknown,
+      );
+      if (!sanitized.changed) continue;
+      const payloadJson = JSON.stringify(sanitized.value);
+      updateAttempt.run(
+        payloadJson,
+        sha256(canonicalJson(sanitized.value)),
+        row.attempt_id,
+      );
+    }
+  }
+
+  if (sqliteTableExists(sqlite, "execution_wake_commands")) {
+    const commands = sqlite.prepare(`
+      select actor_scope_ref, idempotency_key, result_json
+      from execution_wake_commands
+    `).all() as Array<{
+      actor_scope_ref: string;
+      idempotency_key: string;
+      result_json: string;
+    }>;
+    const updateCommand = sqlite.prepare(`
+      update execution_wake_commands
+      set result_json = ?
+      where actor_scope_ref = ? and idempotency_key = ?
+    `);
+    for (const row of commands) {
+      const sanitized = sanitizeLegacyWakeContinuationValue(
+        JSON.parse(row.result_json) as unknown,
+      );
+      if (!sanitized.changed) continue;
+      updateCommand.run(
+        JSON.stringify(sanitized.value),
+        row.actor_scope_ref,
+        row.idempotency_key,
+      );
+    }
+  }
+}
+
+function sanitizeLegacyWakeContinuationValue(input: unknown): {
+  value: unknown;
+  changed: boolean;
+} {
+  if (Array.isArray(input)) {
+    let changed = false;
+    const value = input.map((entry) => {
+      const sanitized = sanitizeLegacyWakeContinuationValue(entry);
+      changed = changed || sanitized.changed;
+      return sanitized.value;
+    });
+    return { value, changed };
+  }
+  if (!input || typeof input !== "object") {
+    return { value: input, changed: false };
+  }
+  if (isLegacyWakeContinuationEnvelope(input)) {
+    return {
+      value: upgradeLegacyWakeContinuationEnvelope(input),
+      changed: true,
+    };
+  }
+  let changed = false;
+  const value = Object.fromEntries(
+    Object.entries(input as Record<string, unknown>).map(([key, entry]) => {
+      const sanitized = sanitizeLegacyWakeContinuationValue(entry);
+      changed = changed || sanitized.changed;
+      return [key, sanitized.value];
+    }),
+  );
+  return { value, changed };
+}
+
+function isLegacyWakeContinuationEnvelope(
+  input: object,
+): input is LegacyWakeContinuationEnvelopeV1 {
+  const candidate = input as Partial<LegacyWakeContinuationEnvelopeV1>;
+  return candidate.schemaVersion === 1
+    && typeof candidate.envelopeRef === "string"
+    && typeof candidate.targetExecutionScopeRef === "string"
+    && typeof candidate.pendingWorkId === "string"
+    && typeof candidate.body === "string"
+    && typeof candidate.bodyDigestSha256 === "string"
+    && Array.isArray(candidate.taskRefs)
+    && Array.isArray(candidate.messageRefs)
+    && Array.isArray(candidate.workItemRefs);
+}
+
+function sqliteTableExists(
+  sqlite: Database.Database,
+  tableName: string,
+): boolean {
+  return Boolean(sqlite.prepare(`
+    select 1
+    from sqlite_master
+    where type = 'table' and name = ?
+  `).get(tableName));
 }
 
 function addColumnIfMissing(

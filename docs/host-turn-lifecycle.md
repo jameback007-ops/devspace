@@ -24,7 +24,10 @@ The host-turn lifecycle is executor-local observation and recovery state. It
 does not own canonical work, accepted decisions, writer leases, external effect
 outcomes, publication, provider control, browser control, or interaction
 ownership. The Interaction Broker remains the sole owner of browser/process/UI
-action serialization. Conversation Transport remains the sensor/actuator.
+action serialization. Conversation Transport remains the sensor/actuator. A
+native RPC route does not enter the UI broker; a `web_ui` route cannot reach
+the privileged compose/submit actuator without a durable broker lease and a
+persisted pre-dispatch checkpoint.
 
 The lifecycle store persists only opaque references, digests, timestamps,
 state transitions, and bounded evidence references. It does not require or
@@ -98,17 +101,26 @@ durable pending work
   -> upper wake lease and persisted permit
   -> post-lease assessment
   -> lower pre-dispatch route/lifecycle/gate readback
-  -> bridge effect lock and route/lifecycle readback
+  -> native_rpc: bounded bridge dispatch
+  -> web_ui: InteractionBroker lease + acting checkpoint
+  -> bridge effect lock and final route/lifecycle/URL-digest readback
   -> persist delivery outcome
   -> persist new host-turn generation
 ```
 
-Both the TypeScript lower plane and the privileged bridge fail closed if the
-provider becomes active, the route changes, the binding changes, or lifecycle
-evidence becomes stale before dispatch. Tier 1 still authorizes only one
-correlated continuation. It does not stop generation, regenerate, reload,
-navigate away, open a duplicate conversation, publish, or repeat another
-external effect.
+The TypeScript lower plane, the Web UI InteractionBroker adapter, and the
+privileged bridge all fail closed if the provider becomes active, the route
+changes, the binding changes, the attested browser conversation URL digest
+changes, or lifecycle evidence becomes stale before dispatch. The bridge lock
+is only the final actuator-local guard; it does not replace the broker lease.
+Tier 1 still authorizes only one correlated continuation. It does not stop
+generation, regenerate, reload, navigate away, open a duplicate conversation,
+publish, or repeat another external effect.
+
+The persisted wake permit carries only a deterministic continuation template,
+bounded durable references, and a prompt digest. The rendered prompt is
+materialized at the effect boundary and is never stored in the wake attempt,
+InteractionBroker checkpoint, or bridge ledger.
 
 ## Outcome and reconciliation semantics
 
@@ -121,17 +133,21 @@ the upper scheduler applies cooldown/backoff.
 
 Transport loss, partial delivery, an unknown provider outcome, or failure to
 durably record the new host turn after delivery creates `indeterminate` state.
-Neither the scheduler nor Conversation Transport may retry that work blindly.
-Reconciliation must provide authority and effect readbacks:
+For a Web UI route, the InteractionBroker checkpoint becomes indeterminate as
+well. Neither the scheduler, InteractionBroker, nor Conversation Transport may
+retry that work blindly. Reconciliation must provide authority and effect
+readbacks:
 
 - `effect_absent` closes the turn as `cancelled` and permits a later bounded
   retry after scheduler policy allows it;
 - `effect_verified` restores the turn as `running` with the verified generation
   boundary, so a second wake remains blocked.
 
-The scheduler and lifecycle share one SQLite transaction boundary in the
-Conversation Transport runtime. A reconciliation cannot advance one state
-machine while leaving the other unreconciled.
+The scheduler, lifecycle, and Web UI InteractionBroker share one SQLite
+transaction boundary in the Conversation Transport runtime. A Web UI
+reconciliation cannot advance one state machine while leaving either of the
+other two unreconciled. Native RPC uses the same scheduler/lifecycle atomicity
+without manufacturing a browser broker checkpoint.
 
 ## Adapter mapping
 

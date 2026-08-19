@@ -53,6 +53,7 @@ export interface ConversationBridgeDeliveryReceipt {
   routeDigestSha256: string;
   messageId: string;
   promptDigestSha256: string;
+  conversationUrlDigestSha256?: string;
   state: ConversationBridgeDeliveryState;
   deliveryRef: string;
   turnRef?: string;
@@ -85,6 +86,7 @@ export type ConversationBridgeRequest =
       messageId: string;
       prompt: string;
       promptDigestSha256: string;
+      conversationUrlDigestSha256?: string;
     }
   | {
       schemaVersion: 1;
@@ -95,9 +97,11 @@ export type ConversationBridgeRequest =
       bindingGeneration: number;
       permitRef: string;
       transportId: string;
+      transportKind: "native_rpc" | "web_ui";
       routeDigestSha256: string;
       messageId: string;
       promptDigestSha256: string;
+      conversationUrlDigestSha256?: string;
     };
 
 export type ConversationBridgeResponse =
@@ -130,6 +134,7 @@ export function conversationRouteDigest(input: {
   bindingGeneration: number;
   transportId: string;
   transportKind: string;
+  conversationUrlDigestSha256?: string;
   evidenceDigestSha256: string;
 }): string {
   return sha256(canonicalJson(input));
