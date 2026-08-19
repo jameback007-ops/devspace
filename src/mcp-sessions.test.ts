@@ -102,3 +102,7 @@ assert.equal(timeoutResults.length, 1);
 assert.match(String(timeoutResults[0]?.error), /timed out after 20ms/);
 assert.ok(timeoutElapsedMs < 500, `Expected bounded close, took ${timeoutElapsedMs}ms.`);
 assert.equal(timeoutRegistry.size, 0);
+
+// Keep the additive supervisor suite on the existing explicit npm-test chain
+// without modifying package.json while the Stable Tool ABI lane owns it.
+await import("./mcp-transport-supervisor.test.js");

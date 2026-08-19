@@ -13,6 +13,8 @@ import { basename, dirname, join, resolve } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { loadConfig } from "./config.js";
+import { SupervisedMcpClient } from "./mcp-transport-supervisor-client.js";
+import { McpTransportSupervisor } from "./mcp-transport-supervisor.js";
 import { createReviewCheckpointManager } from "./review-checkpoints.js";
 import { ProcessSessionManager } from "./process-sessions.js";
 import { RuntimeCapabilityRegistry } from "./runtime-capabilities.js";
@@ -170,13 +172,48 @@ export async function probeToolSurface(argv: string[]): Promise<void> {
   );
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: "zes-tool-surface-probe", version: "1" });
+  const transportSupervisor = new McpTransportSupervisor({
+    retryPolicy: {
+      maxAttempts: 2,
+      perAttemptTimeoutMs: 10_000,
+      initialDelayMs: 100,
+      maxDelayMs: 500,
+      growFactor: 2,
+      jitterRatio: 0.2,
+      reconnectMaxAttempts: 1,
+      reconciliationMaxAttempts: 1,
+      recoveryActionTimeoutMs: 5_000,
+    },
+  });
+  const supervisedClient = new SupervisedMcpClient(
+    client,
+    transportSupervisor,
+    {
+      backendRef: "tool-surface-probe",
+      transportIdentity: {
+        endpointRef: "in-memory://tool-surface-probe",
+        protocolEra: "modern",
+        backendGenerationRef: "tool-surface-probe",
+      },
+      operationPrefix: "tool-surface-probe",
+      defaultTimeoutMs: 10_000,
+    },
+  );
 
   try {
     await Promise.all([
       client.connect(clientTransport),
       server.connect(serverTransport),
     ]);
-    const listed = await client.listTools();
+    const listedResult = await supervisedClient.listTools(undefined, {
+      operationKey: "complete-tools-list",
+    });
+    if (!listedResult.ok || !listedResult.value) {
+      throw new Error(
+        `Supervised MCP tools/list failed in state ${listedResult.state}: ${listedResult.action}`,
+      );
+    }
+    const listed = listedResult.value;
     assert.equal(
       canonicalJson(runtimeCapabilities.descriptors()),
       canonicalJson(listed.tools),
@@ -197,6 +234,13 @@ export async function probeToolSurface(argv: string[]): Promise<void> {
         mcpServerVersion: backend.mcpServerVersion,
       },
       configuration: registeredSurface.configuration,
+      transportReliability: {
+        state: listedResult.state,
+        attemptCount: listedResult.attemptCount,
+        retryCount: listedResult.retryCount,
+        recoveryReceipt: listedResult.recoveryReceipt,
+        metrics: transportSupervisor.metrics(),
+      },
       toolSurface,
       tools: listed.tools,
     };
