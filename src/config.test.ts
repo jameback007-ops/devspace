@@ -445,7 +445,23 @@ assert.equal(loadConfig({ ...baseEnv, DEVSPACE_LOG_REQUESTS: "0" }).logging.requ
 assert.equal(loadConfig({ ...baseEnv, DEVSPACE_LOG_ASSETS: "1" }).logging.assets, true);
 assert.equal(loadConfig({ ...baseEnv, DEVSPACE_LOG_TOOL_CALLS: "0" }).logging.toolCalls, false);
 assert.equal(loadConfig({ ...baseEnv, DEVSPACE_LOG_SHELL_COMMANDS: "1" }).logging.shellCommands, true);
-assert.equal(loadConfig({ ...baseEnv, DEVSPACE_TRUST_PROXY: "1" }).logging.trustProxy, true);
+assert.equal(loadConfig({ ...baseEnv, DEVSPACE_TRUST_PROXY: "1" }).logging.trustProxy, 1);
+assert.equal(loadConfig({ ...baseEnv, DEVSPACE_TRUST_PROXY: "2" }).logging.trustProxy, 2);
+assert.deepEqual(
+  loadConfig({
+    ...baseEnv,
+    DEVSPACE_TRUST_PROXY: "loopback,10.0.0.0/8",
+  }).logging.trustProxy,
+  ["loopback", "10.0.0.0/8"],
+);
+assert.throws(
+  () => loadConfig({ ...baseEnv, DEVSPACE_TRUST_PROXY: "true" }),
+  /unbounded boolean trust is unsafe/,
+);
+assert.throws(
+  () => loadConfig({ ...baseEnv, DEVSPACE_TRUST_PROXY: "33" }),
+  /Invalid DEVSPACE_TRUST_PROXY hop count/,
+);
 
 assert.throws(
   () => loadConfig({ ...baseEnv, DEVSPACE_LOG_LEVEL: "trace" }),

@@ -570,6 +570,12 @@ Set `DEVSPACE_LOG_FORMAT=pretty` for local debugging.
 Set `DEVSPACE_LOG_SHELL_COMMANDS=1` only when you intentionally want command
 previews in logs.
 
+`DEVSPACE_TRUST_PROXY` never accepts unbounded boolean trust. Set a positive
+proxy-hop count such as `1`, or a comma-separated Express proxy allowlist such
+as `loopback,10.0.0.0/8`. DevSpace applies the same bounded policy to Express
+client-IP normalization, OAuth rate limiting, and request logs; raw forwarding
+headers are not trusted independently.
+
 ## Env-Only Example
 
 ```bash

@@ -398,6 +398,43 @@ function parsePositiveInteger(
   return parsed;
 }
 
+function parseTrustProxy(
+  value: string | undefined,
+): LoggingConfig["trustProxy"] {
+  const normalized = value?.trim();
+  if (
+    normalized === undefined
+    || normalized === ""
+    || ["0", "false", "no", "off"].includes(normalized.toLowerCase())
+  ) {
+    return false;
+  }
+  if (["true", "yes", "on"].includes(normalized.toLowerCase())) {
+    throw new Error(
+      "Invalid DEVSPACE_TRUST_PROXY: unbounded boolean trust is unsafe; "
+      + "use a positive proxy-hop count or a comma-separated Express proxy allowlist",
+    );
+  }
+  if (/^[0-9]+$/.test(normalized)) {
+    const hops = Number(normalized);
+    if (!Number.isSafeInteger(hops) || hops < 1 || hops > 32) {
+      throw new Error(
+        "Invalid DEVSPACE_TRUST_PROXY hop count: " + normalized,
+      );
+    }
+    return hops;
+  }
+
+  const allowlist = normalized
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  if (allowlist.length === 0) {
+    throw new Error("Invalid DEVSPACE_TRUST_PROXY: " + value);
+  }
+  return allowlist;
+}
+
 function parseLoggingConfig(env: NodeJS.ProcessEnv): LoggingConfig {
   return {
     level: parseLogLevel(env.DEVSPACE_LOG_LEVEL),
@@ -406,7 +443,7 @@ function parseLoggingConfig(env: NodeJS.ProcessEnv): LoggingConfig {
     assets: parseBoolean(env.DEVSPACE_LOG_ASSETS),
     toolCalls: env.DEVSPACE_LOG_TOOL_CALLS === undefined ? true : parseBoolean(env.DEVSPACE_LOG_TOOL_CALLS),
     shellCommands: parseBoolean(env.DEVSPACE_LOG_SHELL_COMMANDS),
-    trustProxy: parseBoolean(env.DEVSPACE_TRUST_PROXY),
+    trustProxy: parseTrustProxy(env.DEVSPACE_TRUST_PROXY),
   };
 }
 
