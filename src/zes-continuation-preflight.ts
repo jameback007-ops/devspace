@@ -23,6 +23,10 @@ const PROCESS_TIMEOUT_MS = 60_000;
 // multi-owner refresh cost for ordinary execution-scope inspection.
 const DEFAULT_PROJECTION_CACHE_TTL_MS = 60_000;
 const DEFAULT_PROJECTION_FAILURE_CACHE_TTL_MS = 30_000;
+const SUPPORTED_ZES_CONTINUATION_PREFLIGHT_CONTRACTS = [
+  "zes.continuation-control-preflight.v2",
+  "zes.continuation-control-preflight.v3",
+] as const;
 
 const READ_ONLY_ANNOTATIONS = {
   readOnlyHint: true,
@@ -378,11 +382,18 @@ export function continuationIntentDecision(
   if (!preflight) {
     throw new Error("ZES continuation preflight payload is missing");
   }
-  if (preflight.schema_version !== "zes.continuation-control-preflight.v2") {
+  const productContract = preflight.schema_version;
+  if (
+    !SUPPORTED_ZES_CONTINUATION_PREFLIGHT_CONTRACTS.some(
+      (supported) => supported === productContract,
+    )
+  ) {
     throw new Error(
       `Unsupported ZES continuation preflight contract: ${String(
         preflight.schema_version ?? "missing",
-      )}`,
+      )}; supported contracts: ${
+        SUPPORTED_ZES_CONTINUATION_PREFLIGHT_CONTRACTS.join(", ")
+      }`,
     );
   }
 
@@ -848,4 +859,3 @@ export function registerZesContinuationPreflightTool(
     },
   );
 }
-

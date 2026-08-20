@@ -7,7 +7,7 @@ import {
 } from "./zes-continuation-preflight.js";
 
 const basePreflight = {
-  schema_version: "zes.continuation-control-preflight.v2",
+  schema_version: "zes.continuation-control-preflight.v3",
   safe_to_inspect: true,
   safe_to_prepare_isolated_candidate: true,
   safe_to_mutate_live: true,
@@ -51,7 +51,23 @@ assert.deepEqual(
 assert.deepEqual(
   continuationIntentDecision("mutate_governed_checkout", {
     ...basePreflight,
+    writer_state_uncertain: true,
+    provider_writer_state_is_repository_authority: false,
     must_reconcile_runtime_or_unknown_outcome_first: true,
+  }),
+  {
+    intent: "mutate_governed_checkout",
+    disposition: "allowed",
+    actionAllowed: true,
+    blockingFactors: [],
+    newAuthorityGranted: false,
+  },
+);
+
+assert.deepEqual(
+  continuationIntentDecision("mutate_governed_checkout", {
+    ...basePreflight,
+    schema_version: "zes.continuation-control-preflight.v2",
   }),
   {
     intent: "mutate_governed_checkout",
@@ -147,7 +163,7 @@ assert.equal(
       nested: { current: true },
     },
     {
-      schema_version: "zes.continuation-control-preflight.v2",
+      schema_version: "zes.continuation-control-preflight.v3",
       publication_disposition: "not_required",
       repository_mutation_blocking_factors: ["dirty_worktree"],
       nested: { current: true, extra: "allowed" },
