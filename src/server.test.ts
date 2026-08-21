@@ -168,6 +168,8 @@ test("Codex integration registers the full typed surface without raw native targ
     "codex_session_control",
     "codex_approval_respond",
     "codex_effect_status",
+    "cross_executor_coordination_assess",
+    "cross_executor_coordination_send",
   ];
   for (const name of expected) {
     assert.ok(names.has(name), `missing ${name}`);
@@ -208,6 +210,22 @@ test("Codex integration registers the full typed surface without raw native targ
   for (const token of ["submit", "steer", "interrupt", "message", "turnRef"]) {
     assert.ok(turnControlSchema.includes(token), `turn-control schema missing ${token}`);
   }
+  const coordinationSchema = JSON.stringify(
+    listed.tools.find((tool) => tool.name === "cross_executor_coordination_send")
+      ?.inputSchema ?? {},
+  );
+  for (const token of [
+    "workspaceId",
+    "affectedPaths",
+    "expectedHeadSha",
+    "expectedSessionRef",
+    "idempotencyKey",
+  ]) {
+    assert.ok(
+      coordinationSchema.includes(token),
+      `cross-executor coordination schema missing ${token}`,
+    );
+  }
   const sessionControlSchema = JSON.stringify(
     listed.tools.find((tool) => tool.name === "codex_session_control")?.inputSchema ?? {},
   );
@@ -233,6 +251,10 @@ test("Codex integration registers the full typed surface without raw native targ
   const surface = snapshot.toolSurface as Record<string, any>;
   assert.equal(
     surface.criticalToolGroups.codexIntegration.registrationState,
+    "complete",
+  );
+  assert.equal(
+    surface.criticalToolGroups.crossExecutorCoordination.registrationState,
     "complete",
   );
   assert.equal(surface.configuration.codexIntegrationEnabled, true);

@@ -154,6 +154,10 @@ import {
   CodexIntegrationRuntime,
   registerCodexIntegrationTools,
 } from "./codex-integration-tools.js";
+import {
+  CrossExecutorCoordinationRuntime,
+  registerCrossExecutorCoordinationTools,
+} from "./cross-executor-coordination-tools.js";
 
 type Transport = StreamableHTTPServerTransport;
 // MCP clients can reconnect without closing the previous transport. Bound stale
@@ -2555,6 +2559,9 @@ export function createMcpServer(
         config.codexIntegration,
       )
     : undefined;
+  const activeCrossExecutorCoordinationRuntime = activeCodexIntegrationRuntime
+    ? new CrossExecutorCoordinationRuntime(workspaces, activeCodexIntegrationRuntime)
+    : undefined;
   const lifecycleStore = workspaces.lifecycleStore();
   const activeWorkspaceLifecycle = lifecycleStore
     ? new WorkspaceLifecycleManager(
@@ -2675,6 +2682,14 @@ export function createMcpServer(
       server,
       config,
       activeCodexIntegrationRuntime,
+      registerAppTool,
+    );
+  }
+  if (activeCrossExecutorCoordinationRuntime) {
+    registerCrossExecutorCoordinationTools(
+      server,
+      config,
+      activeCrossExecutorCoordinationRuntime,
       registerAppTool,
     );
   }

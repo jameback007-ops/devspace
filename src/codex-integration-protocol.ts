@@ -12,7 +12,8 @@ export type CodexGatewayCommand =
   | "codex_turn_control"
   | "codex_session_control"
   | "codex_approval_respond"
-  | "codex_effect_status";
+  | "codex_effect_status"
+  | "codex_coordination_send";
 
 interface CodexGatewayRequestBase {
   schemaVersion: 1;

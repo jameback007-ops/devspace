@@ -219,6 +219,21 @@ basis executions and remain under the shared policy's sample ceilings; a
 successful Lab process is evidence production, not research sufficiency or
 semantic acceptance.
 
+Cross-executor source coordination is similarly optional and must stay below
+task, writer, publication, and runtime authority. Given one registered
+DevSpace workspace and bounded repository-relative paths,
+`cross_executor_coordination_assess` matches active native Codex sessions by
+exact Git-origin digest and may use bounded audit references only to
+disambiguate candidates. It must never infer path ownership or an exact hunk
+collision from silence, session activity, provider identity, or a shared
+repository alone. Multiple unresolved active sessions remain ambiguous.
+`cross_executor_coordination_send` must rerun the assessment, select exactly
+one opaque session, synthesize a fixed notice containing base/HEAD and affected
+paths, and use a separate coordination-only start-or-steer gate with durable
+idempotency and reconcile-before-retry semantics. Do not enable general Codex
+lifecycle effects merely to send coordination. Wait only on the exact overlap;
+all unrelated source work continues without a global writer lock.
+
 The effect gate serializes publication with a repository-local lease, requires
 the unchanged plan digest, rereads remote `main`, pushes the exact candidate SHA
 with an expected-old force-with-lease binding, and derives terminal outcome from

@@ -1463,6 +1463,8 @@ def main() -> int:
                 "effectsEnabled": bool(config.get("effectsEnabled", False)),
                 "codexGatewayEnabled": bridge.codex_gateway.enabled,
                 "codexGatewayEffectsEnabled": bridge.codex_gateway.global_effects_enabled,
+                "codexGatewayCoordinationEffectsEnabled":
+                    bridge.codex_gateway.coordination_effects_enabled,
                 "codexGatewayPersistentChannelsEnabled":
                     bridge.codex_gateway.persistent_channels_enabled,
                 "codexServerRefs": sorted(bridge.codex_gateway.servers),

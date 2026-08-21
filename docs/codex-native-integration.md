@@ -52,6 +52,7 @@ The public tools are:
 | Session lifecycle | `codex_session_open`, `codex_session_control` |
 | Turn lifecycle | `codex_turn_control` |
 | Effect reconciliation | `codex_effect_status` |
+| Cross-executor source coordination | `cross_executor_coordination_assess`, `cross_executor_coordination_send` |
 
 `codex_session_open` supports start, resume, and fork. `codex_turn_control`
 supports submit, exact-turn steer, and interrupt. Submit performs bounded
@@ -64,6 +65,24 @@ them.
 Rollback changes Codex conversation history only; it does not revert files.
 Rollback and permanent delete therefore require separate explicit
 acknowledgements.
+
+`cross_executor_coordination_assess` starts from one registered DevSpace
+workspace plus a bounded set of repository-relative paths. It matches native
+Codex sessions by the SHA-256 identity of the Git origin, prefers the exact
+active same-repository session, and uses bounded audit activity only to
+disambiguate path references. A path reference is not writer ownership or an
+exact hunk collision. Multiple unresolved active sessions remain ambiguous;
+the tool never broadcasts or guesses.
+
+`cross_executor_coordination_send` reruns that assessment immediately before
+delivery and synthesizes a fixed notice containing the sender workspace, Git
+base/HEAD, affected paths, and a request for exact ownership/integration order.
+The MCP caller supplies typed fields only; the privileged gateway rejects an
+arbitrary message and constructs the prompt after independently validating the
+path set again.
+It starts or steers only the selected native Codex session, uses one durable
+idempotency key, creates no global writer lock, and requires reconciliation
+before any retry after an unknown outcome. Unrelated paths remain unblocked.
 
 `codex_live_events` reads the bounded sequence-numbered buffer owned by the
 persistent App Server channel. It complements persisted rollout inspection;
@@ -99,6 +118,7 @@ The privileged bridge reads a `0600` configuration based on
 {
   "codexGatewayEnabled": true,
   "codexGatewayEffectsEnabled": false,
+  "codexGatewayCoordinationEffectsEnabled": false,
   "codexGatewayPersistentChannels": true,
   "codexGatewayLiveEventCapacity": 2000,
   "codexGatewayApprovalStaleAfterSeconds": 900,
@@ -108,6 +128,7 @@ The privileged bridge reads a `0600` configuration based on
     "primary": {
       "socketPath": "/root/.codex/app-server-control/app-server-control.sock",
       "effectsEnabled": true,
+      "coordinationEffectsEnabled": true,
       "workspaceBindings": {
         "zes-blueprint": "/srv/projects/zes-system-blueprint"
       }
@@ -115,6 +136,7 @@ The privileged bridge reads a `0600` configuration based on
     "secondary": {
       "socketPath": "/run/codex-secondary/app-server.sock",
       "effectsEnabled": false,
+      "coordinationEffectsEnabled": false,
       "workspaceBindings": {}
     }
   }
@@ -144,6 +166,15 @@ Tool registration does not authorize effects. The root-owned bridge remains
 the effect gate through `codexGatewayEffectsEnabled`; each server also has its
 own `effectsEnabled` flag. This permits the complete stable tool surface to be
 deployed and qualified while writes remain fail-closed.
+
+Source-collision notices have an independent, narrower gate:
+`codexGatewayCoordinationEffectsEnabled` plus each server's
+`coordinationEffectsEnabled`. Operators may therefore permit only bounded
+start-or-steer coordination while all general Codex lifecycle, interrupt,
+approval, rollback, archive, and delete effects remain disabled.
+For an explicit `codexAppServers` registry, the per-server coordination gate is
+fail-closed when omitted; every permitted server must opt in with a Boolean
+`coordinationEffectsEnabled: true`.
 
 ## Observation and metrics
 
@@ -207,13 +238,16 @@ state and reconcile the target project's own authorities separately.
 3. Confirm `codex_gateway_status` sees every configured App Server.
 4. Run list/read/activity/live-events/approval-list/metrics/account/model
    read-only canaries.
-5. Verify the MCP tool catalog contains all fourteen tools and no raw native
-   target fields.
+5. Verify the MCP tool catalog contains all fourteen native Codex tools plus
+   the two cross-executor coordination tools, with no raw native target fields.
 6. Create a disposable workspace and Codex session for effect qualification.
 7. Prove start, submit, race-to-steer, idempotent replay, interrupt, resume,
    fork, archive/unarchive, approval response/resolution, reconnect expiry, and
    indeterminate reconciliation.
-8. Enable the bridge effect gate only after the disposable canary passes.
+8. Enable the coordination-only gate after its same-repository ambiguity,
+   start/steer, idempotency, and unknown-outcome canaries pass. Enable the
+   general bridge effect gate separately only after the full disposable canary
+   passes.
 
 The obsolete fixed-thread `codex_session_status`, `codex_session_tail`, and
 `codex_session_audit` tools are not registered. General collaboration starts

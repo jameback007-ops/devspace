@@ -3,6 +3,7 @@
   "effectsEnabled": false,
   "codexGatewayEnabled": true,
   "codexGatewayEffectsEnabled": false,
+  "codexGatewayCoordinationEffectsEnabled": false,
   "codexGatewayPersistentChannels": true,
   "codexGatewayLiveEventCapacity": 2000,
   "codexGatewayApprovalStaleAfterSeconds": 900,
@@ -17,6 +18,7 @@
     "primary": {
       "socketPath": "/root/.codex/app-server-control/app-server-control.sock",
       "effectsEnabled": true,
+      "coordinationEffectsEnabled": true,
       "workspaceBindings": {
         "zes-blueprint": "/srv/projects/zes-system-blueprint",
         "devspace-nexus": "/srv/projects/devspace-zesnexus"

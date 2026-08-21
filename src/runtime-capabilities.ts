@@ -129,6 +129,10 @@ const CRITICAL_TOOL_GROUPS = {
     "codex_approval_respond",
     "codex_effect_status",
   ],
+  crossExecutorCoordination: [
+    "cross_executor_coordination_assess",
+    "cross_executor_coordination_send",
+  ],
   nativeNavigation: ["grep", "glob", "ls"],
   artifactDownload: ["download_artifact"],
 } as const;
@@ -337,6 +341,7 @@ export class RuntimeCapabilityRegistry {
       conversationTransportEffectsEnabled:
         this.config.conversationTransport.effectsEnabled,
       codexIntegrationEnabled: this.config.codexIntegration.enabled,
+      crossExecutorCoordinationToolsEnabled: this.config.codexIntegration.enabled,
     };
   }
 
@@ -391,6 +396,10 @@ export class RuntimeCapabilityRegistry {
       codexIntegration: {
         configured: this.config.codexIntegration.enabled,
         expectedTools: CRITICAL_TOOL_GROUPS.codexIntegration,
+      },
+      crossExecutorCoordination: {
+        configured: this.config.codexIntegration.enabled,
+        expectedTools: CRITICAL_TOOL_GROUPS.crossExecutorCoordination,
       },
       nativeNavigation: {
         configured:
