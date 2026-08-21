@@ -9,7 +9,11 @@ import { loadConfig, type ServerConfig } from "./config.js";
 import { GitWorktreeError } from "./git-worktrees.js";
 import { formatPathForPrompt } from "./skills.js";
 import { SqliteWorkspaceStore } from "./workspace-store.js";
-import { WorkspaceRegistry } from "./workspaces.js";
+import {
+  ensureCheckoutWorkspaceRoot,
+  WorkspaceRegistry,
+  WorkspaceRootError,
+} from "./workspaces.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -73,6 +77,35 @@ test("opening a missing checkout creates its workspace root", async (t) => {
   assert.equal(opened.workspace.root, missingRoot);
   assert.equal((await stat(missingRoot)).isDirectory(), true);
 });
+
+test(
+  "missing checkout roots on Linux kernel filesystems are rejected before mkdir",
+  { skip: platform() !== "linux" },
+  async (t) => {
+    const context = await fixture(t);
+    const missingRoot = join(context.root, "missing-kernel-root", "workspace");
+    let mkdirCalled = false;
+
+    await assert.rejects(
+      () => ensureCheckoutWorkspaceRoot(missingRoot, {
+        stat,
+        mkdir: async () => {
+          mkdirCalled = true;
+        },
+        filesystemType: async (path) => {
+          assert.equal(path, context.root);
+          return 0x9fa0n;
+        },
+      }),
+      (error: unknown) =>
+        error instanceof WorkspaceRootError
+        && error.code === "WORKSPACE_ROOT_UNSAFE_FILESYSTEM"
+        && /procfs/.test(error.message),
+    );
+    assert.equal(mkdirCalled, false);
+    await assert.rejects(() => stat(missingRoot), { code: "ENOENT" });
+  },
+);
 
 test("advertised home-relative skill paths resolve before workspace-relative files", async (t) => {
   const context = await fixture(t);

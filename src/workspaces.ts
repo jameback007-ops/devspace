@@ -5,7 +5,8 @@ import type {
   WorkspaceMode,
   WorkspaceStore,
 } from "./workspace-store.js";
-import { mkdir, readFile, realpath, stat } from "node:fs/promises";
+import { mkdir, readFile, realpath, stat, statfs } from "node:fs/promises";
+import { platform } from "node:os";
 import { basename, dirname, relative, resolve, sep } from "node:path";
 import { loadProjectContextFiles } from "@earendil-works/pi-coding-agent";
 import type { ServerConfig } from "./config.js";
@@ -123,7 +124,35 @@ type PathStats = Stats;
 type DirectoryOps = {
   stat: (path: string) => Promise<PathStats>;
   mkdir: (path: string, options: { recursive: true }) => Promise<unknown>;
+  filesystemType: (path: string) => Promise<number | bigint>;
 };
+
+// These Linux virtual filesystems expose kernel control state rather than a
+// durable directory tree. Attempting recursive creation below a disappearing
+// procfs path can remain blocked indefinitely, so missing checkout roots must
+// fail before mkdir reaches one of these mounts.
+const LINUX_KERNEL_CONTROL_FILESYSTEMS = new Map<bigint, string>([
+  [0x9fa0n, "procfs"],
+  [0x62656572n, "sysfs"],
+  [0x27e0ebn, "cgroupfs"],
+  [0x63677270n, "cgroup2fs"],
+]);
+
+const DEFAULT_DIRECTORY_OPS: DirectoryOps = {
+  stat,
+  mkdir,
+  filesystemType: async (path) => (await statfs(path, { bigint: true })).type,
+};
+
+export class WorkspaceRootError extends Error {
+  constructor(
+    readonly code: "WORKSPACE_ROOT_UNSAFE_FILESYSTEM",
+    message: string,
+  ) {
+    super(message);
+    this.name = "WorkspaceRootError";
+  }
+}
 
 export class WorkspaceRegistry {
   private readonly workspaces = new Map<string, Workspace>();
@@ -603,7 +632,7 @@ async function canonicalPath(path: string): Promise<string> {
 
 export async function ensureCheckoutWorkspaceRoot(
   path: string,
-  ops: DirectoryOps = { stat, mkdir },
+  ops: DirectoryOps = DEFAULT_DIRECTORY_OPS,
 ): Promise<PathStats> {
   try {
     return await ops.stat(path);
@@ -613,8 +642,42 @@ export async function ensureCheckoutWorkspaceRoot(
     }
   }
 
+  if (platform() === "linux") {
+    const existingAncestor = await nearestExistingPath(path, ops.stat);
+    const filesystemType = BigInt(await ops.filesystemType(existingAncestor));
+    const filesystemName = LINUX_KERNEL_CONTROL_FILESYSTEMS.get(filesystemType);
+    if (filesystemName) {
+      throw new WorkspaceRootError(
+        "WORKSPACE_ROOT_UNSAFE_FILESYSTEM",
+        `Cannot create checkout workspace root on Linux kernel filesystem ${filesystemName}: ${path}`,
+      );
+    }
+  }
+
   await ops.mkdir(path, { recursive: true });
   return await ops.stat(path);
+}
+
+async function nearestExistingPath(
+  path: string,
+  statPath: DirectoryOps["stat"],
+): Promise<string> {
+  let candidate = path;
+
+  while (true) {
+    try {
+      await statPath(candidate);
+      return candidate;
+    } catch (error) {
+      if (!isErrnoException(error) || (error.code !== "ENOENT" && error.code !== "ENOTDIR")) {
+        throw error;
+      }
+    }
+
+    const parent = dirname(candidate);
+    if (parent === candidate) throw new Error(`Cannot locate an existing ancestor for: ${path}`);
+    candidate = parent;
+  }
 }
 
 export function formatAgentsPath(path: string, workspaceRoot: string | undefined): string {
