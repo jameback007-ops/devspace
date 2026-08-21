@@ -106,24 +106,17 @@ approval/input requests. It never auto-approves. Private reasoning is excluded,
 secret questions cannot be answered through the model-facing route, and an
 approval response remains indeterminate until native resolution is observed.
 
-The older `codex_session_status`, `codex_session_tail`, and
-`codex_session_audit` tools remain a compatibility adapter for one allowlisted
-AOQ lane. They are not the general multi-session Codex interface.
-
-Neither Codex integration path determines whether DevSpace workspace execution
-is healthy.
-
-`codex_session_status` reports reader transport, live App Server transport,
-thread lifecycle, direct-input capability, and persistence freshness as
-separate fields. A reachable App Server may legitimately report a thread in
-`systemError` while the same thread still accepts direct input. Conversely, an
-unavailable Codex adapter does not disable `open_workspace`, file operations,
-commands, Git, Docker, or other executor-plane capabilities.
+The obsolete single-thread AOQ session adapter has been retired from the MCP
+tool surface. Current and multi-session Codex inspection always starts with the
+generic gateway rather than a fixed historical thread. Codex gateway health or
+one Codex thread lifecycle still does not determine whether DevSpace workspace
+execution is healthy.
 
 The `codex_workspace_*` read-only tools inspect the exact allowlisted AOQ
-worktree independently from the thread lifecycle. Product continuation should
-hydrate a new executor from canonical state rather than require one App Server
-process or provider-private thread to survive.
+worktree independently from session discovery. They remain a narrow forensic
+and transition projection, not a Codex session interface. Product continuation
+should hydrate a new executor from canonical state rather than require one App
+Server process or provider-private thread to survive.
 
 ## Cross-Session Messages
 

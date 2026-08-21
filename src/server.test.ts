@@ -172,6 +172,22 @@ test("Codex integration registers the full typed surface without raw native targ
   for (const name of expected) {
     assert.ok(names.has(name), `missing ${name}`);
   }
+  for (const name of [
+    "codex_session_status",
+    "codex_session_tail",
+    "codex_session_audit",
+  ]) {
+    assert.equal(names.has(name), false, `obsolete AOQ session tool remains: ${name}`);
+  }
+  for (const name of [
+    "codex_workspace_git_status",
+    "codex_workspace_tree",
+    "codex_workspace_read",
+    "codex_workspace_search",
+    "codex_workspace_diff",
+  ]) {
+    assert.ok(names.has(name), `missing narrow AOQ workspace tool ${name}`);
+  }
   for (const name of expected) {
     const tool = listed.tools.find((candidate) => candidate.name === name);
     const schema = JSON.stringify(tool?.inputSchema ?? {});

@@ -215,7 +215,9 @@ state and reconcile the target project's own authorities separately.
    indeterminate reconciliation.
 8. Enable the bridge effect gate only after the disposable canary passes.
 
-The legacy `codex_session_status`, `codex_session_tail`,
-`codex_session_audit`, and `codex_workspace_*` tools remain an AOQ-specific
-compatibility projection. New general collaboration should start with
-`codex_gateway_status` and `codex_session_list`.
+The obsolete fixed-thread `codex_session_status`, `codex_session_tail`, and
+`codex_session_audit` tools are not registered. General collaboration starts
+with `codex_gateway_status` and `codex_session_list`. The separate
+`codex_workspace_*` tools remain only as a narrow read-only projection of the
+exact allowlisted AOQ worktree for forensic or transition work; they are not a
+session-discovery path.

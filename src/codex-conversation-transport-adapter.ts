@@ -3,10 +3,16 @@ import type {
   ConversationReconciliationCapability,
   ConversationTransportObservation,
 } from "./conversation-transport-routing.js";
-import type { CodexSessionAdapterStatus } from "./zes-codex-inspection.js";
+
+export interface CodexConversationTransportStatus {
+  observationKind: string;
+  appServerTransport: "healthy" | "unavailable" | "unknown" | "not_observed";
+  threadLifecycle: string;
+  directInput: "available" | "unavailable" | "unknown" | "not_observed";
+}
 
 export interface CodexConversationTransportAdapterInput {
-  status: CodexSessionAdapterStatus;
+  status: CodexConversationTransportStatus;
   binding: ConversationBindingState;
   reconciliation: ConversationReconciliationCapability;
   transportId?: string;
@@ -48,7 +54,7 @@ export function observeCodexConversationTransport(
     surfaceTrust: "official",
     sessionLifecycle: input.status.threadLifecycle,
     evidenceRefs: uniqueEvidenceRefs([
-      `codex_adapter_observation:${input.status.observationKind}`,
+      `codex_gateway_observation:${input.status.observationKind}`,
       `codex_app_server_transport:${input.status.appServerTransport}`,
       `codex_direct_input:${input.status.directInput}`,
       ...(input.evidenceRefs ?? []),

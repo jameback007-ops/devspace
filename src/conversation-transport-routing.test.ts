@@ -4,9 +4,11 @@ import {
   STRICT_CONVERSATION_TRANSPORT_POLICY,
   type ConversationTransportObservation,
 } from "./conversation-transport-routing.js";
-import { observeCodexConversationTransport } from "./codex-conversation-transport-adapter.js";
+import {
+  observeCodexConversationTransport,
+  type CodexConversationTransportStatus,
+} from "./codex-conversation-transport-adapter.js";
 import { observeChatGptDesktopNativeTransport } from "./chatgpt-desktop-conversation-adapter.js";
-import type { CodexSessionAdapterStatus } from "./zes-codex-inspection.js";
 
 function transport(
   overrides: Partial<ConversationTransportObservation> = {},
@@ -27,17 +29,11 @@ function transport(
   };
 }
 
-const recoverableSystemError: CodexSessionAdapterStatus = {
-  adapterKind: "codex_app_server",
-  observationKind: "status",
-  overallHealth: "degraded",
-  readerTransport: "healthy",
+const recoverableSystemError: CodexConversationTransportStatus = {
+  observationKind: "codex_session_read",
   appServerTransport: "healthy",
   threadLifecycle: "systemError",
   directInput: "available",
-  persistence: "stale",
-  devspaceExecutorPlaneImpact: "none",
-  interpretation: "thread error does not imply transport outage",
 };
 
 const codex = observeCodexConversationTransport({
@@ -58,7 +54,6 @@ assert.equal(codex.transportHealth, "healthy");
 const unavailableCodex = observeCodexConversationTransport({
   status: {
     ...recoverableSystemError,
-    overallHealth: "degraded",
     appServerTransport: "unavailable",
     threadLifecycle: "idle",
   },
