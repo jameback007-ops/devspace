@@ -2586,7 +2586,7 @@ export function createMcpServer(
       title: "DevSpace",
       version: config.mcpServerVersion,
       description:
-        "Coding tools for project workspaces, advisory turn continuity and Git-bound recovery capsules, execution-scope observability and messaging, serialized local-agent provider continuation, optional legacy AOQ inspection, and a typed full-lifecycle native Codex App Server integration that does not wrap or narrow Codex's own execution lane.",
+        "Coding tools for project workspaces, advisory turn continuity and Git-bound recovery capsules, execution-scope observability and messaging, serialized local-agent provider continuation, narrow read-only AOQ worktree inspection, and a typed full-lifecycle native Codex App Server integration that does not wrap or narrow Codex's own execution lane.",
     },
     {
       instructions: serverInstructions(config),
