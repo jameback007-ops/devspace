@@ -44,6 +44,11 @@ assert.deepEqual(loadConfig(baseEnv).conversationTransport, {
   bridgeSocketPath: "/run/zes-conversation-transport-bridge/bridge.sock",
   bridgeTimeoutMs: 20_000,
 });
+assert.deepEqual(loadConfig(baseEnv).codexIntegration, {
+  enabled: false,
+  bridgeSocketPath: "/run/zes-conversation-transport-bridge/bridge.sock",
+  bridgeTimeoutMs: 30_000,
+});
 assert.deepEqual(
   loadConfig({
     ...baseEnv,
@@ -60,6 +65,38 @@ assert.deepEqual(
     effectsEnabled: true,
     bridgeSocketPath: join(emptyConfigDir, "conversation-bridge.sock"),
     bridgeTimeoutMs: 45_000,
+  },
+);
+assert.deepEqual(
+  loadConfig({
+    ...baseEnv,
+    DEVSPACE_CONVERSATION_TRANSPORT: "1",
+    DEVSPACE_CONVERSATION_TRANSPORT_BRIDGE_SOCKET: join(
+      emptyConfigDir,
+      "conversation-bridge.sock",
+    ),
+    DEVSPACE_CONVERSATION_TRANSPORT_TIMEOUT_SECONDS: "45",
+  }).codexIntegration,
+  {
+    enabled: false,
+    bridgeSocketPath: join(emptyConfigDir, "conversation-bridge.sock"),
+    bridgeTimeoutMs: 45_000,
+  },
+);
+assert.deepEqual(
+  loadConfig({
+    ...baseEnv,
+    DEVSPACE_CODEX_INTEGRATION: "1",
+    DEVSPACE_CODEX_INTEGRATION_BRIDGE_SOCKET: join(
+      emptyConfigDir,
+      "codex-gateway.sock",
+    ),
+    DEVSPACE_CODEX_INTEGRATION_TIMEOUT_SECONDS: "75",
+  }).codexIntegration,
+  {
+    enabled: true,
+    bridgeSocketPath: join(emptyConfigDir, "codex-gateway.sock"),
+    bridgeTimeoutMs: 75_000,
   },
 );
 assert.throws(

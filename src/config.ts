@@ -52,6 +52,12 @@ export interface ConversationTransportConfig {
   bridgeSocketPath: string;
   bridgeTimeoutMs: number;
 }
+
+export interface CodexIntegrationConfig {
+  enabled: boolean;
+  bridgeSocketPath: string;
+  bridgeTimeoutMs: number;
+}
 const DEFAULT_OAUTH_ACCESS_TOKEN_TTL_SECONDS = 60 * 60;
 const DEFAULT_OAUTH_REFRESH_TOKEN_TTL_SECONDS = 30 * 24 * 60 * 60;
 const DEFAULT_ARTIFACT_MAX_FILE_BYTES = 100 * 1024 * 1024;
@@ -112,6 +118,7 @@ export interface ServerConfig {
   toolSurfaceFreshness: ToolSurfaceFreshnessConfig;
   selfRepositoryPublication: SelfRepositoryPublicationConfig;
   conversationTransport: ConversationTransportConfig;
+  codexIntegration: CodexIntegrationConfig;
   logging: LoggingConfig;
 }
 
@@ -324,6 +331,28 @@ function parseConversationTransportConfig(
       20,
       "DEVSPACE_CONVERSATION_TRANSPORT_TIMEOUT_SECONDS",
       120,
+    ) * 1_000,
+  };
+}
+
+function parseCodexIntegrationConfig(
+  env: NodeJS.ProcessEnv,
+): CodexIntegrationConfig {
+  const enabled = parseBoolean(env.DEVSPACE_CODEX_INTEGRATION);
+  return {
+    enabled,
+    bridgeSocketPath:
+      parseOptionalAbsolutePath(
+        env.DEVSPACE_CODEX_INTEGRATION_BRIDGE_SOCKET
+          ?? env.DEVSPACE_CONVERSATION_TRANSPORT_BRIDGE_SOCKET,
+        "DEVSPACE_CODEX_INTEGRATION_BRIDGE_SOCKET",
+      ) ?? "/run/zes-conversation-transport-bridge/bridge.sock",
+    bridgeTimeoutMs: parsePositiveInteger(
+      env.DEVSPACE_CODEX_INTEGRATION_TIMEOUT_SECONDS
+        ?? env.DEVSPACE_CONVERSATION_TRANSPORT_TIMEOUT_SECONDS,
+      30,
+      "DEVSPACE_CODEX_INTEGRATION_TIMEOUT_SECONDS",
+      180,
     ) * 1_000,
   };
 }
@@ -839,6 +868,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     toolSurfaceFreshness: parseToolSurfaceFreshnessConfig(env),
     selfRepositoryPublication: parseSelfRepositoryPublicationConfig(env),
     conversationTransport: parseConversationTransportConfig(env),
+    codexIntegration: parseCodexIntegrationConfig(env),
     logging: parseLoggingConfig(env),
   };
 }

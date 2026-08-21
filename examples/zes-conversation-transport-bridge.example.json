@@ -1,8 +1,28 @@
 {
   "schemaVersion": 1,
   "effectsEnabled": false,
+  "codexGatewayEnabled": true,
+  "codexGatewayEffectsEnabled": false,
+  "codexGatewayPersistentChannels": true,
+  "codexGatewayLiveEventCapacity": 2000,
+  "codexGatewayApprovalStaleAfterSeconds": 900,
+  "codexGatewayApprovalRetentionSeconds": 3600,
+  "codexGatewayApprovalConfirmTimeoutSeconds": 2,
   "relayModulePath": "/root/.codex/skills/codex-thread-relay/scripts/codex_thread_relay.py",
   "appServerSocket": "/root/.codex/app-server-control/app-server-control.sock",
+  "codexRolloutRoots": [
+    "/root/.codex/sessions"
+  ],
+  "codexAppServers": {
+    "primary": {
+      "socketPath": "/root/.codex/app-server-control/app-server-control.sock",
+      "effectsEnabled": true,
+      "workspaceBindings": {
+        "zes-blueprint": "/srv/projects/zes-system-blueprint",
+        "devspace-nexus": "/srv/projects/devspace-zesnexus"
+      }
+    }
+  },
   "stateDir": "/var/lib/zes-conversation-transport-bridge",
   "socketPath": "/run/zes-conversation-transport-bridge/bridge.sock",
   "socketMode": "0660",

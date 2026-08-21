@@ -15,6 +15,12 @@ install -d -m 0755 "${INSTALL_ROOT}"
 install -m 0755 \
   "${SOURCE_ROOT}/scripts/zes-conversation-transport-bridge.py" \
   "${INSTALL_ROOT}/bridge.py"
+install -m 0755 \
+  "${SOURCE_ROOT}/scripts/zes_codex_gateway.py" \
+  "${INSTALL_ROOT}/zes_codex_gateway.py"
+install -m 0755 \
+  "${SOURCE_ROOT}/scripts/zes_codex_app_server_channel.py" \
+  "${INSTALL_ROOT}/zes_codex_app_server_channel.py"
 install -m 0644 \
   "${SOURCE_ROOT}/examples/systemd/zes-conversation-transport-bridge.service" \
   "${UNIT_PATH}"

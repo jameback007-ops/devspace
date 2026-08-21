@@ -110,6 +110,22 @@ const CRITICAL_TOOL_GROUPS = {
     "execution_wake_execute",
     "execution_wake_reconcile",
   ],
+  codexIntegration: [
+    "codex_gateway_status",
+    "codex_session_list",
+    "codex_session_read",
+    "codex_session_activity",
+    "codex_session_metrics",
+    "codex_account_usage",
+    "codex_model_list",
+    "codex_live_events",
+    "codex_approval_list",
+    "codex_session_open",
+    "codex_turn_control",
+    "codex_session_control",
+    "codex_approval_respond",
+    "codex_effect_status",
+  ],
   nativeNavigation: ["grep", "glob", "ls"],
   artifactDownload: ["download_artifact"],
 } as const;
@@ -313,6 +329,7 @@ export class RuntimeCapabilityRegistry {
         this.config.conversationTransport.enabled,
       conversationTransportEffectsEnabled:
         this.config.conversationTransport.effectsEnabled,
+      codexIntegrationEnabled: this.config.codexIntegration.enabled,
     };
   }
 
@@ -357,6 +374,10 @@ export class RuntimeCapabilityRegistry {
       conversationTransport: {
         configured: this.config.conversationTransport.enabled,
         expectedTools: CRITICAL_TOOL_GROUPS.conversationTransport,
+      },
+      codexIntegration: {
+        configured: this.config.codexIntegration.enabled,
+        expectedTools: CRITICAL_TOOL_GROUPS.codexIntegration,
       },
       nativeNavigation: {
         configured:

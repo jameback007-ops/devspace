@@ -10,6 +10,8 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { loadConfig, type ServerConfig } from "./config.js";
 import type { ConversationTransportBridgePort } from "./conversation-transport-bridge-client.js";
+import type { CodexIntegrationPort } from "./codex-integration-protocol.js";
+import { CodexIntegrationRuntime } from "./codex-integration-tools.js";
 import {
   CONVERSATION_TRANSPORT_BRIDGE_AUTHORITY,
   type ConversationBridgeTargetStatus,
@@ -127,6 +129,97 @@ test("conversation transport tools expose fixed aliases and direct-first status 
   );
   assert.equal(surface.configuration.conversationTransportEnabled, true);
   assert.equal(surface.configuration.conversationTransportEffectsEnabled, false);
+});
+
+test("Codex integration registers the full typed surface without raw native targets or generic RPC", async (t) => {
+  const requests: Array<Record<string, unknown>> = [];
+  const context = await fixture(t, {
+    runtimeCapabilities: true,
+    codexIntegration: {
+      port: {
+        request: async (request) => {
+          requests.push(request);
+          return {
+            schemaVersion: 1,
+            echoedCommand: request.command,
+            authority: {
+              codexNativeLaneWrapped: false,
+              arbitraryRpcAccepted: false,
+            },
+          };
+        },
+      },
+    },
+  });
+  const listed = await context.client.listTools();
+  const names = new Set(listed.tools.map((tool) => tool.name));
+  const expected = [
+    "codex_gateway_status",
+    "codex_session_list",
+    "codex_session_read",
+    "codex_session_activity",
+    "codex_session_metrics",
+    "codex_account_usage",
+    "codex_model_list",
+    "codex_live_events",
+    "codex_approval_list",
+    "codex_session_open",
+    "codex_turn_control",
+    "codex_session_control",
+    "codex_approval_respond",
+    "codex_effect_status",
+  ];
+  for (const name of expected) {
+    assert.ok(names.has(name), `missing ${name}`);
+  }
+  for (const name of expected) {
+    const tool = listed.tools.find((candidate) => candidate.name === name);
+    const schema = JSON.stringify(tool?.inputSchema ?? {});
+    assert.equal(schema.includes("threadId"), false, `${name} exposes threadId`);
+    assert.equal(schema.includes("socketPath"), false, `${name} exposes socketPath`);
+    assert.equal(schema.includes("rolloutPath"), false, `${name} exposes rolloutPath`);
+    assert.equal(schema.includes('"method"'), false, `${name} exposes generic method`);
+  }
+  const sessionOpenSchema = JSON.stringify(
+    listed.tools.find((tool) => tool.name === "codex_session_open")?.inputSchema ?? {},
+  );
+  for (const token of ["start", "resume", "fork", "workspaceRef", "sessionRef"]) {
+    assert.ok(sessionOpenSchema.includes(token), `session-open schema missing ${token}`);
+  }
+  const turnControlSchema = JSON.stringify(
+    listed.tools.find((tool) => tool.name === "codex_turn_control")?.inputSchema ?? {},
+  );
+  for (const token of ["submit", "steer", "interrupt", "message", "turnRef"]) {
+    assert.ok(turnControlSchema.includes(token), `turn-control schema missing ${token}`);
+  }
+  const sessionControlSchema = JSON.stringify(
+    listed.tools.find((tool) => tool.name === "codex_session_control")?.inputSchema ?? {},
+  );
+  for (const token of [
+    "rollback",
+    "delete",
+    "acknowledgeFilesNotReverted",
+    "acknowledgePermanentDelete",
+    '"const":true',
+  ]) {
+    assert.ok(
+      sessionControlSchema.includes(token),
+      `session-control schema missing ${token}`,
+    );
+  }
+  const status = await context.client.callTool({
+    name: "codex_gateway_status",
+    arguments: {},
+  });
+  assert.equal(structuredData(status).echoedCommand, "codex_gateway_status");
+  assert.equal(requests.length, 1);
+  const snapshot = context.runtimeCapabilities!.snapshot();
+  const surface = snapshot.toolSurface as Record<string, any>;
+  assert.equal(
+    surface.criticalToolGroups.codexIntegration.registrationState,
+    "complete",
+  );
+  assert.equal(surface.configuration.codexIntegrationEnabled, true);
 });
 
 test("open_workspace keeps lifecycle flags out of model output and preserves complete card metadata", async (t) => {
@@ -2124,6 +2217,7 @@ interface ServerFixture {
   hostSkillPath?: string;
   localAgentCoordinator?: LocalAgentCoordinator;
   conversationTransportRuntime?: ConversationTransportRuntime;
+  codexIntegrationRuntime?: CodexIntegrationRuntime;
   runtimeCapabilities?: RuntimeCapabilityRegistry;
   ownerRemote?: string;
   close: () => Promise<void>;
@@ -2150,6 +2244,9 @@ async function fixture(
     conversationTransport?: {
       effectsEnabled?: boolean;
       bridge: ConversationTransportBridgePort;
+    };
+    codexIntegration?: {
+      port: CodexIntegrationPort;
     };
     workspaceSystemIndex?: boolean;
   } = {},
@@ -2332,6 +2429,15 @@ async function fixture(
           ),
         }
       : {}),
+    ...(options.codexIntegration
+      ? {
+          DEVSPACE_CODEX_INTEGRATION: "1",
+          DEVSPACE_CODEX_INTEGRATION_BRIDGE_SOCKET: join(
+            root,
+            "codex-integration-bridge.sock",
+          ),
+        }
+      : {}),
     PORT: "1",
   });
   const store = new SqliteWorkspaceStore(stateDir);
@@ -2342,6 +2448,12 @@ async function fixture(
         config.conversationTransport,
         stateDir,
         { bridge: options.conversationTransport.bridge },
+      )
+    : undefined;
+  const codexIntegrationRuntime = options.codexIntegration
+    ? new CodexIntegrationRuntime(
+        config.codexIntegration,
+        { port: options.codexIntegration.port },
       )
     : undefined;
   const executionScopes = options.useDefaultExecutionScopes
@@ -2377,6 +2489,7 @@ async function fixture(
         options.continuationPreflightProjector,
         options.scopePublicationPreflight,
         conversationTransportRuntime,
+        codexIntegrationRuntime,
       )
     : createMcpServer(
         config,
@@ -2394,6 +2507,7 @@ async function fixture(
         options.continuationPreflightProjector,
         options.scopePublicationPreflight,
         conversationTransportRuntime,
+        codexIntegrationRuntime,
       );
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: "devspace-test-client", version: "1.0.0" });
@@ -2428,6 +2542,7 @@ async function fixture(
     hostSkillPath,
     localAgentCoordinator,
     conversationTransportRuntime,
+    codexIntegrationRuntime,
     runtimeCapabilities,
     ownerRemote,
     close,

@@ -66,6 +66,8 @@ AUTHORITY = {
     "arbitrarySocketPathAccepted": False,
     "rawConversationUrlPersisted": False,
     "rawPromptPersisted": False,
+    "codexNativeLaneWrapped": False,
+    "genericCodexRpcAccepted": False,
     "reconcileBeforeRetry": True,
     "unknownFailsClosed": True,
 }
@@ -201,6 +203,12 @@ def load_config(path: Path) -> dict[str, Any]:
     app_server_socket = Path(raw.get("appServerSocket", "/root/.codex/app-server-control/app-server-control.sock"))
     state_dir = Path(raw.get("stateDir", "/var/lib/zes-conversation-transport-bridge"))
     socket_path = Path(raw.get("socketPath", str(DEFAULT_SOCKET)))
+    codex_gateway_module_path = Path(
+        raw.get(
+            "codexGatewayModulePath",
+            str(Path(__file__).with_name("zes_codex_gateway.py")),
+        )
+    )
     allowed_peer_uids = raw.get("allowedPeerUids", [0])
     if not isinstance(allowed_peer_uids, list) or any(not isinstance(uid, int) or uid < 0 for uid in allowed_peer_uids):
         raise BridgeError("CONFIG_INVALID", "allowedPeerUids must be non-negative integers")
@@ -211,6 +219,7 @@ def load_config(path: Path) -> dict[str, Any]:
         "appServerSocket": app_server_socket,
         "stateDir": state_dir,
         "socketPath": socket_path,
+        "codexGatewayModulePath": codex_gateway_module_path,
         "allowedPeerUids": set(allowed_peer_uids),
     }
 
@@ -266,8 +275,42 @@ class Bridge:
     def __init__(self, config: dict[str, Any]) -> None:
         self.config = config
         self.relay = load_python_module(config["relayModulePath"], "zes_codex_thread_relay")
+        codex_gateway_module_path = config.get(
+            "codexGatewayModulePath",
+            Path(__file__).with_name("zes_codex_gateway.py"),
+        )
+        self.codex_gateway_module = load_python_module(
+            Path(codex_gateway_module_path),
+            "zes_codex_gateway",
+        )
+        try:
+            self.codex_gateway = self.codex_gateway_module.CodexGateway(
+                config,
+                self.relay,
+            )
+        except self.codex_gateway_module.GatewayError as exc:
+            raise BridgeError(
+                exc.code,
+                str(exc),
+                exc.retry_disposition,
+            ) from exc
         self._lock_path = config["stateDir"] / "bridge.lock"
         self._lock_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+
+    def handle_codex_gateway(self, request: dict[str, Any]) -> dict[str, Any]:
+        try:
+            return self.codex_gateway.handle(request)
+        except self.codex_gateway_module.GatewayError as exc:
+            raise BridgeError(
+                exc.code,
+                str(exc),
+                exc.retry_disposition,
+            ) from exc
+
+    def close(self) -> None:
+        gateway = getattr(self, "codex_gateway", None)
+        if gateway is not None:
+            gateway.close()
 
     def target(self, alias: str) -> dict[str, Any]:
         alias = require_string(alias, "targetAlias", maximum=200, pattern=ALIAS_PATTERN)
@@ -1331,6 +1374,13 @@ class BridgeRequestHandler(socketserver.StreamRequestHandler):
                     "command": "reconcile",
                     "receipt": self.server.bridge.reconcile(request),
                 }
+            elif isinstance(command, str) and command.startswith("codex_"):
+                payload = {
+                    "schemaVersion": 1,
+                    "ok": True,
+                    "command": command,
+                    "data": self.server.bridge.handle_codex_gateway(request),
+                }
             else:
                 raise BridgeError("INVALID_COMMAND", "Command is not supported", "forbidden")
             self.wfile.write((canonical_json(payload) + "\n").encode("utf-8"))
@@ -1380,7 +1430,10 @@ class BridgeUnixServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServe
     def server_close(self) -> None:
         path = Path(self.server_address)
         try:
-            super().server_close()
+            try:
+                self.bridge.close()
+            finally:
+                super().server_close()
         finally:
             if path.exists() or path.is_socket():
                 path.unlink(missing_ok=True)
@@ -1401,15 +1454,28 @@ def main() -> int:
     args = parse_args()
     config = load_config(args.config)
     if args.command == "validate-config":
-        print(canonical_json({
-            "ok": True,
-            "schemaVersion": 1,
-            "targetAliases": sorted(config["targets"]),
-            "effectsEnabled": bool(config.get("effectsEnabled", False)),
-        }))
+        bridge = Bridge(config)
+        try:
+            print(canonical_json({
+                "ok": True,
+                "schemaVersion": 1,
+                "targetAliases": sorted(config["targets"]),
+                "effectsEnabled": bool(config.get("effectsEnabled", False)),
+                "codexGatewayEnabled": bridge.codex_gateway.enabled,
+                "codexGatewayEffectsEnabled": bridge.codex_gateway.global_effects_enabled,
+                "codexGatewayPersistentChannelsEnabled":
+                    bridge.codex_gateway.persistent_channels_enabled,
+                "codexServerRefs": sorted(bridge.codex_gateway.servers),
+            }))
+        finally:
+            bridge.close()
         return 0
     if args.command == "status":
-        print(canonical_json(Bridge(config).status(args.target_alias)))
+        bridge = Bridge(config)
+        try:
+            print(canonical_json(bridge.status(args.target_alias)))
+        finally:
+            bridge.close()
         return 0
     server = BridgeUnixServer(config)
     stop = threading.Event()

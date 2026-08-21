@@ -75,11 +75,43 @@ advanced the project. Exact-action reliance remains blocked when authority is
 unverified or changed. Time alone does not make a capsule stale or current. See
 [Turn Continuity and Recovery Capsules](turn-continuity.md).
 
-## Codex Is an Optional Executor Adapter
+## Codex Native Integration and the Legacy AOQ Adapter
 
-The `codex_session_status`, `codex_session_tail`, and `codex_session_audit`
-tools observe one allowlisted Codex executor lane. They do not provide access to
-the VPS and do not determine whether DevSpace workspace execution is healthy.
+The general Codex collaboration surface is the typed native integration:
+
+- `codex_gateway_status`
+- `codex_session_list`
+- `codex_session_read`
+- `codex_session_activity`
+- `codex_session_metrics`
+- `codex_account_usage`
+- `codex_model_list`
+- `codex_live_events`
+- `codex_approval_list`
+- `codex_session_open`
+- `codex_turn_control`
+- `codex_session_control`
+- `codex_approval_respond`
+- `codex_effect_status`
+
+It can discover and operate multiple configured App Servers and sessions with
+opaque refs. It preserves native Codex thread/turn capabilities and does not
+place the Codex executor behind DevSpace. DevSpace is only an edge client for
+another peer executor. Current Git, task, writer, publication, runtime, and
+business-effect authority remain external and must be reconciled before
+overlapping mutation. See [Codex Native Integration](codex-native-integration.md).
+
+The persistent native channel receives real-time events and server-initiated
+approval/input requests. It never auto-approves. Private reasoning is excluded,
+secret questions cannot be answered through the model-facing route, and an
+approval response remains indeterminate until native resolution is observed.
+
+The older `codex_session_status`, `codex_session_tail`, and
+`codex_session_audit` tools remain a compatibility adapter for one allowlisted
+AOQ lane. They are not the general multi-session Codex interface.
+
+Neither Codex integration path determines whether DevSpace workspace execution
+is healthy.
 
 `codex_session_status` reports reader transport, live App Server transport,
 thread lifecycle, direct-input capability, and persistence freshness as

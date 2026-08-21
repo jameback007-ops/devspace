@@ -106,6 +106,13 @@ The bridge's process/file lock remains a final actuator-local concurrency
 guard. It is not a replacement for the durable InteractionBroker lease and
 checkpoint.
 
+The same privileged bridge also hosts the independent full-lifecycle Codex
+integration gateway. That gateway is not part of wake routing and does not
+wrap Codex. It reuses the existing Unix peer boundary, App Server relay, and
+durable effect ledger while exposing typed multi-server/session discovery,
+activity, metrics, session/turn lifecycle, and reconciliation to DevSpace. See
+[`codex-native-integration.md`](./codex-native-integration.md).
+
 The detailed state model, evidence rules, and failure semantics are documented
 in [`host-turn-lifecycle.md`](./host-turn-lifecycle.md).
 

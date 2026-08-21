@@ -148,6 +148,10 @@ import {
   ConversationTransportRuntime,
   registerConversationTransportTools,
 } from "./conversation-transport-tools.js";
+import {
+  CodexIntegrationRuntime,
+  registerCodexIntegrationTools,
+} from "./codex-integration-tools.js";
 
 type Transport = StreamableHTTPServerTransport;
 // MCP clients can reconnect without closing the previous transport. Bound stale
@@ -526,6 +530,9 @@ const registerAppTool = ((
 function serverInstructions(config: ServerConfig): string {
   const codexSessionInstruction =
     " To inspect the allowlisted AOQ Codex executor adapter, use codex_session_status, codex_session_tail, or codex_session_audit. These tools report adapter transport health separately from the Codex thread lifecycle and never represent DevSpace, VPS, workspace, or ZES product health. To inspect the exact live AOQ worktree, use codex_workspace_git_status, codex_workspace_tree, codex_workspace_read, codex_workspace_search, or codex_workspace_diff. These brokered commands are read-only and independent from the Codex thread lifecycle.";
+  const codexIntegrationInstruction = config.codexIntegration.enabled
+    ? " For general Codex collaboration, use codex_gateway_status and codex_session_list rather than assuming the legacy AOQ adapter is the only Codex session. The Codex integration is a full typed edge gateway to native App Server capabilities: inspect sessions, persisted activity, live native events, performance, account usage and models; start/resume/fork sessions; submit/steer/interrupt turns; manage supported session lifecycle; and list/respond to server-initiated approvals or non-secret input. It does not wrap or narrow Codex's native lane. codex_session_activity reads persisted history, while codex_live_events reads the bounded sequence-numbered persistent-channel buffer. The gateway never auto-approves; inspect codex_approval_list and answer one opaque approvalRef through codex_approval_respond. Session-wide approval and policy amendment require explicit acknowledgements, secret questions are forbidden, and a response remains indeterminate until native serverRequest/resolved confirmation or codex_effect_status reconciliation. All targets are opaque server/workspace/session/turn/item/approval refs; never invent or request raw sockets, native IDs, rollout paths, or generic RPC. Reuse the exact idempotencyKey for an identical lifecycle effect. A succeeded gateway receipt proves only the typed Codex transport effect it names; an in-flight or indeterminate receipt requires codex_effect_status reconciliation and must not be replayed blindly. Codex session state never substitutes for canonical Git, task, writer, publication, runtime, or business-effect authority, and current work ownership must still be reconciled before overlapping mutation."
+    : "";
   const zesContinuationInstruction =
     " For repository publication of a linked candidate, read stableControlPlane.capabilities.scopePublicationPreflight or the fixed self_repository_publication_preflight route. Those candidate-bound routes obtain fresh fixed remote-main authority directly, verify exact clean candidate identity and unchanged HEAD-bound validation evidence, expose required versus skipped evidence with stage timings, and require compare-and-swap plus authoritative post-push readback. Do not use unrelated Codex/AOQ thread, runtime-service, material-work, local branch-tracking, or local-hook state as proxy repository-writer authority. For governed-checkout mutation, runtime deployment/takeover, runtime-state reliance, or exact material-effect reconciliation, use the fixed continuation projection returned inside execution_scope_status; use zes_continuation_preflight as an ergonomic direct alias when the host catalog exposes it. A frozen catalog may rely on the embedded projection for the read-only preflight, but the downstream mutation/effect gate must still revalidate current authority and never inherits writer, takeover, retry, or effect authority from the projection. Once a candidate is eligible, treat it as publication-only terminal state: do not reopen research or feature expansion unless a reproducible defect blocks publication, and any candidate mutation invalidates the plan. Catalog staleness never creates writer uncertainty and blocks only a direct invocation lane that genuinely has no compatible projection, not unrelated mission work. No route grants publication authority, and the fixed effect gate must still serialize publication, revalidate the plan, use an exact remote lease, and derive terminal outcome from remote readback.";
   const zesResearchCycleInstruction = config.zesResearchCycle.mode === "off"
@@ -557,7 +564,7 @@ function serverInstructions(config: ServerConfig): string {
     const codexInspectionInstruction = config.codexNavigationTools
       ? ` Use ${toolNames.read} for direct file reads and prefer the native ${toolNames.grep}, ${toolNames.glob}, and ${toolNames.ls} tools for bounded workspace search and navigation. Use exec_command for tests, builds, Git inspection, package scripts, and commands that genuinely require a shell.`
       : ` Use ${toolNames.read} for direct file reads and exec_command for inspection, tests, builds, and other commands.`;
-    return `Use DevSpace for coding work. Call ${toolNames.openWorkspace} once for each project folder or isolated worktree, then keep using its workspaceId. During continued work in the same project or worktree, do not call ${toolNames.openWorkspace} again. Open another workspace only when changing projects, switching checkout/worktree mode, creating another isolated worktree, or when the current workspaceId is rejected.${codexInspectionInstruction} Use apply_patch for all file modifications and write_stdin to poll or interact with running processes. Follow instructions returned by ${toolNames.openWorkspace}; read applicable instruction and skill files before working in their scope.${workspaceLifecycleInstruction}${artifactInstruction}${showChangesInstruction}${codexSessionInstruction}${zesContinuationInstruction}${zesResearchCycleInstruction}${executionScopeInstruction}${executionMailboxInstruction}${turnContinuityInstruction}${localAgentInstruction}`;
+    return `Use DevSpace for coding work. Call ${toolNames.openWorkspace} once for each project folder or isolated worktree, then keep using its workspaceId. During continued work in the same project or worktree, do not call ${toolNames.openWorkspace} again. Open another workspace only when changing projects, switching checkout/worktree mode, creating another isolated worktree, or when the current workspaceId is rejected.${codexInspectionInstruction} Use apply_patch for all file modifications and write_stdin to poll or interact with running processes. Follow instructions returned by ${toolNames.openWorkspace}; read applicable instruction and skill files before working in their scope.${workspaceLifecycleInstruction}${artifactInstruction}${showChangesInstruction}${codexIntegrationInstruction}${codexSessionInstruction}${zesContinuationInstruction}${zesResearchCycleInstruction}${executionScopeInstruction}${executionMailboxInstruction}${turnContinuityInstruction}${localAgentInstruction}`;
   }
 
   const inspection = config.toolMode !== "full"
@@ -570,7 +577,7 @@ function serverInstructions(config: ServerConfig): string {
 
   const agentsMd = `Follow instructions returned by ${toolNames.openWorkspace}. Consume any returned systemIndexes as mandatory stack and capability orientation, while resolving current state and authority through the exact refs they name. Before working under a path listed in availableAgentsFiles, use ${toolNames.read} to inspect that instruction file and follow it. `;
 
-  return `Use DevSpace for coding work. Call ${toolNames.openWorkspace} once for each project folder or isolated worktree, then keep using its workspaceId. During continued work in the same project or worktree, do not call ${toolNames.openWorkspace} again. Open another workspace only when changing projects, switching checkout/worktree mode, creating another isolated worktree, or when the current workspaceId is rejected. ${agentsMd}${skills}${inspection}Prefer ${toolNames.edit} for targeted modifications, ${toolNames.write} only for new files or complete rewrites, and ${toolNames.shell} for tests, builds, git inspection, package scripts, and commands that are better executed by the shell. Do not create or modify files with ${toolNames.shell}; avoid shell redirection, heredocs, tee, sed -i, perl -i, node/python/ruby scripts, or any command whose purpose is to write project files.${workspaceLifecycleInstruction}${artifactInstruction}${showChangesInstruction}${codexSessionInstruction}${zesContinuationInstruction}${zesResearchCycleInstruction}${executionScopeInstruction}${executionMailboxInstruction}${turnContinuityInstruction}${localAgentInstruction}`;
+  return `Use DevSpace for coding work. Call ${toolNames.openWorkspace} once for each project folder or isolated worktree, then keep using its workspaceId. During continued work in the same project or worktree, do not call ${toolNames.openWorkspace} again. Open another workspace only when changing projects, switching checkout/worktree mode, creating another isolated worktree, or when the current workspaceId is rejected. ${agentsMd}${skills}${inspection}Prefer ${toolNames.edit} for targeted modifications, ${toolNames.write} only for new files or complete rewrites, and ${toolNames.shell} for tests, builds, git inspection, package scripts, and commands that are better executed by the shell. Do not create or modify files with ${toolNames.shell}; avoid shell redirection, heredocs, tee, sed -i, perl -i, node/python/ruby scripts, or any command whose purpose is to write project files.${workspaceLifecycleInstruction}${artifactInstruction}${showChangesInstruction}${codexIntegrationInstruction}${codexSessionInstruction}${zesContinuationInstruction}${zesResearchCycleInstruction}${executionScopeInstruction}${executionMailboxInstruction}${turnContinuityInstruction}${localAgentInstruction}`;
 }
 
 function formatVisibleAgent(agent: {
@@ -2504,6 +2511,7 @@ export function createMcpServer(
   continuationPreflightProjector?: ZesContinuationPreflightProjectionSource,
   scopePublicationPreflight?: ScopePublicationPreflightSource,
   conversationTransportRuntime?: ConversationTransportRuntime,
+  codexIntegrationRuntime?: CodexIntegrationRuntime,
 ): McpServer {
   const ownsExecutionScopes = executionScopes === undefined;
   const ownsExecutionMailbox = executionMailbox === undefined;
@@ -2540,6 +2548,11 @@ export function createMcpServer(
         config.stateDir,
       )
     : undefined;
+  const activeCodexIntegrationRuntime = config.codexIntegration.enabled
+    ? codexIntegrationRuntime ?? new CodexIntegrationRuntime(
+        config.codexIntegration,
+      )
+    : undefined;
   const lifecycleStore = workspaces.lifecycleStore();
   const activeWorkspaceLifecycle = lifecycleStore
     ? new WorkspaceLifecycleManager(
@@ -2571,7 +2584,7 @@ export function createMcpServer(
       title: "DevSpace",
       version: config.mcpServerVersion,
       description:
-        "Coding tools for project workspaces, advisory turn continuity and Git-bound recovery capsules, execution-scope observability and messaging, serialized local-agent provider continuation, and optional read-only inspection of the exact live AOQ Codex adapter and worktree.",
+        "Coding tools for project workspaces, advisory turn continuity and Git-bound recovery capsules, execution-scope observability and messaging, serialized local-agent provider continuation, optional legacy AOQ inspection, and a typed full-lifecycle native Codex App Server integration that does not wrap or narrow Codex's own execution lane.",
     },
     {
       instructions: serverInstructions(config),
@@ -2653,6 +2666,14 @@ export function createMcpServer(
       activeConversationTransportRuntime,
       registerAppTool,
       executionScopeIdentity,
+    );
+  }
+  if (activeCodexIntegrationRuntime) {
+    registerCodexIntegrationTools(
+      server,
+      config,
+      activeCodexIntegrationRuntime,
+      registerAppTool,
     );
   }
 
