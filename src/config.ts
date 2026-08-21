@@ -18,12 +18,19 @@ export type ToolMode = "minimal" | "full" | "codex";
 export type WidgetMode = "off" | "changes" | "full";
 export type ZesResearchCycleMode = "off" | "observe" | "enforce";
 
+export interface ZesResearchInstrumentExecutionConfig {
+  enabled: boolean;
+  labRoot: string;
+  maxConcurrent: number;
+}
+
 export interface ZesResearchCycleConfig {
   mode: ZesResearchCycleMode;
   repositoryRoot: string;
   stateRoot: string;
   timeoutMs: number;
   trustedTraceRoots: string[];
+  instrumentExecution: ZesResearchInstrumentExecutionConfig;
 }
 
 export interface ToolSurfaceFreshnessConfig {
@@ -864,6 +871,23 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
       trustedTraceRoots: parsePathList(
         env.DEVSPACE_ZES_RESEARCH_TRUSTED_TRACE_ROOTS,
       ),
+      instrumentExecution: {
+        enabled: parseBoolean(
+          env.DEVSPACE_ZES_RESEARCH_INSTRUMENT_EXECUTION_ENABLED,
+        ),
+        labRoot: resolve(
+          expandHomePath(
+            env.DEVSPACE_ZES_RESEARCH_LAB_ROOT
+              ?? "/srv/zes-labs/research-instruments",
+          ),
+        ),
+        maxConcurrent: parsePositiveInteger(
+          env.DEVSPACE_ZES_RESEARCH_INSTRUMENT_MAX_CONCURRENT,
+          1,
+          "DEVSPACE_ZES_RESEARCH_INSTRUMENT_MAX_CONCURRENT",
+          16,
+        ),
+      },
     },
     toolSurfaceFreshness: parseToolSurfaceFreshnessConfig(env),
     selfRepositoryPublication: parseSelfRepositoryPublicationConfig(env),

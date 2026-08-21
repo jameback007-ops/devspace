@@ -65,6 +65,11 @@ async function fixture(t: TestContext): Promise<Fixture> {
     stateRoot: join(root, "state"),
     timeoutMs: 10_000,
     trustedTraceRoots: [],
+    instrumentExecution: {
+      enabled: false,
+      labRoot: join(root, "lab"),
+      maxConcurrent: 1,
+    },
   };
   const workspace = { workspaceId: "ws_provider_fixture", root: project };
   const manager = new ZesResearchCycleManager(config);

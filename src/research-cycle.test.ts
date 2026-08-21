@@ -181,6 +181,11 @@ async function fixture(
     stateRoot: join(root, "state"),
     timeoutMs: 10_000,
     trustedTraceRoots: [],
+    instrumentExecution: {
+      enabled: false,
+      labRoot: join(root, "lab"),
+      maxConcurrent: 1,
+    },
   };
   const workspace = { workspaceId: "ws_research_fixture", root: project };
   let currentNow = new Date(NOW);

@@ -112,6 +112,9 @@ and activates only for opened workspaces containing
 | `DEVSPACE_ZES_RESEARCH_STATE_ROOT` | `<DEVSPACE_STATE_DIR>/zes-research-cycles` | Owner-local lifecycle, receipt, and evidence state. |
 | `DEVSPACE_ZES_RESEARCH_TIMEOUT_SECONDS` | `60` | Native Research Reflex command timeout; maximum 300 seconds. |
 | `DEVSPACE_ZES_RESEARCH_TRUSTED_TRACE_ROOTS` | empty | Comma-separated additional roots for exact provider trace receipts. |
+| `DEVSPACE_ZES_RESEARCH_INSTRUMENT_EXECUTION_ENABLED` | `0` | Enables the ChatGPT/Sol-Pro-only fixed shared-Lab Inspect execution edge. The tool is still discoverable when disabled so status can report an explicit unavailable state. It does not alter the Codex native harness. |
+| `DEVSPACE_ZES_RESEARCH_LAB_ROOT` | `/srv/zes-labs/research-instruments` | Fixed server-owned shared Lab root. The model cannot supply or override this path. |
+| `DEVSPACE_ZES_RESEARCH_INSTRUMENT_MAX_CONCURRENT` | `1` | Maximum detached shared-Lab executions retained as dispatching or running; range 1-16. |
 | `EXA_API_KEY` | empty | Optional service-held Exa handle required by the fixed `zes_research_provider_invoke` Exa route. Exa `search` is the open-world operation; Exa `fetch` remains known-source acquisition. The handle is copied only into that exact child process and never into arbitrary `exec_command` or model-visible output. |
 | `CONTEXT7_API_KEY` | empty | Optional service-held Context7 handle for the fixed provider broker. Anonymous Context7 remains usable when supported upstream. |
 
@@ -128,6 +131,17 @@ The adapter is executor-local and does not grant task, semantic, writer,
 publication, release, activation, runtime, or effect authority. See
 [ZES Research Reflex Execution Cycle](research-execution-cycle.md) for the tool
 flow, native bindings, and failure semantics.
+
+When the optional shared-Lab edge is enabled,
+`zes_research_instrument_execute` starts only an exact current-generation
+model-backed `agent_behavior_eval` or `bounded_counterfactual` plan step under
+the declared `isolated_sandbox` boundary. It accepts a named Inspect task,
+shared profile, bounded limit, and explicit restricted-profile acknowledgement;
+it accepts no shell command, executable, arbitrary path, credential, endpoint,
+model, reasoning, protocol, fallback, or live effect. Execution is asynchronous
+and durable. `zes_research_instrument_status` reconciles terminal runner output
+into cycle evidence, while an unknown outcome blocks every new dispatch for the
+same plan step until an exact terminal receipt appears.
 
 ## Workspace Lifecycle and Worktree Garbage Collection
 

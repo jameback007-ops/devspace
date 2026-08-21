@@ -205,6 +205,20 @@ input domain, or new privileged action requires an explicit ABI-major review
 and host action refresh. `tools/list_changed` is defense in depth only and
 cannot replace this compatibility boundary.
 
+`zes_research_instrument_execute` is an optional non-bootstrap action rather
+than a stable-control-plane projection. A host must refresh its catalog before
+calling it. Keep the action specific to the ChatGPT/Sol-Pro MCP lane: it may
+execute one exact current Research Reflex plan step through the fixed shared
+Research Lab, but it must not become the Codex planning, continuation,
+checkpoint, or orchestration lifecycle. Read the shared Lab's no-inference
+status before dispatch, bind the exact evaluator-policy digest, reject
+automatic profile escalation and protocol fallback, persist dispatch before
+starting the provider child, and make every unknown outcome
+reconcile-before-retry. Adjudication and frontier calls require exact terminal
+basis executions and remain under the shared policy's sample ceilings; a
+successful Lab process is evidence production, not research sufficiency or
+semantic acceptance.
+
 The effect gate serializes publication with a repository-local lease, requires
 the unchanged plan digest, rereads remote `main`, pushes the exact candidate SHA
 with an expected-old force-with-lease binding, and derives terminal outcome from

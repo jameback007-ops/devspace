@@ -85,6 +85,18 @@ try {
     idempotentHint: true,
     openWorldHint: false,
   });
+  assert.deepEqual(annotations("zes_research_instrument_execute"), {
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: true,
+  });
+  assert.deepEqual(annotations("zes_research_instrument_status"), {
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: false,
+  });
 
   const statusHandler = handlers.get("zes_research_cycle_status");
   assert.ok(statusHandler);
@@ -94,6 +106,26 @@ try {
   };
   assert.equal(structured.data?.managed, false);
   assert.equal(structured.data?.mode, "observe");
+
+  const executeHandler = handlers.get("zes_research_instrument_execute");
+  assert.ok(executeHandler);
+  const executionUnavailable = await executeHandler({
+    workspaceId: "ws_fixture",
+    idempotencyKey: "instrument-execute:disabled:v1",
+    planRef: "research-instrument-plan:fixture",
+    stepRef: "research-instrument-step:fixture",
+    adapter: "inspect_ai",
+    task: "experiments/fixture.py@fixture",
+  });
+  assert.equal(executionUnavailable.isError, true);
+  assert.equal(
+    (
+      executionUnavailable.structuredContent as {
+        data: { code: string };
+      }
+    ).data.code,
+    "RESEARCH_INSTRUMENT_EXECUTION_NOT_CONFIGURED",
+  );
 
   const seamHandlers = new Map<string, ToolHandler>();
   const assessedRequests: Record<string, unknown>[] = [];
@@ -121,6 +153,13 @@ try {
       };
     },
   };
+  const seamInstrumentExecutor = {
+    execute: async () => ({ status: "running" }),
+    status: async () => ({
+      configured: true,
+      readiness: { status: "ready", available: true },
+    }),
+  };
   registerZesResearchCycleTools(
     {} as McpServer,
     config,
@@ -132,6 +171,24 @@ try {
     }) as never,
     {} as never,
     seamInstrumentManager as never,
+    seamInstrumentExecutor as never,
+  );
+  const instrumentStatusHandler = seamHandlers.get(
+    "zes_research_instrument_status",
+  );
+  assert.ok(instrumentStatusHandler);
+  const instrumentStatus = await instrumentStatusHandler({
+    workspaceId: "ws_fixture",
+  });
+  assert.equal(
+    (
+      (
+        instrumentStatus.structuredContent as {
+          data: { execution: { configured: boolean } };
+        }
+      ).data.execution
+    ).configured,
+    true,
   );
   const evidenceRef = "research-instrument-evidence:fixture";
   const assessHandler = seamHandlers.get("zes_research_cycle_assess");

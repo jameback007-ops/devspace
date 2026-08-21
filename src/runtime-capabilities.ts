@@ -101,6 +101,9 @@ const CRITICAL_TOOL_GROUPS = {
     "zes_research_cycle_status",
     "zes_research_cycle_close",
   ],
+  zesResearchInstrumentExecution: [
+    "zes_research_instrument_execute",
+  ],
   conversationTransport: [
     "conversation_transport_bind",
     "conversation_transport_status",
@@ -318,6 +321,10 @@ export class RuntimeCapabilityRegistry {
       turnContinuityEnabled: this.config.turnContinuity.enabled,
       localAgentContinuationEnabled: this.config.subagents,
       zesResearchCycleMode: this.config.zesResearchCycle.mode,
+      zesResearchInstrumentExecutionEnabled:
+        this.config.zesResearchCycle.instrumentExecution.enabled,
+      zesResearchInstrumentExecutionMaxConcurrent:
+        this.config.zesResearchCycle.instrumentExecution.maxConcurrent,
       artifactDownloadConfigured: this.config.artifactsEnabled,
       workspaceSystemIndexConfiguredCount:
         this.config.workspaceSystemIndexPaths.length,
@@ -370,6 +377,12 @@ export class RuntimeCapabilityRegistry {
       zesResearchCycle: {
         configured: this.config.zesResearchCycle.mode !== "off",
         expectedTools: CRITICAL_TOOL_GROUPS.zesResearchCycle,
+      },
+      zesResearchInstrumentExecution: {
+        configured:
+          this.config.zesResearchCycle.mode !== "off"
+          && this.config.zesResearchCycle.instrumentExecution.enabled,
+        expectedTools: CRITICAL_TOOL_GROUPS.zesResearchInstrumentExecution,
       },
       conversationTransport: {
         configured: this.config.conversationTransport.enabled,

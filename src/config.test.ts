@@ -254,6 +254,11 @@ assert.deepEqual(loadConfig(baseEnv).zesResearchCycle, {
   ),
   timeoutMs: 60_000,
   trustedTraceRoots: [],
+  instrumentExecution: {
+    enabled: false,
+    labRoot: "/srv/zes-labs/research-instruments",
+    maxConcurrent: 1,
+  },
 });
 assert.deepEqual(
   loadConfig({
@@ -266,6 +271,9 @@ assert.deepEqual(
       join(emptyConfigDir, "traces-a"),
       join(emptyConfigDir, "traces-b"),
     ].join(","),
+    DEVSPACE_ZES_RESEARCH_INSTRUMENT_EXECUTION_ENABLED: "true",
+    DEVSPACE_ZES_RESEARCH_LAB_ROOT: join(emptyConfigDir, "lab"),
+    DEVSPACE_ZES_RESEARCH_INSTRUMENT_MAX_CONCURRENT: "2",
   }).zesResearchCycle,
   {
     mode: "enforce",
@@ -276,6 +284,11 @@ assert.deepEqual(
       join(emptyConfigDir, "traces-a"),
       join(emptyConfigDir, "traces-b"),
     ],
+    instrumentExecution: {
+      enabled: true,
+      labRoot: join(emptyConfigDir, "lab"),
+      maxConcurrent: 2,
+    },
   },
 );
 assert.throws(
@@ -284,6 +297,13 @@ assert.throws(
     DEVSPACE_ZES_RESEARCH_CYCLE_MODE: "mandatory",
   }),
   /Invalid DEVSPACE_ZES_RESEARCH_CYCLE_MODE/,
+);
+assert.throws(
+  () => loadConfig({
+    ...baseEnv,
+    DEVSPACE_ZES_RESEARCH_INSTRUMENT_MAX_CONCURRENT: "0",
+  }),
+  /Invalid DEVSPACE_ZES_RESEARCH_INSTRUMENT_MAX_CONCURRENT/,
 );
 assert.deepEqual(
   loadConfig({

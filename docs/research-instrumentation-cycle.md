@@ -12,7 +12,9 @@ claims. It does not make Jupyter, Hypothesis, Testcontainers, Inspect AI,
 Phoenix, OpenTelemetry, or any other experiment framework a required DevSpace
 dependency. It selects a capability-shaped experimental route, then binds the
 artifacts produced by an independently executed adapter to the current Research
-Reflex generation.
+Reflex generation. A separately configured ZES-specific edge may execute one
+already-planned Inspect AI step through the fixed shared Research Lab; the core
+planner and receipt binder remain provider-neutral.
 
 ## Authority boundary
 
@@ -28,9 +30,24 @@ The instrumentation layer owns only:
 - exposing evidence refs and claim ceilings to the existing Research Reflex
   assessment and pre-commit lifecycle.
 
+When the optional shared-Lab edge is enabled, the instrumentation layer may
+also:
+
+- dispatch one exact unblocked current-generation Inspect AI plan step;
+- accept only a named `experiments/*.py@task_name` entry and shared evaluator
+  profile under a fixed server-owned Lab root;
+- persist dispatch, running, terminal, and indeterminate state before allowing
+  any retry;
+- copy exact terminal runner receipts and Inspect traces into cycle-private
+  evidence; and
+- return the original state or terminal receipt for every replay of the same
+  idempotency key.
+
 It does not:
 
-- execute a notebook, property test, container, agent, evaluator, or canary;
+- expose an arbitrary notebook, property-test, container, shell, executable,
+  path, endpoint, credential, model, reasoning, protocol, fallback, or canary
+  execution surface;
 - decide whether a claim is true;
 - decide whether research is sufficient;
 - turn a model self-report into independent evidence;
@@ -38,6 +55,11 @@ It does not:
   effect authority; or
 - create another AOQ experiment, evaluation, memory, or workflow source of
   truth.
+
+The shared Lab is below the harness boundary. ChatGPT/Sol Pro may use the
+optional Nexus execution edge, while Codex retains its native harness and may
+use the same Lab through a Codex-native skill. Neither lane owns or rewrites the
+other lane's planning, continuation, checkpoint, or orchestration lifecycle.
 
 The native ZES Research Reflex remains the decision-admission and sufficiency
 authority. Publication and runtime effects remain separately governed.
@@ -53,14 +75,17 @@ The intended model-facing flow is:
    decision.
 3. Call `zes_research_instrument_plan` for any remaining material claim that
    requires experimental evidence.
-4. Execute the selected adapter outside this protocol under the declared
-   boundary:
+4. Execute the selected adapter under the declared boundary. A compatible
+   Inspect AI `agent_behavior_eval` or `bounded_counterfactual` step may use
+   `zes_research_instrument_execute` when the fixed shared-Lab edge is enabled;
+   every other adapter remains independently executed:
    - `local_only` for deterministic local computation or property testing;
    - `isolated_sandbox` for disposable dependencies or agent evaluation; or
    - `bounded_live` only after separate runtime/effect authorization.
 5. Persist the executable inputs, result, traces, minimized counterexample,
    report, or canary receipt under the workspace or the cycle-private evidence
-   directory.
+   directory. The optional Inspect edge materializes its terminal runner result,
+   traces, log, and execution manifest under `lab-executions/` in cycle evidence.
 6. Call `zes_research_instrument_record` with the typed result and exact
    artifacts. DevSpace binds their byte identities but does not reinterpret the
    experiment.
@@ -173,6 +198,12 @@ concerns. DevSpace does not infer that a WebChat subscription grants API usage,
 does not proxy arbitrary credentials into experiment commands, and does not
 claim model-backed evidence when `modelUse` is `forbidden`.
 
+The optional Inspect edge receives no provider credential from the model. It
+starts the fixed shared-Lab runner with a minimal environment; that runner may
+use its own root-owned local 9Router binding. Shared evaluator model, reasoning,
+protocol, and escalation policy remain Lab configuration rather than DevSpace
+task or semantic authority.
+
 ## Example: memory reliance
 
 For a claim that admitted memory improves real tool use:
@@ -200,8 +231,14 @@ This separates three different statements:
 
 The current slice supplies the provider-neutral planner, receipt binder,
 artifact-integrity verification, MCP tools, Research Reflex assessment seam,
-and pre-commit seam. It deliberately does not install or run external adapters
-and does not deploy or activate a new Nexus runtime. Adapter-specific runners,
-representative datasets, scorer qualification, longitudinal Task N→N+k
-experiments, and bounded live canaries remain separate evidence-producing
-effects.
+and pre-commit seam. It also supplies one opt-in, asynchronous, idempotent
+Inspect AI execution edge for the fixed shared ZES Research Lab. The edge is
+limited to isolated-sandbox model-backed plan steps, has bounded concurrency,
+does not perform live canaries, never automatically escalates a profile or
+falls back to another protocol, and blocks new dispatch for an exact plan step
+while an earlier outcome is indeterminate.
+
+Other adapter-specific runners, representative datasets, scorer qualification,
+longitudinal Task N→N+k experiments, and bounded live canaries remain separate
+evidence-producing effects. Source support does not itself mean that a Nexus
+runtime has enabled, deployed, or exercised the optional edge.

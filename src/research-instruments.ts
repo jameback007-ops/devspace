@@ -135,6 +135,27 @@ export interface ResearchInstrumentPlanInput {
   executionConstraints: ResearchInstrumentExecutionConstraints;
 }
 
+export interface ResearchInstrumentExecutionTarget {
+  cycleRef: string;
+  generation: number;
+  phase: ResearchInstrumentCycleContext["phase"];
+  taskRef: string;
+  materialDecisionRef: string;
+  decisionBoundaryRef: string;
+  planRef: string;
+  stepRef: string;
+  instrumentKind: ResearchInstrumentKind;
+  evidenceNeedKind: ResearchEvidenceNeedKind;
+  capabilityRef: string;
+  candidateAdapters: string[];
+  requiredArtifactRoles: ResearchInstrumentArtifactRole[];
+  claimCeiling: string;
+  modelBacked: boolean;
+  liveEffect: boolean;
+  executionConstraints: ResearchInstrumentExecutionConstraints;
+  workspaceSnapshot: ResearchInstrumentCycleContext["workspaceSnapshot"];
+}
+
 export interface ResearchInstrumentArtifactInput {
   location: ResearchInstrumentArtifactLocation;
   path: string;
@@ -1381,6 +1402,75 @@ export class ZesResearchInstrumentManager {
         artifactIntegrity: { status: "current", findings: [] },
         idempotentReplay: false,
         policy: publicPolicy(),
+      };
+    });
+  }
+
+  async executionTarget(
+    workspace: ResearchWorkspace,
+    rawPlanRef: string,
+    rawStepRef: string,
+  ): Promise<ResearchInstrumentExecutionTarget> {
+    const context = await this.cycleManager.instrumentContext(workspace);
+    assertPlanningPhase(context);
+    return await this.withLock(workspace, async () => {
+      const planRef = requiredString(rawPlanRef, "planRef");
+      const stepRef = requiredString(rawStepRef, "stepRef");
+      const state = await this.readState(workspace, context);
+      const plan = state.plans.find((candidate) =>
+        candidate.planRef === planRef
+      );
+      if (!plan) {
+        throw new ResearchCycleError(
+          "RESEARCH_INSTRUMENT_PLAN_NOT_FOUND",
+          "the requested instrument plan does not exist in this research cycle",
+        );
+      }
+      if (plan.generation !== context.generation) {
+        throw new ResearchCycleError(
+          "RESEARCH_INSTRUMENT_PLAN_STALE",
+          "the instrument plan belongs to an earlier research generation",
+          {
+            planGeneration: plan.generation,
+            currentGeneration: context.generation,
+          },
+        );
+      }
+      const step = plan.steps.find((candidate) =>
+        candidate.stepRef === stepRef
+      );
+      if (!step) {
+        throw new ResearchCycleError(
+          "RESEARCH_INSTRUMENT_STEP_NOT_FOUND",
+          "the requested instrument step does not exist in the plan",
+        );
+      }
+      if (step.blocked) {
+        throw new ResearchCycleError(
+          "RESEARCH_INSTRUMENT_STEP_BLOCKED",
+          "the instrument step cannot execute until its execution-boundary blockers are resolved",
+          { blockingFactors: step.blockingFactors },
+        );
+      }
+      return {
+        cycleRef: context.cycleRef,
+        generation: context.generation,
+        phase: context.phase,
+        taskRef: context.taskRef,
+        materialDecisionRef: context.materialDecisionRef,
+        decisionBoundaryRef: context.decisionBoundaryRef,
+        planRef: plan.planRef,
+        stepRef: step.stepRef,
+        instrumentKind: step.instrumentKind,
+        evidenceNeedKind: step.evidenceNeedKind,
+        capabilityRef: step.capabilityRef,
+        candidateAdapters: [...step.candidateAdapters],
+        requiredArtifactRoles: [...step.requiredArtifactRoles],
+        claimCeiling: step.claimCeiling,
+        modelBacked: step.modelBacked,
+        liveEffect: step.liveEffect,
+        executionConstraints: plan.executionConstraints,
+        workspaceSnapshot: context.workspaceSnapshot,
       };
     });
   }

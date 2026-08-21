@@ -36,6 +36,10 @@ import {
   type ResearchInstrumentRecordInput,
   ZesResearchInstrumentManager,
 } from "./research-instruments.js";
+import {
+  type ResearchInstrumentExecuteInput,
+  ZesResearchInstrumentExecutor,
+} from "./research-instrument-executor.js";
 
 type AppToolRegistrar = typeof registerAppToolType;
 type JsonObject = Record<string, unknown>;
@@ -70,6 +74,20 @@ const externalEvidenceAnnotations = {
   destructiveHint: false,
   idempotentHint: false,
   openWorldHint: true,
+};
+
+const boundedExternalExecutionAnnotations = {
+  readOnlyHint: false,
+  destructiveHint: false,
+  idempotentHint: true,
+  openWorldHint: true,
+};
+
+const localReconciliationAnnotations = {
+  readOnlyHint: false,
+  destructiveHint: false,
+  idempotentHint: true,
+  openWorldHint: false,
 };
 
 const workspaceIdSchema = z.string().min(1).describe(
@@ -438,6 +456,7 @@ export const ZES_RESEARCH_CYCLE_TOOL_NAMES = [
   "zes_research_horizon_record",
   "zes_research_horizon_status",
   "zes_research_instrument_plan",
+  "zes_research_instrument_execute",
   "zes_research_instrument_record",
   "zes_research_instrument_status",
   "zes_research_provider_invoke",
@@ -459,8 +478,59 @@ export function registerZesResearchCycleTools(
     manager,
   ),
   instrumentManager = new ZesResearchInstrumentManager(manager),
+  instrumentExecutor = new ZesResearchInstrumentExecutor(
+    manager,
+    instrumentManager,
+    config.zesResearchCycle.instrumentExecution,
+  ),
 ): void {
   if (!manager.enabled) return;
+
+  registerLifecycleTool(
+    server,
+    config,
+    registerTool,
+    "zes_research_instrument_execute",
+    {
+      title: "Execute one planned shared-Lab instrument step",
+      description:
+        "Start one idempotent Inspect AI execution for an exact unblocked current-generation Research Reflex planRef and stepRef through the fixed server-owned shared ZES Research Lab. Before dispatch, DevSpace reads the Lab's no-inference status contract and binds the exact evaluator-policy digest, current profile directory, model availability, explicit-only rules, and adjudication/frontier sample ceilings. The action accepts only a named experiments/*.py@task entry, a shared evaluator profile, a bounded sample limit, exact succeeded basis execution refs for escalation, and an explicit restricted-profile acknowledgement. It accepts no command, executable, absolute path, Lab root, endpoint, credential, model override, reasoning override, protocol override, fallback, or live effect. The execution is durable and asynchronous: the same idempotency key never dispatches twice, terminal artifacts are copied into cycle evidence, and running or unknown outcomes are reconciled through zes_research_instrument_status. This is a ChatGPT/Sol-Pro MCP execution edge only; it does not alter or govern the Codex native harness or skill lifecycle, and a successful run is not research sufficiency or semantic acceptance.",
+      inputSchema: {
+        workspaceId: workspaceIdSchema,
+        idempotencyKey: z.string()
+          .min(1)
+          .max(200)
+          .regex(/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$/u),
+        planRef: z.string().min(1),
+        stepRef: z.string().min(1),
+        adapter: z.literal("inspect_ai"),
+        task: z.string()
+          .min(1)
+          .max(1_000)
+          .regex(
+            /^experiments\/(?:[A-Za-z0-9._-]+\/)*[A-Za-z0-9._-]+\.py@[A-Za-z_][A-Za-z0-9_]*$/u,
+          ),
+        profile: z.string()
+          .regex(/^[a-z][a-z0-9_]{0,63}$/u)
+          .optional(),
+        limit: z.number().int().min(1).max(16).optional(),
+        allowRestrictedProfile: z.boolean().optional(),
+        basisExecutionRefs: z.array(
+          z.string().regex(/^research-instrument-execution:[a-f0-9]{64}$/u),
+        ).max(50).optional(),
+      },
+      outputSchema,
+      ...toolMeta(config),
+      annotations: boundedExternalExecutionAnnotations,
+    },
+    async (input: ResearchInstrumentExecuteInput & { workspaceId: string }) => {
+      const { workspaceId, ...executionInput } = input;
+      return await instrumentExecutor.execute(
+        resolveWorkspace(workspaceId),
+        executionInput,
+      );
+    },
+  );
 
   registerLifecycleTool(
     server,
@@ -549,14 +619,20 @@ export function registerZesResearchCycleTools(
     {
       title: "Read research instrument plans and receipts",
       description:
-        "Read current-generation experimental plans, blocked evidence steps, receipt refs, claim ceilings, and bounded artifact-integrity checks. Earlier generations remain counted as stale rather than silently reused. This is executor-local experimental evidence state, not canonical task, semantic, research-sufficiency, writer, publication, release, activation, runtime, or effect authority.",
+        "Read current-generation experimental plans, blocked evidence steps, durable shared-Lab execution states, terminal artifact paths, receipt refs, claim ceilings, and bounded artifact-integrity checks. The call may reconcile a terminal Inspect runner receipt into executor-local cycle evidence but never redispatches a running or indeterminate execution. Earlier generations remain counted as stale rather than silently reused. This is executor-local experimental evidence state, not canonical task, semantic, research-sufficiency, writer, publication, release, activation, runtime, Codex-harness, or live-effect authority.",
       inputSchema: { workspaceId: workspaceIdSchema },
       outputSchema,
       ...toolMeta(config),
-      annotations: readOnlyAnnotations,
+      annotations: localReconciliationAnnotations,
     },
-    async (input: { workspaceId: string }) =>
-      await instrumentManager.status(resolveWorkspace(input.workspaceId)),
+    async (input: { workspaceId: string }) => {
+      const workspace = resolveWorkspace(input.workspaceId);
+      const status = await instrumentManager.status(workspace);
+      return {
+        ...status,
+        execution: await instrumentExecutor.status(workspace),
+      };
+    },
   );
 
   registerLifecycleTool(
