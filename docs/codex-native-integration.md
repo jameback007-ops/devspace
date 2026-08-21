@@ -188,7 +188,9 @@ new request -> in_flight -> succeeded | rejected | indeterminate
 - Reusing the key for the identical request returns the original receipt.
 - Reusing it for a different request is rejected.
 - Prompt and instruction text is not persisted; the ledger stores digests and
-  lengths.
+  lengths. Durable session-open, unarchive, and rollback receipts use an
+  explicit content-free session projection: names, previews, and turns are
+  excluded even though bounded read tools may return them interactively.
 - A transport loss after dispatch becomes `indeterminate`.
 - `codex_effect_status` performs bounded readback when exact reconciliation is
   possible. It never blindly replays an unknown effect.

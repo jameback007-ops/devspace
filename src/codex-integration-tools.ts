@@ -91,6 +91,19 @@ const sessionOpenInputSchema = z.discriminatedUnion("mode", [
   }).strict(),
 ]);
 
+// The MCP Apps registration helper accepts a raw Zod shape or a Standard
+// Schema that can emit JSON Schema. A Zod discriminated-union instance is
+// accepted structurally but is advertised as an empty object by the current
+// SDK. Publish a conservative superset shape, then parse the exact union again
+// in the handler before any gateway request is dispatched.
+const sessionOpenAdvertisedShape = {
+  ...sessionOpenCommonShape,
+  mode: z.enum(["start", "resume", "fork"]),
+  sessionRef: sessionRef.optional(),
+  lastTurnRef: turnRef.optional(),
+  ephemeral: z.boolean().optional(),
+};
+
 const turnControlInputSchema = z.discriminatedUnion("action", [
   z.object({
     action: z.literal("submit"),
@@ -120,6 +133,22 @@ const turnControlInputSchema = z.discriminatedUnion("action", [
     turnRef,
   }).strict(),
 ]);
+
+const turnControlAdvertisedShape = {
+  action: z.enum(["submit", "steer", "interrupt"]),
+  idempotencyKey,
+  sessionRef,
+  turnRef: turnRef.optional(),
+  message: z.string().min(1).max(24_000).optional(),
+  workspaceRef: workspaceRef.optional(),
+  model: z.string().min(1).max(300).optional(),
+  reasoningEffort: z.string().min(1).max(100).optional(),
+  reasoningSummary: z.enum(["auto", "concise", "detailed", "none"]).optional(),
+  approvalPolicy: z.enum(["untrusted", "on-request", "never"]).optional(),
+  personality: z.enum(["none", "friendly", "pragmatic"]).optional(),
+  serviceTier: z.string().min(1).max(200).optional(),
+  outputSchema: z.record(z.string(), z.unknown()).optional(),
+};
 
 const sessionControlInputSchema = z.discriminatedUnion("action", [
   z.object({
@@ -188,6 +217,36 @@ const sessionControlInputSchema = z.discriminatedUnion("action", [
   }).strict(),
 ]);
 
+const sessionControlAdvertisedShape = {
+  action: z.enum([
+    "name_set",
+    "goal_set",
+    "goal_clear",
+    "compact",
+    "rollback",
+    "archive",
+    "unarchive",
+    "unsubscribe",
+    "delete",
+  ]),
+  idempotencyKey,
+  sessionRef,
+  name: z.string().min(1).max(500).optional(),
+  objective: z.string().min(1).max(4_000).optional(),
+  status: z.enum([
+    "active",
+    "paused",
+    "blocked",
+    "usageLimited",
+    "budgetLimited",
+    "complete",
+  ]).optional(),
+  tokenBudget: z.number().int().min(1).max(10_000_000_000).optional(),
+  numTurns: z.number().int().min(1).max(10_000).optional(),
+  acknowledgeFilesNotReverted: z.literal(true).optional(),
+  acknowledgePermanentDelete: z.literal(true).optional(),
+};
+
 const effectStatusInputSchema = z.union([
   z.object({
     effectRef,
@@ -198,6 +257,12 @@ const effectStatusInputSchema = z.union([
     reconcile: z.boolean().optional(),
   }).strict(),
 ]);
+
+const effectStatusAdvertisedShape = {
+  effectRef: effectRef.optional(),
+  idempotencyKey: idempotencyKey.optional(),
+  reconcile: z.boolean().optional(),
+};
 
 export const codexIntegrationToolNames = {
   gatewayStatus: "codex_gateway_status",
@@ -452,14 +517,15 @@ export function registerCodexIntegrationTools(
       title: "Start, resume, or fork a native Codex session",
       description:
         "Execute one idempotent typed Codex thread lifecycle effect. mode=start requires an allowlisted workspaceRef; resume/fork require an opaque sessionRef. Native model, sandbox, approval, instructions, and service-tier capabilities remain available without exposing raw native IDs or paths. Acceptance is executor-local transport evidence, not product writer or publication authority.",
-      inputSchema: sessionOpenInputSchema,
+      inputSchema: sessionOpenAdvertisedShape,
       outputSchema: resultOutputSchema(),
       _meta: {},
       annotations: NON_DESTRUCTIVE_EFFECT_ANNOTATIONS,
     },
-    async (input) => jsonResponse(
-      await runtime.request("codex_session_open", input),
-    ),
+    async (input) => {
+      const parsed = sessionOpenInputSchema.parse(input);
+      return jsonResponse(await runtime.request("codex_session_open", parsed));
+    },
   );
 
   registerTool(
@@ -469,14 +535,15 @@ export function registerCodexIntegrationTools(
       title: "Submit, steer, or interrupt a native Codex turn",
       description:
         "Execute one idempotent typed turn effect against an opaque Codex session. submit dynamically starts when idle or steers the exact active turn under race reconciliation; steer and interrupt require an opaque turnRef. Prompt text is never persisted by the gateway. Unknown transport outcomes become indeterminate and must be reconciled rather than replayed.",
-      inputSchema: turnControlInputSchema,
+      inputSchema: turnControlAdvertisedShape,
       outputSchema: resultOutputSchema(),
       _meta: {},
       annotations: EFFECT_ANNOTATIONS,
     },
-    async (input) => jsonResponse(
-      await runtime.request("codex_turn_control", input),
-    ),
+    async (input) => {
+      const parsed = turnControlInputSchema.parse(input);
+      return jsonResponse(await runtime.request("codex_turn_control", parsed));
+    },
   );
 
   registerTool(
@@ -486,14 +553,15 @@ export function registerCodexIntegrationTools(
       title: "Control a native Codex session lifecycle",
       description:
         "Execute one idempotent typed session effect: set name or goal, clear goal, compact, roll back Codex conversation history, archive, unarchive, unsubscribe this bridge connection, or permanently delete. Rollback explicitly does not revert filesystem changes; rollback and delete require dedicated acknowledgements. Effects remain executor-local and do not grant product authority.",
-      inputSchema: sessionControlInputSchema,
+      inputSchema: sessionControlAdvertisedShape,
       outputSchema: resultOutputSchema(),
       _meta: {},
       annotations: EFFECT_ANNOTATIONS,
     },
-    async (input) => jsonResponse(
-      await runtime.request("codex_session_control", input),
-    ),
+    async (input) => {
+      const parsed = sessionControlInputSchema.parse(input);
+      return jsonResponse(await runtime.request("codex_session_control", parsed));
+    },
   );
 
   registerTool(
@@ -547,14 +615,15 @@ export function registerCodexIntegrationTools(
       title: "Read or reconcile one Codex gateway effect",
       description:
         "Read one effect receipt by opaque effectRef or exact idempotencyKey. For in-flight or indeterminate effects, reconcile=true performs bounded native readback where an exact observation is possible; it never blindly retries. The receipt remains executor-local evidence rather than canonical task, writer, runtime, or business-effect state.",
-      inputSchema: effectStatusInputSchema,
+      inputSchema: effectStatusAdvertisedShape,
       outputSchema: resultOutputSchema(),
       _meta: {},
       annotations: LOCAL_RECONCILIATION_ANNOTATIONS,
     },
-    async (input) => jsonResponse(
-      await runtime.request("codex_effect_status", input),
-    ),
+    async (input) => {
+      const parsed = effectStatusInputSchema.parse(input);
+      return jsonResponse(await runtime.request("codex_effect_status", parsed));
+    },
   );
 }
 

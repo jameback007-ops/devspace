@@ -832,6 +832,96 @@ class CodexGatewayTests(unittest.TestCase):
         self.assertEqual(receipt["state"], "rejected")
         self.assertFalse(receipt["result"]["dispatchAttempted"])
 
+    def test_durable_effect_receipts_use_content_free_session_projection(self) -> None:
+        session = self.discover()
+        workspace_ref = session["workspace"]["workspaceRef"]
+        start = self.gateway.handle(
+            {
+                "command": "codex_session_open",
+                "mode": "start",
+                "workspaceRef": workspace_ref,
+                "idempotencyKey": "content-free-start-test",
+            }
+        )
+        self.assertEqual(start["state"], "succeeded")
+        created_ref = start["result"]["session"]["sessionRef"]
+
+        created = self.fake_state["threads"]["thread-created"]
+        created["name"] = "private durable effect name"
+        created["preview"] = "private durable effect preview"
+        created["turns"] = [
+            {
+                "id": "private-rollback-turn",
+                "status": "completed",
+                "startedAt": 10,
+                "completedAt": 20,
+                "items": [
+                    {
+                        "id": "private-rollback-item",
+                        "type": "userMessage",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "private rollback prompt",
+                            }
+                        ],
+                    }
+                ],
+            }
+        ]
+        unarchive = self.gateway.handle(
+            {
+                "command": "codex_session_control",
+                "action": "unarchive",
+                "sessionRef": created_ref,
+                "idempotencyKey": "content-free-unarchive-test",
+            }
+        )
+        rollback = self.gateway.handle(
+            {
+                "command": "codex_session_control",
+                "action": "rollback",
+                "sessionRef": created_ref,
+                "numTurns": 1,
+                "acknowledgeFilesNotReverted": True,
+                "idempotencyKey": "content-free-rollback-test",
+            }
+        )
+
+        for receipt in (start, unarchive, rollback):
+            self.assertEqual(receipt["state"], "succeeded")
+            self.assertFalse(receipt["result"]["sessionContentPersisted"])
+            projection = receipt["result"]["session"]
+            self.assertNotIn("name", projection)
+            self.assertNotIn("preview", projection)
+            self.assertNotIn("turns", projection)
+
+        ledger = sqlite3.connect(self.state_dir / "codex-gateway.sqlite3")
+        try:
+            stored = "\n".join(
+                row[0]
+                for row in ledger.execute(
+                    """
+                    select result_json from effects
+                    where idempotency_key in (?, ?, ?)
+                    order by idempotency_key
+                    """,
+                    (
+                        "content-free-start-test",
+                        "content-free-unarchive-test",
+                        "content-free-rollback-test",
+                    ),
+                )
+            )
+        finally:
+            ledger.close()
+        for forbidden in (
+            "private durable effect name",
+            "private durable effect preview",
+            "private rollback prompt",
+        ):
+            self.assertNotIn(forbidden, stored)
+
     def test_destructive_controls_require_explicit_acknowledgement(self) -> None:
         session = self.discover()
         with self.assertRaisesRegex(gateway_module.GatewayError, "acknowledgeFilesNotReverted"):
@@ -881,7 +971,7 @@ class CodexGatewayTests(unittest.TestCase):
         )
         self.assertEqual(resolved["state"], "succeeded")
         self.assertTrue(resolved["result"]["deleted"])
-        with self.assertRaisesRegex(gateway_module.GatewayError, "acknowledgePermanentDelete"):
+        with self.assertRaisesRegex(gateway_module.GatewayError, "previously deleted"):
             self.gateway.handle(
                 {
                     "command": "codex_session_control",

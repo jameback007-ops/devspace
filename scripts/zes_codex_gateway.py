@@ -859,6 +859,33 @@ def _effect_payload(row: sqlite3.Row) -> dict[str, Any]:
     return parsed if isinstance(parsed, dict) else {}
 
 
+def _effect_intent(payload: Any) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        return {}
+    intent = payload.get("intent")
+    return dict(intent) if isinstance(intent, dict) else {}
+
+
+def _effect_receipt_payload(payload: Any) -> dict[str, Any] | None:
+    """Return only the caller-visible receipt from a durable effect envelope.
+
+    New rows retain private binding intent beside the receipt so an opaque
+    effect ref remains bound to the exact App Server identity after terminal
+    updates. Legacy direct-result rows remain readable without migration.
+    """
+    if not isinstance(payload, dict) or not payload:
+        return None
+    receipt = payload.get("receipt")
+    if isinstance(receipt, dict):
+        return dict(receipt)
+    if isinstance(payload.get("intent"), dict):
+        legacy_receipt = {
+            key: value for key, value in payload.items() if key != "intent"
+        }
+        return legacy_receipt or None
+    return dict(payload)
+
+
 def _sanitize_goal(value: Any) -> dict[str, Any] | None:
     if not isinstance(value, dict):
         return None
@@ -894,6 +921,46 @@ def _goal_matches_intent(value: Any, intent: dict[str, Any]) -> bool:
     ):
         return False
     return True
+
+
+_EFFECT_SESSION_RECEIPT_FIELDS = (
+    "sessionRef",
+    "serverRef",
+    "serverAlias",
+    "status",
+    "loaded",
+    "directInput",
+    "createdAt",
+    "updatedAt",
+    "recencyAt",
+    "ephemeral",
+    "historyMode",
+    "source",
+    "threadSource",
+    "modelProvider",
+    "workspace",
+    "parentSessionRef",
+    "persistence",
+    "activityReadable",
+    "capabilities",
+)
+
+
+def _effect_session_receipt(value: Any) -> dict[str, Any]:
+    """Project session metadata that is safe to persist in an effect receipt.
+
+    Read tools may return bounded visible names, previews, and turns. Effect
+    receipts are durable and idempotently replayed, so they intentionally keep
+    only lifecycle and opaque-reference metadata. This allowlist prevents a
+    future additive read projection from silently becoming durable content.
+    """
+    if not isinstance(value, dict):
+        return {}
+    return {
+        key: value[key]
+        for key in _EFFECT_SESSION_RECEIPT_FIELDS
+        if key in value
+    }
 
 
 def _load_sibling_module(path: Path, module_name: str) -> Any:
@@ -4288,7 +4355,7 @@ class CodexGateway:
             try:
                 parsed = json.loads(str(row["result_json"]))
                 if isinstance(parsed, dict):
-                    result = parsed
+                    result = _effect_receipt_payload(parsed)
             except json.JSONDecodeError:
                 result = {"receiptCorrupt": True}
         state = str(row["state"])
@@ -4388,11 +4455,10 @@ class CodexGateway:
 
     def _effect_server(self, row: sqlite3.Row) -> dict[str, Any]:
         payload = _effect_payload(row)
-        intent = payload.get("intent")
-        if isinstance(intent, dict):
-            server_ref = intent.get("serverRef")
-            if isinstance(server_ref, str):
-                return self._server_by_ref(server_ref)
+        intent = _effect_intent(payload)
+        server_ref = intent.get("serverRef")
+        if isinstance(server_ref, str):
+            return self._server_by_ref(server_ref)
         # Compatibility for a pre-gateway-development ledger row. New effects
         # always carry an exact serverRef and therefore fail closed after an
         # alias is rebound to a different App Server.
@@ -4409,6 +4475,19 @@ class CodexGateway:
         session_ref: str | None = None,
         turn_ref: str | None = None,
     ) -> sqlite3.Row:
+        existing = self._effect_row(ledger, effect_ref=effect_ref)
+        if existing is None:
+            raise GatewayError(
+                "CODEX_EFFECT_UNKNOWN",
+                "Unknown Codex effect ref",
+                "forbidden",
+            )
+        intent = _effect_intent(_effect_payload(existing))
+        stored_result: dict[str, Any] | None = result
+        if intent:
+            stored_result = {"intent": intent}
+            if result is not None:
+                stored_result["receipt"] = result
         ledger.execute(
             """
             update effects set
@@ -4423,7 +4502,9 @@ class CodexGateway:
             (
                 state,
                 failure_code,
-                canonical_json(result) if result is not None else None,
+                canonical_json(stored_result)
+                if stored_result is not None
+                else None,
                 session_ref,
                 turn_ref,
                 utc_now(),
@@ -4441,14 +4522,12 @@ class CodexGateway:
         row: sqlite3.Row,
         exc: BaseException,
     ) -> dict[str, Any]:
-        existing_payload = _effect_payload(row)
         updated = self._update_effect(
             ledger,
             str(row["effect_ref"]),
             state="rejected",
             failure_code="CODEX_RPC_REJECTED",
             result={
-                **existing_payload,
                 "errorDigestSha256": sha256(str(exc)),
                 "summary": "The native Codex App Server rejected the typed request before returning a success receipt.",
                 "summaryTruncated": False,
@@ -4463,7 +4542,6 @@ class CodexGateway:
         row: sqlite3.Row,
         exc: BaseException,
     ) -> dict[str, Any]:
-        existing_payload = _effect_payload(row)
         failure_code = getattr(exc, "code", None)
         if not isinstance(failure_code, str) or not failure_code:
             failure_code = "CODEX_EFFECT_PREFLIGHT_FAILED"
@@ -4473,7 +4551,6 @@ class CodexGateway:
             state="rejected",
             failure_code=failure_code,
             result={
-                **existing_payload,
                 "errorDigestSha256": sha256(str(exc)),
                 "summary": "The typed Codex effect failed before the native dispatch boundary.",
                 "summaryTruncated": False,
@@ -4491,7 +4568,7 @@ class CodexGateway:
         *,
         result: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        safe_result = _effect_payload(row)
+        safe_result = _effect_receipt_payload(_effect_payload(row)) or {}
         safe_result.update(result or {})
         safe_result.update(
             {
@@ -4715,10 +4792,12 @@ class CodexGateway:
             )
             if replay:
                 return self._render_effect(row, replay=True)
+            dispatch_attempted = False
             try:
                 with self._control_rpc(server) as rpc:
                     self._initialize_rpc(rpc)
                     self._validate_model_available(rpc, params.get("model"))
+                    dispatch_attempted = True
                     response = rpc.request(method, params)
                     thread = response.get("thread")
                     if not isinstance(thread, dict):
@@ -4751,7 +4830,8 @@ class CodexGateway:
                     session_ref=session_ref,
                     result={
                         "mode": mode,
-                        "session": sanitized,
+                        "session": _effect_session_receipt(sanitized),
+                        "sessionContentPersisted": False,
                         "verificationRefs": [
                             "codex-app-server:thread-read",
                             "codex-app-server:thread-loaded-list",
@@ -4761,10 +4841,16 @@ class CodexGateway:
                 )
                 return self._render_effect(updated)
             except self.relay.RpcError as exc:
+                if not dispatch_attempted:
+                    return self._effect_pre_dispatch_failure(ledger, row, exc)
                 return self._effect_rpc_rejected(ledger, row, exc)
             except GatewayError as exc:
+                if not dispatch_attempted:
+                    return self._effect_pre_dispatch_failure(ledger, row, exc)
                 return self._effect_indeterminate(ledger, row, exc)
             except Exception as exc:
+                if not dispatch_attempted:
+                    return self._effect_pre_dispatch_failure(ledger, row, exc)
                 return self._effect_indeterminate(ledger, row, exc)
 
     def _active_turn_id(self, rpc: Any, thread_id: str) -> str | None:
@@ -5043,6 +5129,7 @@ class CodexGateway:
             )
             if replay:
                 return self._render_effect(row, replay=True)
+            dispatch_attempted = False
             try:
                 with self._control_rpc(server) as rpc:
                     self._initialize_rpc(rpc)
@@ -5076,6 +5163,7 @@ class CodexGateway:
                             )
                             try:
                                 if active_turn:
+                                    dispatch_attempted = True
                                     response = rpc.request(
                                         "turn/steer",
                                         {
@@ -5088,6 +5176,7 @@ class CodexGateway:
                                     result_turn_id = response.get("turnId")
                                     route = "steer"
                                 else:
+                                    dispatch_attempted = True
                                     response = rpc.request(
                                         "turn/start",
                                         {
@@ -5107,6 +5196,7 @@ class CodexGateway:
                                 break
                             except self.relay.RpcError as exc:
                                 if attempt < 2 and _is_turn_race_error(exc):
+                                    dispatch_attempted = False
                                     continue
                                 raise
                     elif action == "steer":
@@ -5115,6 +5205,7 @@ class CodexGateway:
                             and client_message_id is not None
                             and native_turn_id is not None
                         )
+                        dispatch_attempted = True
                         response = rpc.request(
                             "turn/steer",
                             {
@@ -5128,6 +5219,7 @@ class CodexGateway:
                         route = "steer"
                     else:
                         assert native_turn_id is not None
+                        dispatch_attempted = True
                         rpc.request(
                             "turn/interrupt",
                             {"threadId": thread_id, "turnId": native_turn_id},
@@ -5174,8 +5266,12 @@ class CodexGateway:
                 )
                 return self._render_effect(updated)
             except self.relay.RpcError as exc:
+                if not dispatch_attempted:
+                    return self._effect_pre_dispatch_failure(ledger, row, exc)
                 return self._effect_rpc_rejected(ledger, row, exc)
             except GatewayError as exc:
+                if not dispatch_attempted:
+                    return self._effect_pre_dispatch_failure(ledger, row, exc)
                 if client_message_id:
                     try:
                         with self._control_rpc(server) as reconcile_rpc:
@@ -5223,6 +5319,8 @@ class CodexGateway:
                     },
                 )
             except Exception as exc:
+                if not dispatch_attempted:
+                    return self._effect_pre_dispatch_failure(ledger, row, exc)
                 if client_message_id:
                     try:
                         with self._control_rpc(server) as reconcile_rpc:
@@ -5483,13 +5581,16 @@ class CodexGateway:
                             )
                         result.update(
                             {
-                                "session": self._sanitize_thread(
-                                    ledger,
-                                    server,
-                                    thread,
-                                    include_turns=True,
-                                    turn_limit=100,
+                                "session": _effect_session_receipt(
+                                    self._sanitize_thread(
+                                        ledger,
+                                        server,
+                                        thread,
+                                        include_turns=True,
+                                        turn_limit=100,
+                                    )
                                 ),
+                                "sessionContentPersisted": False,
                                 "historyRolledBackTurns": intent["numTurns"],
                                 "filesReverted": False,
                             }
@@ -5497,9 +5598,10 @@ class CodexGateway:
                     elif action == "unarchive":
                         thread = response.get("thread")
                         if isinstance(thread, dict):
-                            result["session"] = self._sanitize_thread(
-                                ledger, server, thread
+                            result["session"] = _effect_session_receipt(
+                                self._sanitize_thread(ledger, server, thread)
                             )
+                            result["sessionContentPersisted"] = False
                     elif action == "unsubscribe":
                         result["unsubscribeStatus"] = redact_value(
                             response.get("status")
@@ -6060,14 +6162,13 @@ class CodexGateway:
         row: sqlite3.Row,
     ) -> sqlite3.Row:
         payload = _effect_payload(row)
-        intent = payload.get("intent")
-        if not isinstance(intent, dict):
-            intent = {}
+        intent = _effect_intent(payload)
+        receipt = _effect_receipt_payload(payload) or {}
         action = str(row["action"])
         server = self._effect_server(row)
         session_ref = row["session_ref"]
         if action == "approval.respond":
-            approval_ref = payload.get("approvalRef") or intent.get("approvalRef")
+            approval_ref = receipt.get("approvalRef") or intent.get("approvalRef")
             if not isinstance(approval_ref, str):
                 return row
             try:
@@ -6078,7 +6179,7 @@ class CodexGateway:
             if not isinstance(approval, dict):
                 return row
             safe_result = {
-                **payload,
+                **receipt,
                 "approvalRef": approval_ref,
                 "approvalStatus": approval.get("status"),
                 "responseConfirmed": approval.get("responseConfirmed") is True,
@@ -6126,7 +6227,7 @@ class CodexGateway:
             with self._control_rpc(server) as rpc:
                 self._initialize_rpc(rpc)
                 if action in {"turn.submit", "turn.steer"}:
-                    client_message_id = payload.get("clientMessageId") or intent.get(
+                    client_message_id = receipt.get("clientMessageId") or intent.get(
                         "clientMessageId"
                     )
                     if isinstance(client_message_id, str):
@@ -6143,7 +6244,7 @@ class CodexGateway:
                                 state="succeeded",
                                 turn_ref=turn_ref,
                                 result={
-                                    **payload,
+                                    **receipt,
                                     "sessionRef": session_ref,
                                     "turnRef": turn_ref,
                                     "itemRef": opaque_ref(
@@ -6172,7 +6273,7 @@ class CodexGateway:
                             str(row["effect_ref"]),
                             state="succeeded",
                             result={
-                                **payload,
+                                **receipt,
                                 "sessionRef": session_ref,
                                 "loaded": True,
                                 "effectObserved": True,
@@ -6193,7 +6294,7 @@ class CodexGateway:
                             str(row["effect_ref"]),
                             state="succeeded",
                             result={
-                                **payload,
+                                **receipt,
                                 "sessionRef": session_ref,
                                 "nameDigestSha256": expected,
                                 "effectObserved": True,
@@ -6210,7 +6311,7 @@ class CodexGateway:
                             str(row["effect_ref"]),
                             state="succeeded",
                             result={
-                                **payload,
+                                **receipt,
                                 "sessionRef": session_ref,
                                 "goal": _sanitize_goal(goal),
                                 "effectObserved": True,
@@ -6227,7 +6328,7 @@ class CodexGateway:
                             str(row["effect_ref"]),
                             state="succeeded",
                             result={
-                                **payload,
+                                **receipt,
                                 "sessionRef": session_ref,
                                 "cleared": True,
                                 "effectObserved": True,
@@ -6253,7 +6354,7 @@ class CodexGateway:
                             str(row["effect_ref"]),
                             state="succeeded",
                             result={
-                                **payload,
+                                **receipt,
                                 "sessionRef": session_ref,
                                 "deleted": True,
                                 "effectObserved": True,
