@@ -234,6 +234,20 @@ idempotency and reconcile-before-retry semantics. Do not enable general Codex
 lifecycle effects merely to send coordination. Wait only on the exact overlap;
 all unrelated source work continues without a global writer lock.
 
+Research failure handling must use the same causal discipline. A failed
+command, verifier request, validation run, or integration attempt is evidence
+about that execution edge; failure count alone is never semantic invalidation
+authority. Record a bounded failure plane and recovery disposition, preserve an
+otherwise current admission and its immutable evidence, and revoke only stale
+integration or pre-commit state. If a failed operation changed working content,
+inspect the exact changed paths and retain the existing scope and dependency
+guards. Full Research Reflex reassessment remains explicit for architecture or
+semantic forks, counterevidence, source-currentness changes, owner-direction
+changes, dependency changes, or repeated failures that a rightful actor has
+determined reveal a new causal layer. Publication CAS, exact-head validation,
+and unknown-effect reconciliation remain fail-closed regardless of preserved
+semantic evidence.
+
 The effect gate serializes publication with a repository-local lease, requires
 the unchanged plan digest, rereads remote `main`, pushes the exact candidate SHA
 with an expected-old force-with-lease binding, and derives terminal outcome from

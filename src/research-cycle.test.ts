@@ -156,6 +156,8 @@ async function nativeRunner(
 async function fixture(
   t: TestContext,
   mode: ZesResearchCycleConfig["mode"] = "enforce",
+  runner: (invocation: ResearchNativeInvocation) => Promise<ResearchNativeResult>
+    = nativeRunner,
 ): Promise<Fixture> {
   const root = await mkdtemp(join(tmpdir(), "devspace-research-cycle-"));
   const project = join(root, "project");
@@ -191,7 +193,7 @@ async function fixture(
   let currentNow = new Date(NOW);
   const manager = new ZesResearchCycleManager(config, {
     now: () => new Date(currentNow),
-    nativeRunner,
+    nativeRunner: runner,
   });
   t.after(() => rm(root, { recursive: true, force: true }));
   return {
@@ -591,7 +593,7 @@ test("observe mode permits effects but records scope drift", async (t) => {
   assert.match(JSON.stringify(status.invalidations), /scope_drift/);
 });
 
-test("two distinct failed commands invalidate an admitted action", async (t) => {
+test("distinct validation failures preserve admitted semantic evidence", async (t) => {
   const current = await fixture(t);
   await admit(current);
   await current.manager.observeCommandSnapshot(
@@ -605,9 +607,186 @@ test("two distinct failed commands invalidate an admitted action", async (t) => 
     { running: false, exitCode: 1 },
   );
   const status = await current.manager.status(current.workspace);
-  assert.equal(status.phase, "reassessment_required");
+  assert.equal(status.phase, "admitted");
   assert.equal(status.distinctFailureCount, 2);
+  assert.doesNotMatch(
+    JSON.stringify(status.invalidations),
+    /repeated_distinct_failure/,
+  );
+  const summary = status.failureSummary as Record<string, unknown>;
+  assert.equal(summary.currentGenerationObservationCount, 2);
+  assert.equal(summary.latestPlane, "validation");
+  assert.equal(summary.latestDisposition, "repair_and_revalidate");
+  assert.equal(summary.semanticAdmissionPreserved, true);
+  const observations = status.failureObservations as Array<
+    Record<string, unknown>
+  >;
+  assert.equal(observations.length, 2);
+  assert.ok(observations.every((entry) =>
+    entry.semanticAdmissionPreserved === true
+    && entry.workingContentChanged === false));
+});
+
+test("a failed validation clears only the pre-commit checkpoint", async (t) => {
+  const current = await fixture(t);
+  await admit(current);
+  await current.manager.verifyPreCommit(
+    current.workspace,
+    ["validation:initial:passed"],
+    {
+      localAuthorityRechecked: true,
+      externalCurrentnessRechecked: false,
+      dependencyCurrentnessRechecked: true,
+      assumptionsRechecked: ["the exact local fixture is unchanged"],
+      counterevidenceOrLimitations: [],
+      unresolved: [],
+      stoppingReason: "the exact local mechanical question is resolved",
+    },
+  );
+
+  await current.manager.observeCommandSnapshot(
+    current.workspace,
+    "npm test -- regression",
+    { running: false, exitCode: 1 },
+  );
+  const status = await current.manager.status(current.workspace);
+  assert.equal(status.phase, "admitted");
+  assert.equal(status.preCommit, undefined);
+  assert.equal(
+    (status.admission as Record<string, unknown>).admitted,
+    true,
+  );
+  const summary = status.failureSummary as Record<string, unknown>;
+  assert.equal(summary.preCommitCleared, true);
+  assert.equal(summary.latestDisposition, "repair_and_revalidate");
+});
+
+test("failed partial mutation still invalidates exact scope drift", async (t) => {
+  const current = await fixture(t);
+  const command = "printf partial > README.md";
+  await admit(current, {
+    ...prepareInput(),
+    shellMutationCommandDigests: [researchCommandDigest(command)],
+  });
+  const allowed = await current.manager.guardCommand(
+    current.workspace,
+    command,
+  );
+  assert.equal(allowed.allowed, true);
+  await writeFile(join(current.workspace.root, "README.md"), "partial\n");
+  await current.manager.observeCommandSnapshot(
+    current.workspace,
+    command,
+    { running: false, exitCode: 1 },
+  );
+
+  const status = await current.manager.status(current.workspace);
+  assert.equal(status.phase, "reassessment_required");
+  assert.match(JSON.stringify(status.invalidations), /scope_drift/);
+  const summary = status.failureSummary as Record<string, unknown>;
+  assert.equal(summary.latestPlane, "integration");
+  assert.equal(summary.latestWorkingContentChanged, true);
+  assert.equal(summary.semanticAdmissionPreserved, false);
+});
+
+test("explicit repeated failure invalidation remains available", async (t) => {
+  const current = await fixture(t);
+  await admit(current);
+  await current.manager.observeCommandSnapshot(
+    current.workspace,
+    "npm test -- first",
+    { running: false, exitCode: 1 },
+  );
+  await current.manager.observeCommandSnapshot(
+    current.workspace,
+    "npm test -- second",
+    { running: false, exitCode: 1 },
+  );
+  await current.manager.invalidate(
+    current.workspace,
+    "repeated_distinct_failure",
+    "the failures now prove a new causal layer rather than local test repair",
+    ["evidence:test:new-causal-layer"],
+  );
+  const status = await current.manager.status(current.workspace);
+  assert.equal(status.phase, "reassessment_required");
   assert.match(JSON.stringify(status.invalidations), /repeated_distinct_failure/);
+});
+
+test("native assessment execution failure is repairable in one generation", async (t) => {
+  let assessCalls = 0;
+  const current = await fixture(t, "enforce", async (invocation) => {
+    if (invocation.operation === "assess" && assessCalls++ === 0) {
+      return {
+        exitCode: 1,
+        stdout: "",
+        stderr: "synthetic request verification failure",
+      };
+    }
+    return await nativeRunner(invocation);
+  });
+  const input = openInput();
+  await current.manager.open(current.workspace, input);
+  const prepared = await current.manager.prepare(
+    current.workspace,
+    prepareInput(),
+  );
+  const request = {
+    schema_version: "zes.research-decision-admission-request.v3",
+    task_ref: input.taskRef,
+    material_decision_ref: input.materialDecisionRef,
+    decision_boundary_ref: input.decisionBoundaryRef,
+    decision_question: input.decisionQuestion,
+    owner_seeded_framing: input.ownerSeededFraming,
+    assessing_actor_ref: input.actorRef,
+    ...(prepared.requestBindings as Record<string, unknown>),
+  };
+
+  await assert.rejects(
+    () => current.manager.assess(current.workspace, request),
+    (error: unknown) => error instanceof ResearchCycleError
+      && error.code === "RESEARCH_CYCLE_NATIVE_ASSESS_FAILED",
+  );
+  const failed = await current.manager.status(current.workspace);
+  assert.equal(failed.phase, "prepared");
+  assert.equal(failed.generation, 1);
+  assert.equal(
+    (failed.failureSummary as Record<string, unknown>).latestDisposition,
+    "retry_or_repair_local",
+  );
+
+  const admitted = await current.manager.assess(current.workspace, request);
+  assert.equal(admitted.phase, "admitted");
+  assert.equal(admitted.generation, 1);
+  const finalStatus = await current.manager.status(current.workspace);
+  assert.equal(
+    (finalStatus.failureSummary as Record<string, unknown>)
+      .observationCount,
+    1,
+  );
+});
+
+test("legacy state without failure observations remains readable", async (t) => {
+  const current = await fixture(t);
+  await admit(current);
+  const statePath = await findNamedFile(
+    join(current.root, "state"),
+    "state.json",
+  );
+  const state = JSON.parse(await readFile(statePath, "utf8")) as Record<
+    string,
+    unknown
+  >;
+  delete state.failureObservations;
+  delete state.lastObservedWorkingContentDigestSha256;
+  await writeFile(statePath, `${JSON.stringify(state, null, 2)}\n`, "utf8");
+
+  const status = await current.manager.status(current.workspace);
+  assert.deepEqual(status.failureObservations, []);
+  assert.equal(
+    (status.failureSummary as Record<string, unknown>).observationCount,
+    0,
+  );
 });
 
 test("interactive input remains bound to the already-guarded process command", async (t) => {

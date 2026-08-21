@@ -1058,7 +1058,7 @@ export function registerZesResearchCycleTools(
     {
       title: "Read ZES research lifecycle status",
       description:
-        "Read the bounded executor-local lifecycle, prepared bindings, current native admission identity, invalidations, observed source paths, pre-commit checkpoint, commit observation, and closure. This status is not canonical task, semantic, writer, publication, release, activation, or effect authority.",
+        "Read the bounded executor-local lifecycle, prepared bindings, current native admission identity, causal invalidations, typed failure-plane observations and recovery dispositions, observed source paths, pre-commit checkpoint, commit observation, and closure. Failed command count is diagnostic evidence only; it does not itself invalidate semantic research. Scope, dependency, source-currentness, explicit semantic, validation, publication, and effect boundaries remain independently enforced. This status is not canonical task, semantic, writer, publication, release, activation, or effect authority.",
       inputSchema: { workspaceId: workspaceIdSchema },
       outputSchema,
       ...toolMeta(config),

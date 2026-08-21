@@ -44,6 +44,9 @@ const DISCOVERY_QUERY_TEMPLATE_VERSION = "discovery-query-template-v1";
 const DISCOVERY_QUERY_CONSTRAINT_MODE = "query_text_only";
 const DISCOVERY_OPEN_WORLD_CAPABILITY_REF =
   "capability:open-world-candidate-discovery:v1";
+const FAILURE_OBSERVATION_SCHEMA =
+  "devspace.zes-research-failure-observation.v1";
+const MAX_FAILURE_OBSERVATIONS = 50;
 const RESEARCH_PHASES = new Set<ResearchCyclePhase>([
   "opened",
   "prepared",
@@ -83,6 +86,20 @@ export type ResearchCommandClass =
   | "runtime_effect"
   | "unknown";
 
+export type ResearchFailurePlane =
+  | "local_mechanical"
+  | "integration"
+  | "validation"
+  | "external_effect"
+  | "unknown";
+
+export type ResearchFailureDisposition =
+  | "retry_or_repair_local"
+  | "reconcile_integration"
+  | "repair_and_revalidate"
+  | "reconcile_effect_before_retry"
+  | "manual_causal_assessment";
+
 export type ResearchInvalidationKind =
   | "architecture_or_semantic_fork"
   | "contradictory_evidence"
@@ -92,6 +109,34 @@ export type ResearchInvalidationKind =
   | "scope_drift"
   | "source_currentness_expired"
   | "manual";
+
+const RESEARCH_COMMAND_CLASSES = new Set<ResearchCommandClass>([
+  "inspection",
+  "research_control",
+  "validation",
+  "source_mutation",
+  "commit_prepare",
+  "repository_commit",
+  "repository_publish",
+  "runtime_effect",
+  "unknown",
+]);
+
+const RESEARCH_FAILURE_PLANES = new Set<ResearchFailurePlane>([
+  "local_mechanical",
+  "integration",
+  "validation",
+  "external_effect",
+  "unknown",
+]);
+
+const RESEARCH_FAILURE_DISPOSITIONS = new Set<ResearchFailureDisposition>([
+  "retry_or_repair_local",
+  "reconcile_integration",
+  "repair_and_revalidate",
+  "reconcile_effect_before_retry",
+  "manual_causal_assessment",
+]);
 
 export interface ResearchWorkspace {
   workspaceId: string;
@@ -668,6 +713,25 @@ interface ResearchInvalidationRecord {
   recordedAt: string;
 }
 
+interface ResearchFailureObservation {
+  schemaVersion: typeof FAILURE_OBSERVATION_SCHEMA;
+  observationRef: string;
+  generation: number;
+  failureDigestSha256: string;
+  classification: ResearchCommandClass;
+  plane: ResearchFailurePlane;
+  disposition: ResearchFailureDisposition;
+  reasonCode: string;
+  exitCode: number;
+  workingContentDigestBefore: string;
+  workingContentDigestAfter: string;
+  workingContentChanged: boolean;
+  changedPaths: string[];
+  semanticAdmissionPreserved: boolean;
+  preCommitCleared: boolean;
+  recordedAt: string;
+}
+
 interface PreCommitRecord {
   verifiedAt: string;
   workingContentDigestSha256: string;
@@ -712,6 +776,8 @@ interface ResearchCycleState {
   observedPaths: string[];
   dependencySensitivePaths: string[];
   distinctFailureDigests: string[];
+  failureObservations: ResearchFailureObservation[];
+  lastObservedWorkingContentDigestSha256: string;
   validationCommandDigests: string[];
   preCommit?: PreCommitRecord;
   commit?: CommitRecord;
@@ -1184,6 +1250,81 @@ export function classifyResearchCommand(command: string): ResearchCommandClass {
     || commandHas(value, /\bkubectl\s+(?:get|describe|logs|diff|version)\b/u)
   ) return "inspection";
   return "unknown";
+}
+
+function failurePolicyForCommand(
+  classification: ResearchCommandClass,
+): {
+  plane: ResearchFailurePlane;
+  disposition: ResearchFailureDisposition;
+  reasonCode: string;
+  refreshPreCommit: boolean;
+} {
+  if (classification === "validation") {
+    return {
+      plane: "validation",
+      disposition: "repair_and_revalidate",
+      reasonCode: "validation_command_failed",
+      refreshPreCommit: true,
+    };
+  }
+  if (
+    classification === "source_mutation"
+    || classification === "commit_prepare"
+    || classification === "repository_commit"
+  ) {
+    return {
+      plane: "integration",
+      disposition: "reconcile_integration",
+      reasonCode: "integration_command_failed",
+      refreshPreCommit: true,
+    };
+  }
+  if (
+    classification === "repository_publish"
+    || classification === "runtime_effect"
+  ) {
+    return {
+      plane: "external_effect",
+      disposition: "reconcile_effect_before_retry",
+      reasonCode: "external_effect_command_failed",
+      refreshPreCommit: false,
+    };
+  }
+  if (classification === "unknown") {
+    return {
+      plane: "unknown",
+      disposition: "manual_causal_assessment",
+      reasonCode: "unclassified_command_failed",
+      refreshPreCommit: true,
+    };
+  }
+  return {
+    plane: "local_mechanical",
+    disposition: "retry_or_repair_local",
+    reasonCode: classification === "research_control"
+      ? "research_control_failed"
+      : "inspection_command_failed",
+    refreshPreCommit: false,
+  };
+}
+
+function failureRecommendedAction(
+  disposition: ResearchFailureDisposition,
+): string {
+  if (disposition === "retry_or_repair_local") {
+    return "repair the local request, command, or environment and retry without reacquiring unrelated semantic evidence";
+  }
+  if (disposition === "reconcile_integration") {
+    return "reconcile or rebind the candidate against current source authority, then rerun affected validation";
+  }
+  if (disposition === "repair_and_revalidate") {
+    return "repair the candidate or validation environment and create a fresh exact-working-content validation checkpoint";
+  }
+  if (disposition === "reconcile_effect_before_retry") {
+    return "read authoritative effect state and reconcile the exact idempotency identity before retry";
+  }
+  return "inspect before-and-after state and identify the affected causal layer before another material attempt";
 }
 
 function dependencySensitive(path: string): boolean {
@@ -2231,6 +2372,66 @@ export class ZesResearchCycleManager {
       );
     }
 
+    const failureObservations = Array.isArray(value.failureObservations)
+      ? value.failureObservations
+      : [];
+    value.failureObservations = failureObservations;
+    if (failureObservations.length > MAX_FAILURE_OBSERVATIONS) {
+      throw new ResearchCycleError(
+        "RESEARCH_CYCLE_STATE_SHAPE_INVALID",
+        "persisted failure observation history exceeds its bounded contract",
+      );
+    }
+    for (const raw of failureObservations) {
+      if (
+        !isRecord(raw)
+        || raw.schemaVersion !== FAILURE_OBSERVATION_SCHEMA
+        || typeof raw.observationRef !== "string"
+        || !raw.observationRef.startsWith("research-failure-observation:")
+        || !Number.isInteger(raw.generation)
+        || Number(raw.generation) < 0
+        || typeof raw.failureDigestSha256 !== "string"
+        || !SHA256.test(raw.failureDigestSha256)
+        || typeof raw.classification !== "string"
+        || !RESEARCH_COMMAND_CLASSES.has(
+          raw.classification as ResearchCommandClass,
+        )
+        || typeof raw.plane !== "string"
+        || !RESEARCH_FAILURE_PLANES.has(raw.plane as ResearchFailurePlane)
+        || typeof raw.disposition !== "string"
+        || !RESEARCH_FAILURE_DISPOSITIONS.has(
+          raw.disposition as ResearchFailureDisposition,
+        )
+        || typeof raw.reasonCode !== "string"
+        || raw.reasonCode.trim() === ""
+        || !Number.isInteger(raw.exitCode)
+        || typeof raw.workingContentDigestBefore !== "string"
+        || !SHA256.test(raw.workingContentDigestBefore)
+        || typeof raw.workingContentDigestAfter !== "string"
+        || !SHA256.test(raw.workingContentDigestAfter)
+        || typeof raw.workingContentChanged !== "boolean"
+        || !Array.isArray(raw.changedPaths)
+        || raw.changedPaths.some((path) => typeof path !== "string")
+        || typeof raw.semanticAdmissionPreserved !== "boolean"
+        || typeof raw.preCommitCleared !== "boolean"
+        || typeof raw.recordedAt !== "string"
+        || !Number.isFinite(Date.parse(raw.recordedAt))
+      ) {
+        throw new ResearchCycleError(
+          "RESEARCH_CYCLE_STATE_SHAPE_INVALID",
+          "persisted failure observation is invalid",
+        );
+      }
+    }
+    if (
+      typeof value.lastObservedWorkingContentDigestSha256 !== "string"
+      || !SHA256.test(value.lastObservedWorkingContentDigestSha256)
+    ) {
+      value.lastObservedWorkingContentDigestSha256 = (
+        await gitSnapshot(workspace.root)
+      ).workingContentDigestSha256;
+    }
+
     const admission = isRecord(value.admission) ? value.admission : undefined;
     if (admission) {
       if (
@@ -2712,6 +2913,9 @@ export class ZesResearchCycleManager {
         observedPaths: [],
         dependencySensitivePaths: [],
         distinctFailureDigests: [],
+        failureObservations: [],
+        lastObservedWorkingContentDigestSha256:
+          snapshot.workingContentDigestSha256,
         validationCommandDigests: [],
         updatedAt: this.now().toISOString(),
       };
@@ -2874,6 +3078,8 @@ export class ZesResearchCycleManager {
       state.preCommit = undefined;
       state.commit = undefined;
       state.closure = undefined;
+      state.lastObservedWorkingContentDigestSha256 =
+        snapshot.workingContentDigestSha256;
       state.phase = "prepared";
       await this.writeState(workspace, state);
       return {
@@ -3679,13 +3885,50 @@ export class ZesResearchCycleManager {
         ],
       );
       if (result.exitCode !== 0) {
-        state.phase = "held";
+        const failureEvidence = processFailureEvidence(result);
+        const failureDigestSha256 = canonicalDigest({
+          operation: "native_assess",
+          generation: state.generation,
+          failureEvidence,
+        });
+        const workingContentDigestBefore =
+          state.lastObservedWorkingContentDigestSha256;
+        const snapshot = await gitSnapshot(workspace.root);
+        const workingContentChanged = snapshot.workingContentDigestSha256
+          !== workingContentDigestBefore;
+        const changedPaths = workingContentChanged
+          ? await currentChangedPaths(workspace.root)
+          : [];
+        state.phase = "prepared";
         state.admission = undefined;
+        if (changedPaths.length > 0) {
+          this.applyObservedPaths(state, changedPaths, "failed_command");
+        }
+        state.distinctFailureDigests = uniqueStrings(
+          [...state.distinctFailureDigests, failureDigestSha256],
+          "distinctFailureDigests",
+        ).slice(-MAX_FAILURE_OBSERVATIONS);
+        state.lastObservedWorkingContentDigestSha256 =
+          snapshot.workingContentDigestSha256;
+        this.appendFailureObservation(state, {
+          failureDigestSha256,
+          classification: "research_control",
+          plane: "local_mechanical",
+          disposition: "retry_or_repair_local",
+          reasonCode: "native_assessment_execution_failed",
+          exitCode: result.exitCode,
+          workingContentDigestBefore,
+          workingContentDigestAfter: snapshot.workingContentDigestSha256,
+          workingContentChanged,
+          changedPaths,
+          semanticAdmissionPreserved: false,
+          preCommitCleared: false,
+        });
         await this.writeState(workspace, state);
         throw new ResearchCycleError(
           "RESEARCH_CYCLE_NATIVE_ASSESS_FAILED",
           `ZES Research Reflex assessment failed with exit ${result.exitCode}`,
-          processFailureEvidence(result),
+          failureEvidence,
         );
       }
       const summary = parseJsonObject(result.stdout, "Research Reflex summary");
@@ -4098,6 +4341,95 @@ export class ZesResearchCycleManager {
     });
   }
 
+  private applyObservedPaths(
+    state: ResearchCycleState,
+    rawPaths: string[],
+    origin: "direct" | "shell" | "failed_command",
+  ): boolean {
+    const paths = uniqueStrings(
+      rawPaths.map((path) => normalizeRelativePath(path, "mutation path")),
+      "mutationPaths",
+    );
+    if (paths.length === 0) return false;
+    state.observedPaths = uniqueStrings(
+      [...state.observedPaths, ...paths],
+      "observedPaths",
+    );
+    state.dependencySensitivePaths = uniqueStrings(
+      [
+        ...state.dependencySensitivePaths,
+        ...paths.filter(dependencySensitive),
+      ],
+      "dependencySensitivePaths",
+    );
+    const prefixes = state.prepared?.pathPrefixes ?? [];
+    const uncovered = paths.filter(
+      (path) => !prefixes.some((prefix) => pathWithinPrefix(path, prefix)),
+    );
+    const dependencyOutsideClass = paths.filter(
+      (path) => dependencySensitive(path)
+        && !state.prepared?.operationClasses.includes("dependency_change"),
+    );
+    if (
+      state.phase === "closed"
+      || !state.prepared
+      || (uncovered.length === 0 && dependencyOutsideClass.length === 0)
+    ) return false;
+
+    state.phase = "reassessment_required";
+    state.preCommit = undefined;
+    state.commit = undefined;
+    state.invalidations.push({
+      kind: dependencyOutsideClass.length > 0
+        ? "dependency_or_upstream_change"
+        : "scope_drift",
+      reason: dependencyOutsideClass.length > 0
+        ? `${origin} mutation changed a dependency-sensitive path outside the admitted operation classes`
+        : `${origin} mutation changed a path outside the admitted implementation boundary`,
+      evidenceRefs: uniqueStrings(
+        [...uncovered, ...dependencyOutsideClass],
+        "scopeDriftPaths",
+      ),
+      recordedAt: this.now().toISOString(),
+    });
+    return true;
+  }
+
+  private appendFailureObservation(
+    state: ResearchCycleState,
+    input: Omit<
+      ResearchFailureObservation,
+      "schemaVersion" | "observationRef" | "generation" | "recordedAt"
+    >,
+  ): ResearchFailureObservation {
+    const recordedAt = this.now().toISOString();
+    const observation: ResearchFailureObservation = {
+      schemaVersion: FAILURE_OBSERVATION_SCHEMA,
+      observationRef: `research-failure-observation:${canonicalDigest({
+        cycleRef: state.cycleRef,
+        generation: state.generation,
+        failureDigestSha256: input.failureDigestSha256,
+        recordedAt,
+        ordinal: state.failureObservations.length + 1,
+      })}`,
+      generation: state.generation,
+      recordedAt,
+      ...input,
+    };
+    state.failureObservations = [
+      ...state.failureObservations,
+      observation,
+    ].slice(-MAX_FAILURE_OBSERVATIONS);
+    return observation;
+  }
+
+  private clearPreCommitAfterFailure(state: ResearchCycleState): boolean {
+    if (!state.preCommit) return false;
+    state.preCommit = undefined;
+    if (state.phase === "pre_commit_verified") state.phase = "admitted";
+    return true;
+  }
+
   async guardPatch(
     workspace: ResearchWorkspace,
     patch: string,
@@ -4153,52 +4485,15 @@ export class ZesResearchCycleManager {
     await this.withLock(workspace, async () => {
       const state = await this.readState(workspace);
       if (!state) return;
-      const paths = uniqueStrings(
-        rawPaths.map((path) => normalizeRelativePath(path, "mutation path")),
-        "mutationPaths",
-      );
-      if (paths.length === 0) return;
-      state.observedPaths = uniqueStrings(
-        [...state.observedPaths, ...paths],
-        "observedPaths",
-      );
-      state.dependencySensitivePaths = uniqueStrings(
-        [
-          ...state.dependencySensitivePaths,
-          ...paths.filter(dependencySensitive),
-        ],
-        "dependencySensitivePaths",
-      );
-      const prefixes = state.prepared?.pathPrefixes ?? [];
-      const uncovered = paths.filter(
-        (path) => !prefixes.some((prefix) => pathWithinPrefix(path, prefix)),
-      );
-      const dependencyOutsideClass = paths.filter(
-        (path) => dependencySensitive(path)
-          && !state.prepared?.operationClasses.includes("dependency_change"),
-      );
+      this.applyObservedPaths(state, rawPaths, "direct");
+      const snapshot = await gitSnapshot(workspace.root);
       if (
-        state.phase !== "closed"
-        && state.prepared
-        && (uncovered.length > 0 || dependencyOutsideClass.length > 0)
-      ) {
-        state.phase = "reassessment_required";
-        state.preCommit = undefined;
-        state.commit = undefined;
-        state.invalidations.push({
-          kind: dependencyOutsideClass.length > 0
-            ? "dependency_or_upstream_change"
-            : "scope_drift",
-          reason: dependencyOutsideClass.length > 0
-            ? "a direct file mutation changed a dependency-sensitive path outside the admitted operation classes"
-            : "a direct file mutation changed a path outside the admitted implementation boundary",
-          evidenceRefs: uniqueStrings(
-            [...uncovered, ...dependencyOutsideClass],
-            "scopeDriftPaths",
-          ),
-          recordedAt: this.now().toISOString(),
-        });
-      }
+        state.preCommit
+        && snapshot.workingContentDigestSha256
+          !== state.preCommit.workingContentDigestSha256
+      ) this.clearPreCommitAfterFailure(state);
+      state.lastObservedWorkingContentDigestSha256 =
+        snapshot.workingContentDigestSha256;
       await this.writeState(workspace, state);
     });
   }
@@ -4316,75 +4611,84 @@ export class ZesResearchCycleManager {
   ): Promise<void> {
     await this.withLock(workspace, async () => {
       const state = await this.readState(workspace);
-      if (!state || state.phase === "closed") return;
+      if (!state) return;
       const commandDigest = canonicalDigest({ classification, command });
-      if (exitCode !== 0 && exitCode !== undefined) {
+      const failed = exitCode !== 0 && exitCode !== undefined;
+      if (state.phase === "closed" && !failed) return;
+
+      if (failed) {
+        const policy = failurePolicyForCommand(classification);
+        const workingContentDigestBefore =
+          state.lastObservedWorkingContentDigestSha256;
+        const snapshot = await gitSnapshot(workspace.root);
+        const workingContentChanged = snapshot.workingContentDigestSha256
+          !== workingContentDigestBefore;
+        const changedPaths = workingContentChanged
+          ? await currentChangedPaths(workspace.root)
+          : [];
+        const hadPreCommit = state.preCommit !== undefined;
+        if (changedPaths.length > 0) {
+          this.applyObservedPaths(state, changedPaths, "failed_command");
+        }
+        if (policy.refreshPreCommit || workingContentChanged) {
+          this.clearPreCommitAfterFailure(state);
+        }
         state.distinctFailureDigests = uniqueStrings(
           [...state.distinctFailureDigests, commandDigest],
           "distinctFailureDigests",
-        );
-        if (state.distinctFailureDigests.length >= 2) {
-          state.invalidations.push({
-            kind: "repeated_distinct_failure",
-            reason:
-              "two distinct command failures were observed after the last admission",
-            evidenceRefs: state.distinctFailureDigests,
-            recordedAt: this.now().toISOString(),
-          });
-          state.phase = "reassessment_required";
-          state.preCommit = undefined;
-        }
-      } else if (classification === "validation") {
+        ).slice(-MAX_FAILURE_OBSERVATIONS);
+        state.lastObservedWorkingContentDigestSha256 =
+          snapshot.workingContentDigestSha256;
+        this.appendFailureObservation(state, {
+          failureDigestSha256: commandDigest,
+          classification,
+          plane: policy.plane,
+          disposition: policy.disposition,
+          reasonCode: policy.reasonCode,
+          exitCode,
+          workingContentDigestBefore,
+          workingContentDigestAfter: snapshot.workingContentDigestSha256,
+          workingContentChanged,
+          changedPaths,
+          semanticAdmissionPreserved: state.admission?.admitted === true
+            && state.phase !== "reassessment_required",
+          preCommitCleared: hadPreCommit && state.preCommit === undefined,
+        });
+        await this.writeState(workspace, state);
+        return;
+      }
+
+      if (classification === "validation") {
         state.validationCommandDigests = uniqueStrings(
           [...state.validationCommandDigests, commandDigest],
           "validationCommandDigests",
         );
       }
+
       if (
-        exitCode === 0
-        && (classification === "source_mutation"
-          || classification === "commit_prepare"
-          || classification === "unknown")
+        classification === "source_mutation"
+        || classification === "commit_prepare"
+        || classification === "validation"
+        || classification === "unknown"
       ) {
-        const changedPaths = await currentChangedPaths(workspace.root);
-        state.observedPaths = uniqueStrings(
-          [...state.observedPaths, ...changedPaths],
-          "observedPaths",
-        );
-        state.dependencySensitivePaths = uniqueStrings(
-          [
-            ...state.dependencySensitivePaths,
-            ...changedPaths.filter(dependencySensitive),
-          ],
-          "dependencySensitivePaths",
-        );
-        const prefixes = state.prepared?.pathPrefixes ?? [];
-        const uncovered = changedPaths.filter(
-          (path) => !prefixes.some((prefix) => pathWithinPrefix(path, prefix)),
-        );
-        const dependencyOutsideClass = changedPaths.filter(
-          (path) => dependencySensitive(path)
-            && !state.prepared?.operationClasses.includes("dependency_change"),
-        );
-        if (uncovered.length > 0 || dependencyOutsideClass.length > 0) {
-          state.phase = "reassessment_required";
-          state.preCommit = undefined;
-          state.invalidations.push({
-            kind: dependencyOutsideClass.length > 0
-              ? "dependency_or_upstream_change"
-              : "scope_drift",
-            reason: dependencyOutsideClass.length > 0
-              ? "a dependency-sensitive path changed outside the admitted operation classes"
-              : "a shell mutation changed paths outside the admitted implementation boundary",
-            evidenceRefs: uniqueStrings(
-              [...uncovered, ...dependencyOutsideClass],
-              "scopeDriftPaths",
-            ),
-            recordedAt: this.now().toISOString(),
-          });
+        const snapshot = await gitSnapshot(workspace.root);
+        if (
+          snapshot.workingContentDigestSha256
+          !== state.lastObservedWorkingContentDigestSha256
+        ) {
+          const changedPaths = await currentChangedPaths(workspace.root);
+          this.applyObservedPaths(state, changedPaths, "shell");
+          if (
+            state.preCommit
+            && snapshot.workingContentDigestSha256
+              !== state.preCommit.workingContentDigestSha256
+          ) this.clearPreCommitAfterFailure(state);
         }
+        state.lastObservedWorkingContentDigestSha256 =
+          snapshot.workingContentDigestSha256;
       }
-      if (exitCode === 0 && classification === "repository_commit") {
+
+      if (classification === "repository_commit") {
         const snapshot = await gitSnapshot(workspace.root);
         const preCommit = state.preCommit;
         if (!preCommit || state.phase !== "pre_commit_verified") {
@@ -4413,6 +4717,8 @@ export class ZesResearchCycleManager {
           };
           state.phase = "committed";
         }
+        state.lastObservedWorkingContentDigestSha256 =
+          snapshot.workingContentDigestSha256;
       }
       await this.writeState(workspace, state);
     });
@@ -4768,6 +5074,10 @@ export class ZesResearchCycleManager {
     state: ResearchCycleState,
     stateExists: boolean,
   ): Record<string, unknown> {
+    const latestFailure = state.failureObservations.at(-1);
+    const currentGenerationFailureCount = state.failureObservations.filter(
+      (entry) => entry.generation === state.generation,
+    ).length;
     return {
       managed: true,
       mode: this.config.mode,
@@ -4835,6 +5145,25 @@ export class ZesResearchCycleManager {
       observedPaths: state.observedPaths,
       dependencySensitivePaths: state.dependencySensitivePaths,
       distinctFailureCount: state.distinctFailureDigests.length,
+      failureSummary: {
+        observationCount: state.failureObservations.length,
+        currentGenerationObservationCount: currentGenerationFailureCount,
+        distinctFailureCount: state.distinctFailureDigests.length,
+        latestPlane: latestFailure?.plane,
+        latestDisposition: latestFailure?.disposition,
+        latestReasonCode: latestFailure?.reasonCode,
+        latestWorkingContentChanged:
+          latestFailure?.workingContentChanged ?? false,
+        semanticAdmissionPreserved:
+          latestFailure?.semanticAdmissionPreserved,
+        preCommitCleared: latestFailure?.preCommitCleared ?? false,
+        recommendedAction: latestFailure
+          ? failureRecommendedAction(latestFailure.disposition)
+          : undefined,
+      },
+      failureObservations: state.failureObservations.slice(-20),
+      lastObservedWorkingContentDigestSha256:
+        state.lastObservedWorkingContentDigestSha256,
       preCommit: state.preCommit
         ? {
             verifiedAt: state.preCommit.verifiedAt,
