@@ -13,6 +13,8 @@ The bridge is not a second coding agent. The default path contains no hidden
                          ChatGPT WebChat
                     reasoning / coding owner
                               │
+                    explicit workstream ref
+                              │
                               │ stable MCP ABI
                               ▼
                   WebChat-consumable capability plane
@@ -26,8 +28,15 @@ The bridge is not a second coding agent. The default path contains no hidden
  artifact transfer       optional specialists     provider lifecycle
        └──────────────────────┼────────────────────────┘
                               │
-                           LangSmith
-                     bounded tool observability
+                    thin binding seam only
+                  workstream ↔ native thread
+                       ┌──────┴──────┐
+                       │             │
+                 Agent Server     LangSmith
+                 thread status    Threads/Traces
+                       │             │
+                       └──────┬──────┘
+                         Studio UI
 ```
 
 ## Stable v2 tool ABI
@@ -89,7 +98,9 @@ The custom code is limited to:
 - workspace/provider selection and path containment;
 - bounded binary and process-output projection;
 - capability allowlists and Agent Server Store prefixing;
-- explicit state and evidence adapters.
+- explicit state and evidence adapters;
+- one thin WebChat workstream-ref binding to native Agent Server and LangSmith
+  thread identities.
 
 The bridge reuses:
 
@@ -104,6 +115,9 @@ The bridge reuses:
 - LangGraph SQLite checkpointing in standalone mode;
 - Agent Server threads, runs, checkpoint history, Store, and optional
   allowlisted assistants;
+- Agent Server `threads.search` / `threads.create` as the runtime workstream
+  state owner;
+- LangSmith Threads for trace grouping and LangSmith Studio for inspection;
 - a provider-neutral sandbox port, with a LangSmith Sandbox adapter included;
 - the official MCP Python SDK and OpenAI Secure MCP Tunnel client.
 
@@ -118,6 +132,7 @@ ChatGPT's private inference loop. Therefore:
 | `AGENTS.md` project memory | Explicit ordered memory discovery and read |
 | Files, search, edits, execution | Direct primitive calls |
 | LangGraph state and Agent Server services | Direct typed calls |
+| WebChat workstream identity | Explicit ref bound to one native Agent Server thread and LangSmith `thread_id` |
 | Structured planning / todos | Native `WriteTodosInput` in Agent Server thread state |
 | Agent Server HITL / interrupts | Read native interrupt state and resume with `run_command` |
 | Optional specialist agents | Explicit `specialist_task`, never automatic |
@@ -128,6 +143,40 @@ ChatGPT's private inference loop. Therefore:
 
 The last three remain model-loop differences and must be measured in the A/B
 comparison rather than described as solved.
+
+## Native workstream observability
+
+The bridge does not clone DevSpace execution-scope storage or build another
+dashboard. `workspace_open.thread_id` is treated as a WebChat workstream ref:
+
+```text
+WebChat workstream ref
+        │
+        ├─ Agent Server threads.search(metadata)
+        │      └─ resolve one existing thread or create one
+        │
+        └─ LangSmith trace metadata.thread_id
+               └─ native Threads / Traces / Runs / Studio views
+```
+
+If WebChat supplies no ref, the bridge mints a UUIDv7 and returns it. A supplied
+ref is preferred because the first `workspace_open` trace can then be grouped
+immediately. The binding is fail-open for coding: an Agent Server outage leaves
+the workstream traceable in LangSmith and reports a typed degraded state rather
+than creating a competing activity database.
+
+The live qualification proved:
+
+- exactly one Agent Server thread found by workstream metadata;
+- native thread status `idle` and native `updated_at`;
+- one LangSmith Thread containing `mcp.workspace_open`, `mcp.ls`, and
+  `mcp.checkpoint_read` traces;
+- no custom trace store, activity database, dashboard, or run state machine.
+
+This does not expose ChatGPT's private reasoning interval. A silent WebChat gap
+still cannot be classified authoritatively as reasoning versus hang.
+
+See `evidence/native-workstream-observability-20260822.json`.
 
 ## Sandbox and persistent process state
 
@@ -227,7 +276,14 @@ Two deterministic no-model graphs are included for qualification:
 ```bash
 uv run langgraph dev --no-browser --no-reload --port 2026
 uv run python scripts/probe_agent_server.py
+uv run python scripts/probe_workstream_observability.py
 ```
+
+The current live Agent Server qualification uses `langgraph dev` and its native
+in-memory development runtime. The production image builds successfully, but
+steady-state standalone activation is intentionally held until the required
+production license authority and native Postgres/Redis backing services are
+available. The bridge does not substitute a custom persistence service.
 
 ## Direct ChatGPT qualification
 
@@ -246,6 +302,10 @@ environment file. `compose.tunnel.yaml` reads that file through
 `TUNNEL_RUNTIME_ENV_FILE` and never exposes the bridge publicly.
 
 Use [`docs/secure-mcp-tunnel-runbook.md`](docs/secure-mcp-tunnel-runbook.md) for
-Gate A. Migration remains blocked until the representative A/B and continuity
-gates in [`docs/capability-parity-matrix.md`](docs/capability-parity-matrix.md)
-pass.
+Gate A. Gate A now passes through the uniquely named
+`ZES_LangChain_Runtime` app: ChatGPT opened the disposable repository, read
+native context, repaired the source, read the mutation back, passed two tests,
+passed `git diff --check`, and persisted a checkpoint without Nexus, Legacy, or
+a second model. Migration remains blocked until the representative A/B and
+long-horizon continuity gates in
+[`docs/capability-parity-matrix.md`](docs/capability-parity-matrix.md) pass.

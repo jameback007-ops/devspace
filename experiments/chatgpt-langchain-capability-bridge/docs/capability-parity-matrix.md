@@ -5,16 +5,17 @@ can actually wrap ChatGPT WebChat's private model loop.
 
 | Capability | Native basis | Qualification state | Remaining proof |
 |---|---|---:|---|
-| Workspace selection | Thin allowed-root registry | Passed locally | Reopen after ChatGPT app reconnect |
-| File list/read/write/edit/delete | Deep Agents backend protocol | Passed | Direct WebChat repair |
+| Workspace selection | Thin allowed-root registry + workstream identity | Passed locally and direct WebChat | Multi-repo production workload |
+| File list/read/write/edit/delete | Deep Agents backend protocol | Passed direct WebChat | Representative multi-file repair |
 | Search/glob | Deep Agents backend protocol | Passed | Representative multi-file diagnosis |
 | Shell/build/test/Git | Deep Agents `execute` | Passed in isolated container | Representative project workload |
 | Binary artifact transfer | Native `upload_files` / `download_files` | Passed with checksum | Direct WebChat binary round trip |
 | Skills | Native `SkillsMiddleware` metadata loading | Passed | WebChat selects and reads the correct skill |
 | `AGENTS.md` memory | Native `MemoryMiddleware` ordered sources | Passed | Nested project-instruction behavior |
 | Context progressive disclosure | Thin explicit MCP projection | Passed | Long task token/quality comparison |
-| Durable checkpoint | LangGraph SQLite / Agent Server Store | Passed | Resume from new WebChat chat |
+| Durable checkpoint | LangGraph SQLite / Agent Server Store | Passed direct record/read | Resume from new WebChat chat |
 | Agent Server threads/history/state | `langgraph_sdk.threads` | Passed on live v2 custom route | Production deployment persistence |
+| WebChat workstream binding | `threads.search/create` + LangSmith `thread_id` metadata | Passed: one native runtime thread and one LangSmith Thread | Long-horizon reconnect identity |
 | Native structured planning | `TodoListMiddleware.WriteTodosInput` + thread state | Passed unit and live v2 round trip | WebChat behavior on a long task |
 | Agent Server durable runs/events/cancel | `langgraph_sdk.runs` | Passed on live v2 custom route | Production queue/load behavior |
 | Native HITL interrupt/resume | LangGraph `interrupt` + Agent Server `Command(resume)` | Passed on live deterministic graph | Real specialist approval flow |
@@ -24,9 +25,10 @@ can actually wrap ChatGPT WebChat's private model loop.
 | Native sandbox provider port | `NativeSandboxProvider` + Deep Agents backend | Passed structurally | Select live provider |
 | LangSmith Sandbox | Native SDK + `LangSmithSandbox` | **Blocked: organization feature disabled** | Enable feature or select another provider |
 | Persistent PTY / stdin / kill / reconnect | Provider-native command handle | Adapter passed with native contract fake | Live provider qualification |
-| Tool observability | LangSmith `trace` metadata only | Implemented fail-open | Live trace receipt and A/B dashboard |
+| Tool observability | LangSmith `trace` + native Threads | Passed live with three grouped MCP traces | Representative A/B traces |
+| Observability UI | LangSmith Studio / Deployment Threads tab | Native surface available; no custom dashboard | Production deployment exposure |
 | Tool catalog stability | Frozen 24-tool v2 ABI | Descriptor test ready | ChatGPT scan/reconnect stress |
-| Private transport | OpenAI Secure MCP Tunnel | Credentials/client ready | Start bridge + tunnel and scan app |
+| Private transport | OpenAI Secure MCP Tunnel | Passed direct discovery/read/write/execute/checkpoint | Long-run reconnect stress |
 | Hidden WebChat reasoning checkpoint | No public seam | Not claimable | Remains a WebChat/platform property |
 | Hidden WebChat system prompt replacement | No public seam | Not possible through MCP | Use server instructions/skills/context instead |
 | Automatic WebChat history summarization | Deep Agents model-loop middleware | Not applicable to WebChat loop | Compare WebChat continuity empirically |
@@ -52,21 +54,21 @@ Pass criteria:
 - The private bridge has no public listener.
 - The direct path does not use Legacy/Nexus as a relay.
 
-Current observation:
+Observed result:
 
-- direct `capability_manifest`, `workspace_open`, bootstrap, `read_file`, and
-  failing-test execution passed over Secure MCP Tunnel;
-- one direct `edit_file` attempt did not persist and did not produce a usable
-  terminal result;
-- the host-visible `ZES` resource then disappeared while bridge and tunnel
-  health stayed ready;
-- an identical local MCP edit passed, so the evidence currently isolates the
-  failure above the bridge/backend boundary;
-- one controlled tunnel-client restart restored tunnel readiness but did not
-  restore the direct resource in the same WebChat turn.
+- the first generic `ZES` app namespace exposed a host resource-continuity
+  failure after one non-terminal edit attempt;
+- bridge and tunnel stayed healthy, and an identical local MCP edit passed;
+- renaming and reconnecting the app as `ZES_LangChain_Runtime` restored a
+  unique host namespace without recreating the tunnel or credentials;
+- ChatGPT then opened the repository, read the native instructions and skill,
+  reproduced two failures, applied one exact edit, confirmed readback, passed
+  `2 passed`, passed `git diff --check`, and recorded/read a checkpoint;
+- the repair used the direct app only—no Nexus, Legacy, specialist, or second
+  model performed the code change.
 
-Status: **Gate A partially passed; write persistence and host catalog continuity
-failed.** See `evidence/direct-webchat-host-boundary-20260822.json`.
+Status: **Gate A passed after unique app namespace reconnect.** See
+`evidence/direct-webchat-host-boundary-20260822.json`.
 
 ### Gate B — full native context/runtime qualification
 
@@ -75,6 +77,8 @@ Use one representative task to exercise:
 - skills and nested `AGENTS.md` discovery;
 - artifact transfer;
 - Agent Server thread/run/history/Store;
+- one WebChat workstream ref resolved to exactly one Agent Server thread;
+- the same workstream ref grouping MCP traces into one LangSmith Thread;
 - native todos in thread state;
 - native interrupt observation and `Command(resume)` continuation;
 - explicit specialist invocation only where justified;
@@ -82,6 +86,12 @@ Use one representative task to exercise:
 
 Persistent PTY is a subgate, not a blocker for Gate A. It remains held until a
 live native sandbox provider is available.
+
+Native workstream observability is now passed in the development Agent Server:
+thread status/updated time come from Agent Server, tool trajectory comes from
+LangSmith Threads, and inspection uses LangSmith Studio. No execution-scope
+database, trace store, dashboard, or custom run state machine was added. See
+`evidence/native-workstream-observability-20260822.json`.
 
 ### Gate C — DevSpace versus bridge A/B
 
@@ -117,12 +127,20 @@ This gate distinguishes transport stability from ChatGPT host catalog caching.
 Require:
 
 - dedicated Agent Server/bridge runtime;
+- native Postgres and Redis backing services required by standalone Agent
+  Server rather than custom persistence;
+- the required standalone Agent Server license authority;
 - private Secure MCP Tunnel transport;
 - sandbox provider or equivalent strong isolation for untrusted execution;
 - explicit assistant and Store namespace allowlists;
 - durable state and bounded retention;
 - observability with no credentials, source payloads, or hidden reasoning;
 - idempotent deployment and rollback.
+
+The production image builds, but production activation is currently held
+because no `LANGGRAPH_CLOUD_LICENSE_KEY` is bound. The qualified Agent Server
+runtime in this phase is the native in-memory development server, not a claimed
+production deployment.
 
 ### Gate F — migration decision
 

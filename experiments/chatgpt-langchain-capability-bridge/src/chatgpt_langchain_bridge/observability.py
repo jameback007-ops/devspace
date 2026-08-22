@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import functools
+import inspect
 import os
 from threading import RLock
-from typing import Any, Callable, TypeVar, cast
+from typing import Any, Callable, Mapping, TypeVar, cast
 
 from langsmith import trace
 
 F = TypeVar("F", bound=Callable[..., Any])
+TraceContextResolver = Callable[[str, Mapping[str, Any]], dict[str, Any]]
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -30,7 +32,11 @@ class ObservabilityPlane:
         self._trace_factory = trace_factory
         self._trace_error_count = 0
         self._last_trace_error_type: str | None = None
+        self._context_resolver: TraceContextResolver | None = None
         self._lock = RLock()
+
+    def set_context_resolver(self, resolver: TraceContextResolver) -> None:
+        self._context_resolver = resolver
 
     def status(self) -> dict[str, Any]:
         return {
@@ -40,6 +46,11 @@ class ObservabilityPlane:
             "endpoint": os.environ.get("LANGSMITH_ENDPOINT"),
             "project": self._project,
             "payload_policy": "tool name and argument names only; values and outputs excluded",
+            "thread_grouping": {
+                "metadata_key": "thread_id",
+                "source": "workspace workstream binding",
+                "langsmith_threads_native": True,
+            },
             "webchat_hidden_reasoning_captured": False,
             "fail_open": True,
             "trace_error_count": self._trace_error_count,
@@ -53,6 +64,17 @@ class ObservabilityPlane:
                 if not self._enabled:
                     return func(*args, **kwargs)
 
+                call_arguments = self._bind_arguments(func, args, kwargs)
+                trace_context = self._resolve_context(tool_name, call_arguments)
+                metadata = {
+                    "tool_name": tool_name,
+                    "payload_values_recorded": False,
+                    **trace_context,
+                }
+                tags = ["chatgpt-owned-coding-loop", "mcp-capability-plane"]
+                if trace_context.get("thread_id"):
+                    tags.append("langsmith-thread-bound")
+
                 try:
                     manager = self._trace_factory(
                         f"mcp.{tool_name}",
@@ -62,11 +84,8 @@ class ObservabilityPlane:
                             "keyword_argument_names": sorted(kwargs),
                         },
                         project_name=self._project,
-                        tags=["chatgpt-owned-coding-loop", "mcp-capability-plane"],
-                        metadata={
-                            "tool_name": tool_name,
-                            "payload_values_recorded": False,
-                        },
+                        tags=tags,
+                        metadata=metadata,
                     )
                     manager.__enter__()
                 except Exception as exc:
@@ -90,6 +109,39 @@ class ObservabilityPlane:
             return cast(F, wrapped)
 
         return decorate
+
+    @staticmethod
+    def _bind_arguments(
+        func: Callable[..., Any], args: tuple[Any, ...], kwargs: dict[str, Any]
+    ) -> dict[str, Any]:
+        try:
+            bound = inspect.signature(func).bind_partial(*args, **kwargs)
+        except (TypeError, ValueError):
+            return dict(kwargs)
+        return dict(bound.arguments)
+
+    def _resolve_context(
+        self, tool_name: str, arguments: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        if self._context_resolver is None:
+            return {}
+        try:
+            raw = self._context_resolver(tool_name, arguments)
+        except Exception as exc:
+            self._record_trace_error(exc)
+            return {}
+        allowed = {
+            "thread_id",
+            "workstream_ref",
+            "agent_server_thread_id",
+            "workspace_id",
+            "bridge_reasoning_owner",
+        }
+        return {
+            key: value
+            for key, value in raw.items()
+            if key in allowed and value is not None
+        }
 
     def _record_trace_error(self, exc: Exception) -> None:
         with self._lock:

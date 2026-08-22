@@ -9,8 +9,9 @@ must not bind the tunnel to Nexus/DevSpace.
 ChatGPT workspace
    ↕ OpenAI Secure MCP Tunnel
 official tunnel-client v0.0.12
-   ↕ private Docker network
-chatgpt-langchain bridge:8765/mcp
+   ↕ private runtime route
+standalone bridge:8765/mcp                 qualification control
+or Agent Server:2026/coding/mcp            preferred native runtime
    ↕
 disposable repository + isolated checkpoint volume
 ```
@@ -28,7 +29,8 @@ The VPS already has:
 - file ownership/mode `root:root 0600`;
 - the LangSmith binding separately in
   `/etc/devspace/chatgpt-langchain.env`;
-- no active agent-runtime tunnel daemon yet.
+- a qualified tunnel/bridge runtime that may already be active under the
+  disposable `zesbridgegatea` Compose project.
 
 Never print, hash, copy to argv, or commit either credential file.
 
@@ -67,7 +69,8 @@ It must not mount ZES, `/root`, `~/.ssh`, or `/etc`.
 ```bash
 docker compose up --build -d bridge
 docker compose ps
-curl -fsS http://127.0.0.1:${BRIDGE_PORT:-8765}/healthz
+container="$(docker compose ps -q bridge)"
+docker inspect "$container" --format '{{.State.Health.Status}}'
 uv run python scripts/probe_mcp.py
 ```
 
@@ -177,6 +180,43 @@ required for this disposable repair.
 - Mutation tool results are terminal and source/state readback confirms them.
 - Tunnel remains ready and bridge remains private.
 - No credential, hidden reasoning, or source payload is emitted to logs/traces.
+
+Observed Gate A result on 2026-08-22: **passed** after the app was renamed and
+reconnected as `ZES LangChain Runtime`. ChatGPT directly repaired the
+disposable fixture, confirmed the edit by source readback, obtained `2 passed`,
+passed `git diff --check`, and recorded/read the checkpoint. The repair did not
+use Nexus, Legacy, a specialist, or another model. See
+`evidence/direct-webchat-host-boundary-20260822.json`.
+
+## 8. Upgrade the runtime seam to native Agent Server
+
+After Gate A, qualify the same frozen 24-tool MCP app at the Agent Server custom
+route:
+
+```bash
+set -a
+. /etc/devspace/chatgpt-langchain.env
+set +a
+export LANGSMITH_TRACING=true
+export LANGSMITH_PROJECT=zes-chatgpt-langchain-capability-bridge
+export PORT=2026
+
+uv run langgraph dev --no-browser --no-reload --port 2026
+uv run python scripts/probe_agent_server.py
+uv run python scripts/probe_workstream_observability.py
+```
+
+`workspace_open.thread_id` is the explicit WebChat workstream ref. The bridge
+resolves or creates exactly one native Agent Server thread by metadata and uses
+the same ref as LangSmith trace `thread_id`. Agent Server owns runtime status,
+timestamps, state, and runs; LangSmith owns Threads/Traces/Runs and Studio. Do
+not add a custom execution-scope database or dashboard.
+
+The live development qualification passed with one native Agent Server thread
+and one LangSmith Thread containing three MCP traces. The production image also
+builds, but standalone production activation remains gated on the required
+license authority plus native Postgres and Redis backing services. No
+`LANGGRAPH_CLOUD_LICENSE_KEY` was bound during this qualification.
 
 ## Failure classification
 

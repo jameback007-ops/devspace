@@ -169,6 +169,43 @@ def test_native_thread_run_and_store_projections() -> None:
     assert thread["metadata"]["bridge_owner"] == "test"
 
 
+def test_workstream_binding_creates_then_resolves_native_thread() -> None:
+    plane = make_plane()
+
+    created = plane.bind_workstream("webchat-workstream-1")
+    resolved = plane.bind_workstream("webchat-workstream-1")
+
+    assert created["state"] == "created_agent_thread"
+    assert resolved["state"] == "resolved_existing_agent_thread"
+    assert resolved["thread_id"] == created["thread_id"]
+    assert resolved["metadata"]["bridge_workstream_ref"] == "webchat-workstream-1"
+    assert resolved["metadata"]["bridge_owner"] == "test"
+    assert resolved["metadata"]["bridge_reasoning_owner"] == "chatgpt_webchat"
+
+
+def test_workstream_binding_rejects_duplicate_native_threads() -> None:
+    client = FakeClient()
+    metadata = {
+        "bridge_owner": "test",
+        "bridge_workstream_ref": "duplicate",
+        "bridge_reasoning_owner": "chatgpt_webchat",
+    }
+    client.threads.create(graph_id="bridge_journal", metadata=metadata)
+    client.threads.create(graph_id="bridge_journal", metadata=metadata)
+    plane = AgentServerPlane(
+        AgentServerPlaneConfig(
+            url="http://agent-server.test",
+            allowed_assistant_ids=("bridge_journal",),
+            thread_metadata_key="bridge_owner",
+            thread_metadata_value="test",
+        ),
+        client_factory=lambda **_: client,
+    )
+
+    with pytest.raises(BridgeError, match="multiple Agent Server threads"):
+        plane.bind_workstream("duplicate")
+
+
 def test_optional_specialist_is_explicit_and_allowlisted() -> None:
     plane = make_plane()
     listing = plane.specialist("list")

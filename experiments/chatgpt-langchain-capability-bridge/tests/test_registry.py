@@ -10,6 +10,7 @@ from chatgpt_langchain_bridge.registry import (
     BridgeError,
     WorkspaceRegistry,
 )
+from chatgpt_langchain_bridge.workstream import WorkstreamBinding
 
 
 def make_registry(root: Path) -> WorkspaceRegistry:
@@ -95,3 +96,30 @@ def test_workspace_must_be_under_allowed_root(tmp_path: Path) -> None:
 
     with pytest.raises(BridgeError, match="outside allowed roots"):
         registry.open(str(denied))
+
+
+def test_same_root_supports_distinct_workstream_handles(tmp_path: Path) -> None:
+    registry = make_registry(tmp_path)
+    first_binding = WorkstreamBinding(
+        workstream_ref="workstream-a",
+        trace_thread_id="workstream-a",
+        source="webchat_supplied",
+        state="local_trace_only",
+        bound_at="2026-08-22T00:00:00+00:00",
+    )
+    second_binding = WorkstreamBinding(
+        workstream_ref="workstream-b",
+        trace_thread_id="workstream-b",
+        source="webchat_supplied",
+        state="local_trace_only",
+        bound_at="2026-08-22T00:00:00+00:00",
+    )
+
+    first = registry.open(str(tmp_path), workstream=first_binding)
+    first_again = registry.open(str(tmp_path), workstream=first_binding)
+    second = registry.open(str(tmp_path), workstream=second_binding)
+
+    assert first_again["workspace_id"] == first["workspace_id"]
+    assert second["workspace_id"] != first["workspace_id"]
+    assert first["workstream"]["workstream_ref"] == "workstream-a"
+    assert second["workstream"]["workstream_ref"] == "workstream-b"

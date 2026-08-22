@@ -1,54 +1,73 @@
 {
-  "schema_version": "chatgpt-langchain-capability-bridge.direct-webchat-host-boundary.v1",
-  "observed_at": "2026-08-22T14:29:00Z",
+  "schema_version": "chatgpt-langchain-capability-bridge.direct-webchat-host-boundary.v2",
+  "observed_at": "2026-08-22T14:45:00Z",
   "transport": {
     "kind": "openai_secure_mcp_tunnel",
+    "app_namespace": "ZES_LangChain_Runtime",
     "bridge_health": "healthy",
     "tunnel_health_http": 200,
     "tunnel_ready_http": 200,
     "tool_abi_version": "chatgpt-langchain-capability-bridge.tools.v2",
+    "tool_count": 24,
     "tool_abi_fingerprint_sha256": "071b7d38d9205565264541ecc3eb84b5fa3681544d462eaf3511abf90e6a47b7"
   },
-  "direct_webchat_observations": {
+  "initial_host_incident": {
+    "original_app_namespace": "ZES",
+    "read_and_execute": "passed",
+    "edit_file_call": "non_terminal_or_failed",
+    "edit_persisted": false,
+    "post_edit_resource_continuity": "failed_same_turn",
+    "identical_local_mcp_edit_roundtrip": "passed",
+    "controlled_tunnel_restart_restored_namespace": false,
+    "failure_plane": "chatgpt_app_namespace_or_host_resource_boundary",
+    "backend_or_tunnel_outage_supported": false
+  },
+  "controlled_recovery": {
+    "action": "rename app to unique namespace and reconnect/rescan",
+    "new_namespace": "ZES_LangChain_Runtime",
+    "bridge_or_tunnel_recreated": false,
+    "credential_rotated": false,
+    "host_namespace_restored": true
+  },
+  "direct_webchat_gate_a": {
+    "status": "passed",
+    "reasoning_owner": "chatgpt_webchat",
+    "delegated_model_present": false,
     "capability_manifest": "passed",
     "workspace_open": "passed",
     "native_agents_memory_bootstrap": "passed",
     "native_skill_metadata_bootstrap": "passed",
-    "execute_pytest": "passed_with_expected_two_failures",
     "read_file": "passed",
-    "edit_file_call": "non_terminal_or_failed",
-    "edit_persisted": false,
-    "post_edit_direct_validation": "blocked_by_host_resource_disappearance"
+    "initial_pytest": {
+      "exit_code": 1,
+      "failed_tests": 2
+    },
+    "edit_file": {
+      "terminal_result": "passed",
+      "occurrences": 1,
+      "readback": "passed"
+    },
+    "final_pytest": {
+      "exit_code": 0,
+      "summary": "2 passed in 0.01s"
+    },
+    "git_diff_check": "passed",
+    "checkpoint_record": "passed",
+    "checkpoint_read": "passed",
+    "latest_checkpoint_id": "1f19e385-12de-6ce0-8004-37e808e0bf96",
+    "direct_route_used": true,
+    "nexus_or_legacy_used_for_repair": false
   },
-  "isolation_diagnostics": {
-    "source_remained_unchanged": true,
-    "identical_local_mcp_edit_roundtrip": "passed",
-    "local_diagnostic_file_cleaned": true,
-    "bridge_backend_failure_supported": false,
-    "tunnel_outage_supported": false,
-    "host_app_or_catalog_boundary_supported": true
-  },
-  "controlled_recovery": {
-    "tunnel_client_restart_attempts": 1,
-    "bridge_restarted": false,
-    "tunnel_returned_live_and_ready": true,
-    "direct_tool_namespace_restored_in_same_turn": false
-  },
-  "candidate_hypotheses": [
-    "The ChatGPT host cancelled or failed the mutation before a terminal tool result was observed",
-    "A host-side app namespace or catalog collision exists between ZES, ZES_Nexus, and ZES_Legacy",
-    "The direct app must be reattached or renamed to a unique namespace before continuity qualification"
-  ],
-  "not_claimed": [
-    "Direct WebChat write path passed",
-    "Secure MCP Tunnel transport failed",
-    "Deep Agents edit backend failed",
-    "The namespace collision hypothesis is proven"
-  ],
   "adapter_hardening": {
+    "commit": "7cabd7d5c1eb4d89e97b22bf8608fb6fa9c8bd5b",
     "change": "Promote native backend result.error to an MCP tool error",
     "reason": "Prevent a WebChat host from treating a typed backend failure as a completed mutation",
     "tool_abi_changed": false
+  },
+  "remaining_host_boundary": {
+    "host_catalog_or_namespace_can_still_stale": true,
+    "hidden_webchat_reasoning_observable": false,
+    "long_horizon_reconnect_stress_qualified": false
   },
   "secret_values_recorded": false,
   "raw_source_payloads_recorded": false

@@ -1,0 +1,69 @@
+{
+  "schema_version": "chatgpt-langchain-capability-bridge.native-workstream-observability.v1",
+  "observed_at": "2026-08-22T15:07:20Z",
+  "tool_abi": {
+    "version": "chatgpt-langchain-capability-bridge.tools.v2",
+    "tool_count": 24,
+    "fingerprint_sha256": "071b7d38d9205565264541ecc3eb84b5fa3681544d462eaf3511abf90e6a47b7",
+    "changed_by_workstream_binding": false
+  },
+  "binding": {
+    "input_workstream_ref": "agent-server-workstream-observability-probe",
+    "source": "webchat_supplied",
+    "resolver": "Agent Server threads.search then threads.create",
+    "native_thread_id": "01a02a02-f2b3-75d2-aec4-45d1e9db6e3f",
+    "native_thread_status": "idle",
+    "native_thread_count_for_metadata": 1,
+    "metadata": {
+      "bridge_workstream_ref": "agent-server-workstream-observability-probe",
+      "bridge_reasoning_owner": "chatgpt_webchat",
+      "chatgpt_langchain_bridge": "v2",
+      "graph_id": "bridge_journal"
+    }
+  },
+  "langsmith_threads": {
+    "project_id": "f247d454-fe43-49e7-8626-ea50bde744e1",
+    "project_name": "zes-chatgpt-langchain-capability-bridge",
+    "matching_thread_count": 1,
+    "trace_count": 3,
+    "trace_names": [
+      "mcp.workspace_open",
+      "mcp.ls",
+      "mcp.checkpoint_read"
+    ],
+    "trace_errors": 0,
+    "grouping_metadata_key": "thread_id",
+    "payload_values_recorded": false,
+    "outputs_recorded": false
+  },
+  "native_runtime": {
+    "agent_server_health": "passed",
+    "thread_search": "passed",
+    "thread_status": "idle",
+    "thread_updated_at_present": true,
+    "run_store_todos_hitl_regression_probe": "passed",
+    "studio_surface": "native_langsmith_studio"
+  },
+  "custom_seam": {
+    "kind": "thin_workstream_binding_adapter",
+    "workspace_open_thread_id_reinterpreted_as_workstream_ref": true,
+    "uuid7_minted_when_missing": true,
+    "custom_activity_database_created": false,
+    "custom_trace_store_created": false,
+    "custom_dashboard_created": false,
+    "custom_run_state_machine_created": false
+  },
+  "boundaries": {
+    "webchat_conversation_id_received_from_host": false,
+    "hidden_webchat_reasoning_observable": false,
+    "silent_interval_hang_determination_available": false,
+    "agent_server_thread_status_authoritative_for_webchat_reasoning": false
+  },
+  "production_gate": {
+    "current_runtime": "langgraph_dev_in_memory",
+    "production_image_build_available": true,
+    "langgraph_cloud_license_key_present": false,
+    "postgres_and_redis_production_activation": "not_started_without_license_authority"
+  },
+  "secret_values_recorded": false
+}

@@ -6,7 +6,7 @@ from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from threading import RLock
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from deepagents.backends import BackendProtocol, LocalShellBackend
 
@@ -19,6 +19,9 @@ from .tool_abi import (
     PREDECESSOR_ABI_FINGERPRINT_SHA256,
     PREDECESSOR_ABI_VERSION,
 )
+
+if TYPE_CHECKING:
+    from .workstream import WorkstreamBinding
 
 
 class BridgeError(ValueError):
@@ -91,6 +94,8 @@ class WorkspaceHandle:
     sandbox_provider: str | None = None
     sandbox_resource_name: str | None = None
     process_session: NativeProcessSession | None = None
+    workstream: WorkstreamBinding | None = None
+    identity_key: tuple[str, str] | None = None
 
     def public_view(self) -> dict[str, Any]:
         return {
@@ -107,6 +112,7 @@ class WorkspaceHandle:
             "sandbox_provider": self.sandbox_provider,
             "sandbox_resource_name": self.sandbox_resource_name,
             "persistent_process": self.process_session is not None,
+            "workstream": self.workstream.public_view() if self.workstream else None,
         }
 
 
@@ -125,7 +131,7 @@ class WorkspaceRegistry:
     def __init__(self, config: BridgeConfig):
         self._config = config
         self._workspaces: dict[str, WorkspaceHandle] = {}
-        self._by_root: dict[Path, str] = {}
+        self._by_identity: dict[tuple[str, str], str] = {}
         self._lock = RLock()
 
     @property
@@ -171,14 +177,19 @@ class WorkspaceRegistry:
             ],
         }
 
-    def open(self, path: str) -> dict[str, Any]:
+    def open(
+        self, path: str, *, workstream: WorkstreamBinding | None = None
+    ) -> dict[str, Any]:
         root = self._resolve_allowed_root(path)
+        workstream_ref = workstream.workstream_ref if workstream else ""
+        identity_key = (str(root), workstream_ref)
         with self._lock:
-            existing_id = self._by_root.get(root)
+            existing_id = self._by_identity.get(identity_key)
             if existing_id is not None:
                 return self._workspaces[existing_id].public_view()
 
-            workspace_id = "ws_" + hashlib.sha256(str(root).encode()).hexdigest()[:12]
+            identity = str(root) if not workstream_ref else f"{root}\0{workstream_ref}"
+            workspace_id = "ws_" + hashlib.sha256(identity.encode()).hexdigest()[:12]
             backend = LocalShellBackend(
                 root_dir=root,
                 virtual_mode=False,
@@ -194,9 +205,11 @@ class WorkspaceRegistry:
                 backend_name="deepagents.LocalShellBackend",
                 opened_at=datetime.now(UTC).isoformat(),
                 local_root=root,
+                workstream=workstream,
+                identity_key=identity_key,
             )
             self._workspaces[workspace_id] = handle
-            self._by_root[root] = workspace_id
+            self._by_identity[identity_key] = workspace_id
             return handle.public_view()
 
     def attach_native_sandbox(
@@ -225,6 +238,10 @@ class WorkspaceRegistry:
                 sandbox_provider=attachment.provider,
                 sandbox_resource_name=attachment.resource_name,
                 process_session=attachment.process_session,
+                identity_key=(
+                    f"sandbox:{attachment.provider}:{attachment.resource_name}",
+                    "",
+                ),
             )
             self._workspaces[workspace_id] = handle
             return handle.public_view()
@@ -237,8 +254,8 @@ class WorkspaceRegistry:
                 handle = self._workspaces.pop(workspace_id)
             except KeyError as exc:
                 raise BridgeError(f"unknown workspace_id: {workspace_id}") from exc
-            if handle.local_root is not None:
-                self._by_root.pop(handle.local_root, None)
+            if handle.identity_key is not None:
+                self._by_identity.pop(handle.identity_key, None)
         return {"workspace_id": workspace_id, "detached": True}
 
     def list(self) -> list[dict[str, Any]]:
@@ -395,6 +412,16 @@ class WorkspaceRegistry:
         """Return one exact internal handle for another bounded capability plane."""
 
         return self._get(workspace_id)
+
+    def workstream_for_agent_thread(
+        self, agent_thread_id: str
+    ) -> WorkstreamBinding | None:
+        with self._lock:
+            for handle in self._workspaces.values():
+                binding = handle.workstream
+                if binding and binding.agent_thread_id == agent_thread_id:
+                    return binding
+        return None
 
     def normalize_file_path(self, workspace_id: str, raw_path: str) -> str:
         return self._normalize_file_path(self._get(workspace_id), raw_path)

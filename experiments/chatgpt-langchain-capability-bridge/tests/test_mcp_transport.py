@@ -114,6 +114,10 @@ async def test_streamable_http_tool_roundtrip(tmp_path: Path) -> None:
             assert opened["bootstrap"]["instructions"][0]["path"] == "AGENTS.md"
             assert opened["bootstrap"]["skills"][0]["name"] == "fixture-coding"
             assert opened["bootstrap"]["durable_state"]["state"] == "empty"
+            assert opened["bootstrap"]["workstream"]["workstream_ref"] == (
+                "transport-test"
+            )
+            assert opened["workstream"]["trace_thread_id"] == "transport-test"
 
             edited = _structured(
                 await session.call_tool(

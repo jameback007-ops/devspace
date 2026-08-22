@@ -133,7 +133,36 @@ tool outcome.
 
 Disposition: **USE with fail-open semantics and a strict payload ceiling**.
 
-## Finding 10 — catalog risk remains but is reduced
+## Finding 10 — native Threads and Studio replace a custom observability stack
+
+Agent Server already owns runtime thread status, timestamps, state, runs, and
+history. LangSmith already groups traces into Threads through `thread_id`
+metadata and exposes those Threads, Traces, and Runs through its native UI and
+Studio. Recreating DevSpace's execution-scope database or dashboard would
+duplicate these mature authorities.
+
+The only irreducible WebChat gap is identity binding: ChatGPT does not expose a
+durable public conversation ID to the MCP server. The bridge now treats
+`workspace_open.thread_id` as an explicit workstream ref, resolves exactly one
+Agent Server thread with `threads.search`, creates one when absent, and uses the
+same ref as LangSmith trace `thread_id`. When no ref is supplied, it mints a
+UUIDv7 and returns it.
+
+Live evidence shows one Agent Server thread with native `idle` status and one
+LangSmith Thread containing `mcp.workspace_open`, `mcp.ls`, and
+`mcp.checkpoint_read`. No custom activity database, trace store, dashboard, or
+run state machine was created.
+
+Disposition: **USE Agent Server Threads + LangSmith Threads/Studio; keep only
+the thin workstream binding seam**.
+
+OpenTelemetry remains a native optional infra layer rather than an immediate
+bridge dependency. Agent Server already initializes native OTel metrics in the
+qualified runtime, while LangSmith covers the current application/tool
+trajectory. Add MCP-level OTel only after an infrastructure visibility gap is
+measured; do not add parallel telemetry by default.
+
+## Finding 11 — catalog risk remains but is reduced
 
 ChatGPT still owns the host-side app/tool snapshot. A transport or catalog
 problem can therefore hide or stale the bridge even when the backend is
@@ -148,7 +177,7 @@ chatgpt-langchain-capability-bridge.tools.v2
 Disposition: freeze the 24-tool v2 ABI throughout direct-host and A/B
 qualification. Internal native implementations may evolve behind it.
 
-## Finding 11 — Secure MCP Tunnel is the correct direct-host transport
+## Finding 12 — Secure MCP Tunnel is the correct direct-host transport
 
 The official tunnel client lets the private bridge make an outbound connection
 to OpenAI and receive MCP work without a public shell-capable endpoint. The
@@ -183,26 +212,42 @@ Nexus/DevSpace or a public reverse proxy**.
 - native `WriteTodosInput` state passed in unit tests and on the live v2 route;
 - native LangGraph interrupt and Agent Server `Command(resume)` passed on the
   live deterministic `bridge_hitl` graph;
+- one WebChat workstream ref resolved to exactly one native Agent Server thread;
+- the same workstream grouped three MCP traces into one LangSmith Thread;
 - LangSmith tracing fail-open behavior passed;
 - 24-tool descriptor generation is deterministic and frozen.
 
+### Direct WebChat Gate A
+
+- the initial generic `ZES` app namespace exposed one host-resource continuity
+  incident after a non-terminal mutation attempt;
+- renaming/reconnecting the app as `ZES_LangChain_Runtime` restored a unique
+  namespace without recreating the tunnel or credentials;
+- ChatGPT then performed the complete repair itself: native context read,
+  failing tests, exact edit, source readback, `2 passed`, `git diff --check`,
+  checkpoint record, and checkpoint read;
+- no Nexus, Legacy, specialist, or second model performed the repair.
+
 ### Evidence ceiling
 
-The bridge is ready for direct ChatGPT-host qualification over Secure MCP
-Tunnel. Migration is not approved. Still open:
+Direct ChatGPT-host qualification now passes over Secure MCP Tunnel. Migration
+is not approved. Still open:
 
-- direct mutation persistence after read/execute discovery passed;
-- connector/catalog continuity after the direct `ZES` namespace disappeared
-  while tunnel and bridge remained healthy;
 - a live native persistent-process provider;
 - representative DevSpace versus bridge A/B workload;
-- long-horizon cross-chat continuity.
+- long-horizon cross-chat/catalog continuity;
+- production Agent Server activation with native Postgres/Redis and the
+  required license authority.
 
 The first direct-host run is recorded in
-`evidence/direct-webchat-host-boundary-20260822.json`. It narrowed the failure to
-the ChatGPT app/host boundary: read and execute reached the private bridge, an
-identical local MCP mutation succeeded, but the direct mutation did not persist
-and the direct resource subsequently vanished. The adapter now promotes native
-backend `result.error` values to MCP tool errors so a typed backend failure
-cannot be mistaken for a completed mutation; this hardening does not change the
-24-tool ABI.
+`evidence/direct-webchat-host-boundary-20260822.json`. It records both the
+initial host namespace incident and the successful unique-namespace recovery.
+The adapter promotes native backend `result.error` values to MCP tool errors so
+a typed backend failure cannot be mistaken for a completed mutation; this
+hardening does not change the 24-tool ABI.
+
+Native workstream observability is recorded in
+`evidence/native-workstream-observability-20260822.json`. The qualified Agent
+Server is the native development runtime. The production image builds, but no
+`LANGGRAPH_CLOUD_LICENSE_KEY` is bound, so the bridge does not claim or emulate
+a standalone production deployment.

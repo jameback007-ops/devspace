@@ -51,6 +51,32 @@ async def probe_mcp(base_url: str, workspace: str) -> dict[str, Any]:
                 },
             )
         )
+        workstream = opened["bootstrap"]["workstream"]
+        if not workstream["agent_thread_id"]:
+            raise AssertionError(
+                "workspace_open did not bind a native Agent Server thread"
+            )
+        if workstream["workstream_ref"] != "agent-server-insertion-probe":
+            raise AssertionError("workstream ref changed during native binding")
+        workstream_search = structured(
+            await session.call_tool(
+                "runtime_thread",
+                {
+                    "action": "search",
+                    "metadata": {
+                        "bridge_workstream_ref": "agent-server-insertion-probe"
+                    },
+                    "limit": 10,
+                },
+            )
+        )
+        matching_thread_ids = {
+            item["thread_id"] for item in workstream_search["threads"]
+        }
+        if workstream["agent_thread_id"] not in matching_thread_ids:
+            raise AssertionError(
+                "native workstream thread was not searchable by metadata"
+            )
         recorded = structured(
             await session.call_tool(
                 "checkpoint_record",
@@ -193,6 +219,7 @@ async def probe_mcp(base_url: str, workspace: str) -> dict[str, Any]:
                 "fingerprint_sha256": ABI_FINGERPRINT_SHA256,
             },
             "workspace": opened,
+            "workstream_search": workstream_search,
             "checkpoint": recorded,
             "runtime_thread": runtime_thread,
             "runtime_run": runtime_run,

@@ -151,6 +151,9 @@ def test_workspace_open_returns_bounded_native_bootstrap(tmp_path: Path) -> None
     assert bootstrap["skills"][0]["name"] == "native-first"
     assert "content" not in bootstrap["skills"][0]
     assert bootstrap["capability_manifest"]["reasoning_owner"] == "chatgpt_webchat"
+    assert bootstrap["workstream"]["workstream_ref"] == "mission-1"
+    assert bootstrap["workstream"]["trace_thread_id"] == "mission-1"
+    assert bootstrap["workstream"]["state"] == "degraded_local_trace_only"
     assert bootstrap["durable_state"]["event_count"] == 1
     assert bootstrap["durable_state"]["latest"] == {
         "workspace_id": workspace_id,

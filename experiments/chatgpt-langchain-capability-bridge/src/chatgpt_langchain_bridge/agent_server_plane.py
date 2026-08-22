@@ -21,12 +21,23 @@ class AgentServerPlaneConfig:
     store_namespace_prefix: tuple[str, ...] = ("chatgpt-langchain-bridge",)
     thread_metadata_key: str = "chatgpt_langchain_bridge"
     thread_metadata_value: str = "v2"
+    workstream_metadata_key: str = "bridge_workstream_ref"
+    workstream_graph_id: str = "bridge_journal"
     max_stream_events: int = 100
     request_timeout_seconds: float = 60.0
 
     @classmethod
     def from_environment(cls) -> AgentServerPlaneConfig:
         url = os.environ.get("BRIDGE_AGENT_SERVER_URL", "").strip() or None
+        if url is None and os.environ.get(
+            "BRIDGE_AGENT_SERVER_SELF", ""
+        ).strip().casefold() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }:
+            url = f"http://127.0.0.1:{os.environ.get('PORT', '8000')}"
         raw_specialists = os.environ.get("BRIDGE_SPECIALIST_ASSISTANTS", "{}").strip()
         try:
             parsed = json.loads(raw_specialists)
@@ -70,6 +81,14 @@ class AgentServerPlaneConfig:
             thread_metadata_value=os.environ.get(
                 "BRIDGE_AGENT_SERVER_THREAD_METADATA_VALUE",
                 "v2",
+            ),
+            workstream_metadata_key=os.environ.get(
+                "BRIDGE_AGENT_SERVER_WORKSTREAM_METADATA_KEY",
+                "bridge_workstream_ref",
+            ),
+            workstream_graph_id=os.environ.get(
+                "BRIDGE_AGENT_SERVER_WORKSTREAM_GRAPH_ID",
+                "bridge_journal",
             ),
             max_stream_events=int(
                 os.environ.get("BRIDGE_MAX_AGENT_SERVER_STREAM_EVENTS", "100")
@@ -129,11 +148,64 @@ class AgentServerPlane:
                 "key": self._config.thread_metadata_key,
                 "value": self._config.thread_metadata_value,
             },
+            "workstream_binding": {
+                "metadata_key": self._config.workstream_metadata_key,
+                "graph_id": self._config.workstream_graph_id,
+                "resolver": "threads.search_then_create",
+            },
             "dedicated_agent_server_required": True,
             "request_timeout_seconds": self._config.request_timeout_seconds,
             "native_planning_schema": "langchain.agents.middleware.todo.WriteTodosInput",
             "native_hitl_schema": "langchain.agents.middleware.human_in_the_loop.HITLResponse",
             "reasoning_owner": "chatgpt_webchat",
+        }
+
+    def bind_workstream(self, workstream_ref: str) -> dict[str, Any]:
+        """Resolve or create one native Agent Server thread by metadata.
+
+        The user-facing workstream reference remains an adapter identity. The
+        native Agent Server owns thread status, timestamps, checkpoints, runs,
+        and Studio inspection. No parallel activity database is created.
+        """
+
+        client = self._client()
+        metadata = self._owned_metadata(
+            {
+                self._config.workstream_metadata_key: workstream_ref,
+                "bridge_reasoning_owner": "chatgpt_webchat",
+            }
+        )
+        matches = client.threads.search(
+            metadata=metadata,
+            limit=2,
+            sort_by="updated_at",
+            sort_order="desc",
+        )
+        if len(matches) > 1:
+            raise BridgeError(
+                "multiple Agent Server threads match one bridge workstream_ref"
+            )
+        if matches:
+            thread = matches[0]
+            state = "resolved_existing_agent_thread"
+        else:
+            self._require_assistant(self._config.workstream_graph_id)
+            thread = client.threads.create(
+                graph_id=self._config.workstream_graph_id,
+                metadata=metadata,
+            )
+            state = "created_agent_thread"
+
+        public = json_safe(thread)
+        return {
+            "state": state,
+            "workstream_ref": workstream_ref,
+            "thread_id": public["thread_id"],
+            "status": public.get("status"),
+            "created_at": public.get("created_at"),
+            "updated_at": public.get("updated_at"),
+            "metadata": public.get("metadata", {}),
+            "native_source": "langgraph_sdk.threads",
         }
 
     def thread(

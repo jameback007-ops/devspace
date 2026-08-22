@@ -1,6 +1,6 @@
 {
   "schema_version": "chatgpt-langchain-capability-bridge.qualification.v2",
-  "observed_at": "2026-08-22T13:26:16Z",
+  "observed_at": "2026-08-22T15:08:00Z",
   "candidate_branch": "agent/chatgpt-langchain-capability-bridge-20260822",
   "candidate_base_commit": "4908e7a8c9c5d13a5713f58381b2e5d2bb71d71c",
   "owner_main_at_takeover": "b99c1345d30ac7059b9fb07ec5335d88fd28eb7f",
@@ -14,7 +14,8 @@
       "path containment",
       "bounded artifact and process-output projection",
       "capability allowlists",
-      "explicit durable-state pointer"
+      "explicit durable-state pointer",
+      "thin WebChat workstream to native thread binding"
     ],
     "native_components": [
       "deepagents.BackendProtocol",
@@ -25,6 +26,7 @@
       "langgraph.interrupt and Command resume",
       "langgraph.SqliteSaver",
       "langgraph_sdk threads runs store",
+      "langsmith Threads and Studio",
       "NativeSandboxProvider port",
       "langsmith trace",
       "official MCP Python SDK"
@@ -56,9 +58,16 @@
     "bandit": "passed",
     "pytest": {
       "outcome": "passed",
-      "tests_passed": 31
+      "tests_passed": 39
     },
     "python_compileall": "passed"
+  },
+  "repository_validation": {
+    "npm_typecheck": "passed",
+    "npm_test": "passed",
+    "npm_build": "passed",
+    "git_diff_check": "passed",
+    "build_warning": "existing Vite chunk-size advisory only"
   },
   "native_capability_validation": {
     "primitive_files_search_edit_execute": "passed",
@@ -71,6 +80,9 @@
     "agent_server_thread_run_events_store": "passed",
     "native_todo_schema_and_thread_state": "passed_unit_and_live_agent_server",
     "native_langgraph_interrupt_and_command_resume": "passed_unit_and_live_agent_server",
+    "webchat_workstream_to_agent_server_thread_binding": "passed_unit_and_live_agent_server",
+    "langsmith_thread_grouping_by_workstream": "passed_live",
+    "langsmith_studio_surface": "native_available",
     "explicit_allowlisted_specialist_adapter": "passed",
     "langsmith_tracing_fail_open": "passed"
   },
@@ -107,6 +119,16 @@
     ],
     "qualification_graphs_contain_model": false,
     "custom_mcp_checkpoint_storage": "agent_server_store",
+    "workstream_binding": {
+      "resolver": "threads.search_then_create",
+      "native_thread_count": 1,
+      "native_thread_status": "idle",
+      "langsmith_thread_count": 1,
+      "langsmith_trace_count": 3,
+      "custom_activity_database_created": false,
+      "custom_dashboard_created": false,
+      "evidence_ref": "evidence/native-workstream-observability-20260822.json"
+    },
     "production_image_build": "passed"
   },
   "container_security_observation": {
@@ -148,16 +170,38 @@
     "equivalent_explicit_context_projection_available": true
   },
   "direct_webchat_gate_a": {
-    "status": "partial_failed_write_and_catalog_continuity",
+    "status": "passed_after_unique_app_namespace_reconnect",
+    "app_namespace": "ZES_LangChain_Runtime",
     "capability_manifest": "passed",
     "workspace_open_and_native_bootstrap": "passed",
     "read_and_execute": "passed",
-    "mutation_persisted": false,
-    "host_resource_continuity": "failed_same_turn",
+    "mutation_persisted": true,
+    "mutation_readback": "passed",
+    "final_pytest": "2_passed",
+    "git_diff_check": "passed",
+    "checkpoint_record_and_read": "passed",
+    "host_resource_continuity": "restored_by_unique_app_namespace_reconnect",
     "bridge_and_tunnel_remained_ready": true,
     "local_identical_edit_roundtrip": "passed",
     "controlled_tunnel_restart_restored_direct_resource": false,
+    "nexus_or_legacy_used_for_repair": false,
     "evidence_ref": "evidence/direct-webchat-host-boundary-20260822.json"
+  },
+  "native_observability_composition": {
+    "webchat_binding": "thin_workstream_ref",
+    "runtime_state": "langgraph_agent_server_threads_runs_store",
+    "trace_state": "langsmith_threads_traces_runs",
+    "ui": "langsmith_studio",
+    "mcp_infra_telemetry": "deferred_until_application_observability_gap_is_measured",
+    "custom_activity_database_created": false,
+    "custom_dashboard_created": false,
+    "hidden_webchat_reasoning_observable": false
+  },
+  "production_agent_server_gate": {
+    "development_runtime": "qualified",
+    "production_image_build": "passed",
+    "langgraph_cloud_license_key_present": false,
+    "postgres_and_redis_activation": "not_started_without_license_authority"
   },
   "evidence_ceiling": {
     "proven": [
@@ -167,17 +211,19 @@
       "skills memory artifact transfer and Agent Server service projections",
       "native TodoListMiddleware schema stored directly in Agent Server thread state",
       "native LangGraph interrupt observation and Agent Server Command resume",
+      "thin WebChat workstream binding to one native Agent Server thread",
+      "LangSmith Threads grouping of MCP tool traces without a custom trace store",
+      "direct ChatGPT write-capable coding through Secure MCP Tunnel",
       "Docker-isolated repair and checkpoint recovery after container restart",
       "Agent Server custom MCP route plus native thread run checkpoint and Store coexistence",
       "standalone and Agent Server image builds on Python 3.13",
       "fail-open payload-minimal LangSmith tool observability"
     ],
     "not_yet_proven": [
-      "direct ChatGPT host discovery and invocation through Secure MCP Tunnel",
-      "ChatGPT workspace entitlement for write-capable custom app actions",
       "live persistent PTY through an entitled native sandbox provider",
       "representative DevSpace versus bridge A/B workload",
-      "long-horizon WebChat continuity and catalog reconnect recovery"
+      "long-horizon WebChat continuity and catalog reconnect recovery",
+      "production Agent Server activation with Postgres Redis and license authority"
     ]
   }
 }
