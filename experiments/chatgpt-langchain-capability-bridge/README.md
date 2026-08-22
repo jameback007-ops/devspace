@@ -345,3 +345,12 @@ the frozen 24-tool core, a DevSpace control-plane port, or a platform winner
 claim. DevSpace-only observations default to REJECT, RETIRE, or
 DEFER_WITH_FALSIFIER. See
 `evidence/gate-c0-harness-characterization-20260822.json`.
+
+The apparent native call amplification was then localized without adding new
+instrumentation: 31 unique Secure MCP Tunnel `tools/call` commands matched 31
+LangSmith project root traces one-to-one. The 16 calls beyond the 13 visible C0
+calls were only open/context/read/status; edits and executions were not
+duplicated. The bridge and Agent Server did not synthesize retries. Current
+disposition is to retain native LangSmith/tunnel OTel measurement and reject a
+custom dedup or activity database. See
+`evidence/gate-c0-call-amplification-diagnosis-20260822.json`.

@@ -87,7 +87,8 @@
     "langsmith_server_observed_root_traces": 29,
     "langsmith_trace_errors": 0,
     "server_observed_additional_invocations_beyond_model_visible_calls": 16,
-    "additional_invocation_attribution": "host_or_connector_replay_or_hydration_observed_but_not_causally_proven",
+    "additional_invocation_attribution": "unique host control-plane tools/call commands forwarded through the official tunnel before bridge execution",
+    "additional_invocation_exact_host_reason": "not exposed by current public host or tunnel metadata",
     "langsmith_root_trace_counts": {
       "mcp.workspace_open": 3,
       "mcp.context_read": 2,
@@ -149,9 +150,9 @@
     {
       "capability": "host_call_deduplication",
       "devspace_observation": "audit count matched the 12 visible calls",
-      "native_coverage": "LangSmith observed 29 root traces for 13 visible calls with no errors or duplicate mutations",
-      "disposition": "defer_and_measure_not_clone_activity_state",
-      "falsifier": "repeated samples show write duplication material cost or reliability impact after connector and LangSmith-native diagnosis"
+      "native_coverage": "31 unique tunnel tools/call commands matched 31 LangSmith project root traces one-to-one; 29 were C0-bound and the 16 additional C0 calls were only read/context/open/status with no duplicate edit or execute",
+      "disposition": "reject_custom_dedup_and_continue_native_measurement",
+      "falsifier": "repeated samples show duplicate mutations, terminal inconsistency, or material latency/cost after host configuration and mature native diagnosis"
     },
     {
       "capability": "devspace_recovery_ceremony_and_execution_scope_control_plane",

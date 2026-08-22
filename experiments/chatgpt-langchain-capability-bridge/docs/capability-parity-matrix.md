@@ -144,7 +144,10 @@ C0 now passes on the multi-file billing fixture:
   `749a135c48de4db325545c6d02fdf421371d3bc225ac05ee2724a1f0ae58f8d9`;
 - DevSpace used 12 visible calls including one multi-file `apply_patch`;
 - the native lane used 13 visible calls, while LangSmith observed 29 root
-  traces with zero errors, exposing additional host/server call amplification;
+  traces with zero errors. Project-wide correlation found 31 unique tunnel
+  `tools/call` commands and 31 LangSmith root traces in the same window. The 16
+  additional C0 calls were host-issued read/context/open/status calls; edits
+  and executions were not duplicated;
 - no behavioral, reasoning-quality, or elapsed-time superiority claim is valid
   because the same session ran DevSpace first.
 
@@ -153,7 +156,10 @@ Deep Agents coding and context, Agent Server workstream/state, and LangSmith
 observability; it does not justify expanding the 24-tool core or cloning
 DevSpace execution-scope and recovery machinery. See
 `docs/ab-benchmark-protocol.md` and
-`evidence/gate-c0-harness-characterization-20260822.json`.
+`evidence/gate-c0-harness-characterization-20260822.json`. The call-boundary
+diagnosis is in
+`evidence/gate-c0-call-amplification-diagnosis-20260822.json` and supports a
+REJECT disposition for a custom dedup or activity-store clone.
 
 ### Gate D — continuity and catalog failure
 

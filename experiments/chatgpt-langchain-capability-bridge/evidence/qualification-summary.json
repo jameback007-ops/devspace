@@ -1,6 +1,6 @@
 {
   "schema_version": "chatgpt-langchain-capability-bridge.qualification.v2",
-  "observed_at": "2026-08-22T16:22:48Z",
+  "observed_at": "2026-08-22T16:38:00Z",
   "candidate_branch": "agent/chatgpt-langchain-capability-bridge-20260822",
   "candidate_base_commit": "4908e7a8c9c5d13a5713f58381b2e5d2bb71d71c",
   "owner_main_at_takeover": "b99c1345d30ac7059b9fb07ec5335d88fd28eb7f",
@@ -263,15 +263,30 @@
       "langsmith_root_trace_count": 29,
       "langsmith_trace_error_count": 0,
       "additional_server_observed_invocations": 16,
+      "additional_invocation_boundary": "unique OpenAI control-plane tools/call commands forwarded through the official tunnel before bridge execution",
+      "additional_invocation_types": "workspace_open context_read read_file workspace_status only",
+      "duplicate_edit_or_execute_observed": false,
       "server_observed_root_trace_latency_ms": 208.272,
       "mutation_projection": "two_exact_native_edit_file_calls"
+    },
+    "call_amplification_diagnosis": {
+      "tunnel_tools_call_commands_in_project_window": 31,
+      "langsmith_project_root_traces_in_window": 31,
+      "ordered_one_to_one_matches": 31,
+      "unique_tunnel_request_ids": 31,
+      "c0_workstream_traces": 29,
+      "other_project_window_traces": 2,
+      "bridge_or_agent_server_generated_duplicates": false,
+      "exact_host_reason_observable": false,
+      "custom_dedup_or_activity_store": "rejected",
+      "evidence_ref": "evidence/gate-c0-call-amplification-diagnosis-20260822.json"
     },
     "subtractive_result": {
       "native_coding_context_state_observability": "use_native",
       "duplicate_devspace_runtime_machinery": "retire_or_do_not_port",
       "webchat_workstream_identity": "retain_existing_thin_binding",
       "atomic_multi_file_mutation": "defer_with_falsifier",
-      "host_call_amplification": "measure_with_langsmith_before_custom_work",
+      "host_call_amplification": "retain_langsmith_and_tunnel_otel_measurement_reject_custom_dedup",
       "devspace_execution_scope_and_recovery_port": "rejected_from_c0",
       "tool_abi": "freeze_24_tool_core"
     },

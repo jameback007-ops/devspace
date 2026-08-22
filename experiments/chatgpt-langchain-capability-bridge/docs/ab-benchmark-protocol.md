@@ -124,9 +124,15 @@ The useful result is not a winner:
 - DevSpace's one-call multi-file patch is an ergonomic observation, but one C0
   sample does not justify another core tool;
 - LangSmith exposed additional host/server invocations beyond visible model
-  calls. This is a measurement target, not evidence for cloning DevSpace's
-  activity database;
+  calls. Tunnel and project-wide trace correlation later proved that every
+  project root trace corresponded one-to-one with a unique OpenAI control-plane
+  `tools/call` command. The extra C0 calls were limited to open/context/read/
+  status; edit and execute counts were not amplified. This is a host-issued
+  read-path measurement target, not evidence for cloning DevSpace's activity
+  database or adding a dedup layer;
 - DevSpace recovery and execution-scope machinery was not exercised and cannot
   be ported by inference.
 
 See `evidence/gate-c0-harness-characterization-20260822.json`.
+The call-boundary diagnosis is recorded separately in
+`evidence/gate-c0-call-amplification-diagnosis-20260822.json`.

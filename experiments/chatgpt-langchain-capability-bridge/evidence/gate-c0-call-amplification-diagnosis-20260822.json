@@ -1,0 +1,131 @@
+{
+  "schema_version": "chatgpt-langchain-capability-bridge.gate-c0-call-amplification-diagnosis.v1",
+  "observed_at": "2026-08-22T16:38:00Z",
+  "workstream_ref": "gate-c0-native-billing-20260822",
+  "observation_window": {
+    "start": "2026-08-22T16:12:20Z",
+    "end": "2026-08-22T16:15:46Z",
+    "c0_trace_min_start": "2026-08-22T16:12:23.450192Z",
+    "c0_trace_max_end": "2026-08-22T16:15:42.397247Z"
+  },
+  "native_evidence_sources": [
+    "OpenAI Secure MCP Tunnel journal",
+    "OpenAI Secure MCP Tunnel OpenTelemetry metrics",
+    "LangSmith project root traces",
+    "LangSmith Thread traces and metadata"
+  ],
+  "correlation": {
+    "tunnel_forwarded_tools_call_commands": 31,
+    "unique_tunnel_request_ids": 31,
+    "unique_tunnel_command_request_ids": 31,
+    "tunnel_request_kind": "call",
+    "tunnel_request_method": "tools/call",
+    "tunnel_service_status": 200,
+    "control_plane_workflow_prefix_count": 1,
+    "langsmith_project_root_traces": 31,
+    "ordered_one_to_one_matches": 31,
+    "unmatched_tunnel_commands": 0,
+    "unmatched_langsmith_root_traces": 0,
+    "forward_to_trace_delta_ms": {
+      "minimum": 155.569,
+      "maximum": 244.141,
+      "mean": 170.216,
+      "median": 162.539
+    }
+  },
+  "project_window_partition": {
+    "c0_workstream_traces": 29,
+    "unthreaded_capability_manifest_traces": 1,
+    "preexisting_workstream_read_traces": 1,
+    "trace_errors": 0
+  },
+  "c0_workstream": {
+    "model_visible_calls": 13,
+    "server_observed_calls": 29,
+    "additional_host_issued_calls": 16,
+    "visible_counts": {
+      "workspace_open": 1,
+      "context_read": 1,
+      "read_file": 5,
+      "workspace_status": 0,
+      "execute": 3,
+      "edit_file": 2,
+      "runtime_thread": 1
+    },
+    "server_observed_counts": {
+      "workspace_open": 3,
+      "context_read": 2,
+      "read_file": 14,
+      "workspace_status": 4,
+      "execute": 3,
+      "edit_file": 2,
+      "runtime_thread": 1
+    },
+    "additional_counts": {
+      "workspace_open": 2,
+      "context_read": 1,
+      "read_file": 9,
+      "workspace_status": 4,
+      "execute": 0,
+      "edit_file": 0,
+      "runtime_thread": 0
+    }
+  },
+  "causal_diagnosis": {
+    "bridge_trace_wrapper_created_duplicate_calls": false,
+    "agent_server_created_duplicate_tool_calls": false,
+    "additional_calls_arrived_through_openai_control_plane_and_tunnel": true,
+    "additional_calls_were_unique_control_plane_commands": true,
+    "duplicate_mutations_observed": false,
+    "duplicate_execute_observed": false,
+    "additional_calls_limited_to_read_context_open_or_status": true,
+    "exact_chatgpt_host_reason": "not_exposed_by_current_public_host_or_tunnel_metadata",
+    "safe_classification": "host_issued_additional_read_context_open_status_invocations",
+    "unsafe_classifications_rejected": [
+      "bridge_internal_retry",
+      "agent_server_retry",
+      "duplicate_effect_replay",
+      "model_reasoning_loop_visibility"
+    ]
+  },
+  "impact": {
+    "correctness_failure": false,
+    "mutation_replay": false,
+    "transport_error": false,
+    "langsmith_trace_error": false,
+    "terminal_patch_changed": false,
+    "measured_backend_root_trace_latency_ms_for_29_c0_calls": 208.272,
+    "current_risk": "read_and_status_call_amplification_only",
+    "production_materiality_proven": false
+  },
+  "disposition": {
+    "custom_dedup_layer": "reject",
+    "custom_activity_database": "reject",
+    "new_mcp_tool": "reject",
+    "bridge_runtime_mutation": "not_justified",
+    "native_observability": "retain",
+    "next_action": "sample additional representative workstreams and use LangSmith plus tunnel OTel to detect repeated material cost or mutation duplication",
+    "falsifier_for_thin_correction": "repeated evidence of duplicate mutations, terminal inconsistency, or material latency/cost not addressable through host configuration or mature native components"
+  },
+  "receipts": {
+    "tunnel_window_log": {
+      "path": "/tmp/chatgpt-langchain-gate-c0-tunnel-window.log",
+      "bytes": 11901,
+      "sha256": "f7821e4d89a5bf6e13db43d27b70f9f289a2ec3bfb9494f2ec5b48c4fe89a9b1"
+    },
+    "langsmith_project_window": {
+      "path": "/tmp/chatgpt-langchain-gate-c0-project-window-traces.json",
+      "bytes": 18206,
+      "sha256": "58f9b124d7738897c3592a00994a1d81ccf0782c9c008f491a862cae487f7956"
+    },
+    "langsmith_trace_metadata": {
+      "path": "/tmp/chatgpt-langchain-gate-c0-trace-metadata.json",
+      "bytes": 27084,
+      "sha256": "85c843f22ac8e86cf7350b4664ed09bb526c6119cf26d41dd4bfd3b1a4ec56c8"
+    }
+  },
+  "credentials_recorded": false,
+  "tool_argument_values_recorded": false,
+  "tool_outputs_recorded": false,
+  "private_reasoning_recorded": false
+}
