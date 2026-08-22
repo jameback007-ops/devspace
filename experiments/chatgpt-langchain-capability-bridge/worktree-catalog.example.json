@@ -1,0 +1,8 @@
+{
+  "zesnexus": {
+    "repository_root": "/srv/devspace/src/devspace-zesnexus",
+    "worktree_root": "/srv/devspace/workspaces/zes-webchat",
+    "base_ref": "owner/main",
+    "branch_prefix": "agent/webchat"
+  }
+}

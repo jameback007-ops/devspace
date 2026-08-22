@@ -59,7 +59,7 @@ class AgentServerPlaneConfig:
             item.strip()
             for item in os.environ.get(
                 "BRIDGE_AGENT_SERVER_ASSISTANT_IDS",
-                "bridge_journal,bridge_hitl,bridge_interaction",
+                "bridge_journal,bridge_hitl,bridge_interaction,bridge_material_operation",
             ).split(",")
             if item.strip()
         )

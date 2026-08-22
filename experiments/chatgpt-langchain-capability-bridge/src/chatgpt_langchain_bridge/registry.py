@@ -21,6 +21,7 @@ from .tool_abi import (
 )
 
 if TYPE_CHECKING:
+    from .worktree import WorktreeBinding
     from .workstream import WorkstreamBinding
 
 
@@ -95,6 +96,7 @@ class WorkspaceHandle:
     sandbox_resource_name: str | None = None
     process_session: NativeProcessSession | None = None
     workstream: WorkstreamBinding | None = None
+    worktree_binding: WorktreeBinding | None = None
     identity_key: tuple[str, str] | None = None
 
     def public_view(self) -> dict[str, Any]:
@@ -113,6 +115,9 @@ class WorkspaceHandle:
             "sandbox_resource_name": self.sandbox_resource_name,
             "persistent_process": self.process_session is not None,
             "workstream": self.workstream.public_view() if self.workstream else None,
+            "worktree_binding": (
+                self.worktree_binding.public_view() if self.worktree_binding else None
+            ),
         }
 
 
@@ -208,6 +213,66 @@ class WorkspaceRegistry:
                 opened_at=datetime.now(UTC).isoformat(),
                 local_root=root,
                 workstream=workstream,
+                identity_key=identity_key,
+            )
+            self._workspaces[workspace_id] = handle
+            self._by_identity[identity_key] = workspace_id
+            return handle.public_view()
+
+    def open_worktree(
+        self,
+        binding: WorktreeBinding,
+        *,
+        workstream: WorkstreamBinding,
+    ) -> dict[str, Any]:
+        """Open one exact worktree previously authorized by WorktreeBindingManager.
+
+        This path does not broaden ``BRIDGE_ALLOWED_ROOTS`` and cannot be called
+        with an arbitrary host path. Git trust is process-local and exact; the
+        bridge never writes ``safe.directory=*`` or mutates global Git config.
+        """
+
+        root = Path(binding.worktree_path).resolve()
+        configured_root = Path(binding.worktree_root).resolve()
+        if not _is_relative_to(root, configured_root):
+            raise BridgeError("authorized worktree escapes its configured root")
+        if not root.is_dir():
+            raise BridgeError("authorized worktree does not exist")
+        workstream_ref = workstream.workstream_ref
+        identity_key = (str(root), workstream_ref)
+        with self._lock:
+            existing_id = self._by_identity.get(identity_key)
+            if existing_id is not None:
+                return self._workspaces[existing_id].public_view()
+
+            workspace_id = "ws_" + hashlib.sha256(
+                f"{root}\0{workstream_ref}".encode()
+            ).hexdigest()[:12]
+            safe_environment = dict(self._config.safe_environment)
+            safe_environment.update(
+                {
+                    "GIT_CONFIG_COUNT": "1",
+                    "GIT_CONFIG_KEY_0": "safe.directory",
+                    "GIT_CONFIG_VALUE_0": str(root),
+                }
+            )
+            backend = LocalShellBackend(
+                root_dir=root,
+                virtual_mode=False,
+                timeout=self._config.command_timeout_seconds,
+                max_output_bytes=self._config.max_output_bytes,
+                env=safe_environment,
+                inherit_env=False,
+            )
+            handle = WorkspaceHandle(
+                workspace_id=workspace_id,
+                root=str(root),
+                backend=backend,
+                backend_name="deepagents.LocalShellBackend",
+                opened_at=datetime.now(UTC).isoformat(),
+                local_root=root,
+                workstream=workstream,
+                worktree_binding=binding,
                 identity_key=identity_key,
             )
             self._workspaces[workspace_id] = handle

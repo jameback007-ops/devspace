@@ -5,7 +5,8 @@
   "graphs": {
     "bridge_journal": "./src/chatgpt_langchain_bridge/agent_graph.py:graph",
     "bridge_hitl": "./src/chatgpt_langchain_bridge/hitl_graph.py:graph",
-    "bridge_interaction": "./src/chatgpt_langchain_bridge/interaction_graph.py:graph"
+    "bridge_interaction": "./src/chatgpt_langchain_bridge/interaction_graph.py:graph",
+    "bridge_material_operation": "./src/chatgpt_langchain_bridge/material_graph.py:graph"
   },
   "http": {
     "app": "./src/chatgpt_langchain_bridge/agent_server_app.py:app"

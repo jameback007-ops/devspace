@@ -1,0 +1,18 @@
+{
+  "chatgpt_host_capability_observation_reason": "The current ChatGPT custom-app request context does not expose an attested Tasks-extension capability projection to this bridge.",
+  "chatgpt_host_tasks_capability_observed": false,
+  "custom_task_protocol_created": false,
+  "disposition": "defer; capability-detect SDK and host before mapping MCP taskId directly to Agent Server run_id",
+  "installed_mcp_sdk_version": "2.0.0",
+  "installed_sdk_task_symbol_modules": [
+    {
+      "matched_symbols": [
+        "tasks/get"
+      ],
+      "module": "server/extension.py"
+    }
+  ],
+  "installed_sdk_tasks_extension_detected": true,
+  "observed_on": "2026-08-23",
+  "schema_version": "chatgpt-langchain-capability-bridge.mcp-tasks-observation.v1"
+}
