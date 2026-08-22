@@ -1,5 +1,4 @@
 {
-  "$schema": "https://langgra.ph/schema.json",
   "dependencies": ["."],
   "python_version": "3.13",
   "image_distro": "wolfi",

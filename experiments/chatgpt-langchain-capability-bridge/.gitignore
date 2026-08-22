@@ -6,6 +6,8 @@
 .env.local
 .env.tunnel
 .env.capabilities
+.env.agent-server.production
+.env.agent-server.production.local
 *.secret.env
 **/__pycache__/
 *.pyc

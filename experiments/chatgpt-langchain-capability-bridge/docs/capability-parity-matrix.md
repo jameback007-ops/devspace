@@ -192,10 +192,25 @@ Require:
 - observability with no credentials, source payloads, or hidden reasoning;
 - idempotent deployment and rollback.
 
-The production image builds, but production activation is currently held
-because no `LANGGRAPH_CLOUD_LICENSE_KEY` is bound. The qualified Agent Server
-runtime in this phase is the native in-memory development server, not a claimed
-production deployment.
+The production direction is the licensed standalone Agent Server, not managed
+Deployment and not a custom persistence clone. Current readiness inventory:
+
+- production image/config: ready;
+- `LANGGRAPH_CLOUD_LICENSE_KEY`: absent;
+- managed Deployment API with current key: `403 Forbidden`;
+- dedicated Postgres/Redis: inactive;
+- lifecycle independent from DevSpace: absent;
+- capacity window: held because disk is 81 percent, swap is exhausted, and a
+  concurrent DIND workload is using substantial memory and CPU;
+- secret and network binding: specified as an external root-only env file plus
+  loopback-only host publication.
+
+Activation must use the native Agent Server image and native Postgres/Redis
+contract. A thin root-owned deployment overlay may bind the external secret env
+and replace the host port with loopback only; it may not implement state,
+queueing, retries, or telemetry. See
+`docs/native-agent-server-production-readiness.md` and
+`evidence/native-agent-server-production-readiness-20260822.json`.
 
 ### Gate F — native rollout and incumbent retirement plan
 

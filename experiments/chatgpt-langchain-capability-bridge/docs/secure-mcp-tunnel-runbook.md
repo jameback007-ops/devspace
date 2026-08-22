@@ -214,9 +214,11 @@ not add a custom execution-scope database or dashboard.
 
 The live development qualification passed with one native Agent Server thread
 and one LangSmith Thread containing three MCP traces. The production image also
-builds, but standalone production activation remains gated on the required
-license authority plus native Postgres and Redis backing services. No
-`LANGGRAPH_CLOUD_LICENSE_KEY` was bound during this qualification.
+builds. Production activation is held—not emulated—until the standalone license,
+native Postgres/Redis ownership, root-only production env, independent service
+lifecycle, and a suitable host-capacity window exist. The selected path and
+cutover/rollback sequence are defined in
+`docs/native-agent-server-production-readiness.md`.
 
 Observed route-switch result: the same user-owned tunnel and same ChatGPT app
 were moved from standalone `/mcp` to Agent Server `/coding/mcp` with no tool
@@ -226,6 +228,11 @@ produced one Agent Server thread plus one LangSmith Thread with five traces.
 The current qualification uses a host-local transient systemd tunnel unit so
 Agent Server can remain bound to loopback; this is deliberately not presented
 as the production service definition.
+
+For production cutover, start the native standalone Agent Server on a new
+loopback staging port first. Keep the current route as rollback, qualify durable
+state across an API-container restart, then change only the tunnel target. Do
+not put license, database, Redis, or LangSmith credentials in this repository.
 
 After restarting tunnel-client, treat `/readyz=ready` as tunnel readiness, not
 as proof that the ChatGPT host has already converged on the replacement poller.

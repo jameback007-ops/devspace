@@ -1,6 +1,6 @@
 {
   "schema_version": "chatgpt-langchain-capability-bridge.qualification.v2",
-  "observed_at": "2026-08-22T16:38:00Z",
+  "observed_at": "2026-08-22T17:01:07Z",
   "candidate_branch": "agent/chatgpt-langchain-capability-bridge-20260822",
   "candidate_base_commit": "4908e7a8c9c5d13a5713f58381b2e5d2bb71d71c",
   "owner_main_at_takeover": "b99c1345d30ac7059b9fb07ec5335d88fd28eb7f",
@@ -67,7 +67,7 @@
     "bandit": "passed",
     "pytest": {
       "outcome": "passed",
-      "tests_passed": 40
+      "tests_passed": 42
     },
     "python_compileall": "passed"
   },
@@ -298,10 +298,40 @@
     "evidence_ref": "evidence/gate-c0-harness-characterization-20260822.json"
   },
   "production_agent_server_gate": {
+    "status": "activation_held",
+    "selected_path": "licensed_standalone_langgraph_agent_server",
     "development_runtime": "qualified",
+    "development_runtime_lifecycle": "owned_by_devspace_zesnexus_service",
+    "development_runtime_production_eligible": false,
     "production_image_build": "passed",
+    "production_image_id": "sha256:3fe76496e604f45664f65bec84da22409ce17f0583e2420ae7b7892ed46e100c",
+    "production_runtime_edition": "postgres",
+    "production_api_variant": "licensed",
+    "config_validation": "passed_without_schema_warning",
     "langgraph_cloud_license_key_present": false,
-    "postgres_and_redis_activation": "not_started_without_license_authority"
+    "managed_deployment_api_status": 403,
+    "managed_deployment_authorized": false,
+    "database_uri_present": false,
+    "redis_uri_present": false,
+    "postgres_listener_active": false,
+    "redis_listener_active": false,
+    "postgres_and_redis_activation": "not_started_without_license_authority",
+    "native_cli_supplies": [
+      "redis:6",
+      "pgvector/pgvector:pg16",
+      "langgraph-data volume",
+      "Agent Server API service"
+    ],
+    "custom_persistence_or_queue": "rejected",
+    "native_otel_available": true,
+    "custom_mcp_otel": "rejected",
+    "host_capacity_window": "held_swap_exhausted_disk_81_percent_and_heavy_dind_load",
+    "secret_boundary": "external_root_owned_0600_env",
+    "network_boundary": "loopback_only_host_publication",
+    "thin_deployment_overlay": "allowed_for_external_env_and_loopback_port_only",
+    "runtime_mutated": false,
+    "services_started": false,
+    "evidence_ref": "evidence/native-agent-server-production-readiness-20260822.json"
   },
   "evidence_ceiling": {
     "proven": [
@@ -318,6 +348,7 @@
       "direct app workstream, Agent Server thread, checkpoint, and LangSmith Thread continuity across one tunnel-client restart",
       "deterministic multi-file incumbent characterization with equivalent terminal patches across DevSpace and the native route",
       "subtractive capability dispositions that preserve the frozen core and reject broad DevSpace control-plane porting",
+      "native Agent Server production readiness inventory with an explicit held activation and retirement sequence",
       "Docker-isolated repair and checkpoint recovery after container restart",
       "Agent Server custom MCP route plus native thread run checkpoint and Store coexistence",
       "standalone and Agent Server image builds on Python 3.13",
@@ -327,7 +358,7 @@
       "live persistent PTY through an entitled native sandbox provider",
       "repeated multi-workload characterization and optional independent fresh-chat C1 samples",
       "repeated and long-horizon WebChat continuity beyond one tunnel-client restart",
-      "production Agent Server activation with Postgres Redis and license authority"
+      "production Agent Server activation after license authority dedicated Postgres Redis and a controlled capacity window"
     ]
   }
 }

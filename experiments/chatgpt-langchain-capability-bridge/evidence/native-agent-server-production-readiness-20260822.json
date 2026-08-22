@@ -1,0 +1,174 @@
+{
+  "schema_version": "chatgpt-langchain-capability-bridge.native-agent-server-production-readiness.v1",
+  "observed_at": "2026-08-22T17:01:07Z",
+  "status": "activation_held",
+  "decision": {
+    "selected_path": "licensed_standalone_langgraph_agent_server",
+    "managed_langsmith_deployment": "deferred_current_key_forbidden",
+    "custom_runtime_or_persistence": "rejected",
+    "platform_direction_reopened": false
+  },
+  "versions": {
+    "langgraph": "1.2.11",
+    "langgraph_cli": "0.4.31",
+    "langgraph_sdk": "0.4.3",
+    "langsmith": "0.11.1",
+    "deepagents": "0.7.8",
+    "mcp": "2.0.0",
+    "docker": "29.5.3",
+    "docker_compose": "5.1.4"
+  },
+  "application": {
+    "config_valid": true,
+    "config_warning_removed": "unrecognized_dollar_schema_key",
+    "python_version": "3.13",
+    "image_distro": "wolfi",
+    "graphs": [
+      "bridge_hitl",
+      "bridge_journal"
+    ],
+    "custom_mcp_route": "/coding/mcp",
+    "tool_count": 24,
+    "tool_fingerprint_sha256": "071b7d38d9205565264541ecc3eb84b5fa3681544d462eaf3511abf90e6a47b7"
+  },
+  "production_image": {
+    "tag": "zes-chatgpt-langchain-agent-server:v2-final",
+    "image_id": "sha256:3fe76496e604f45664f65bec84da22409ce17f0583e2420ae7b7892ed46e100c",
+    "size_bytes": 225196205,
+    "entrypoint": "/storage/entrypoint.sh",
+    "runtime_edition": "postgres",
+    "api_variant": "licensed",
+    "api_revision": "e898bb7",
+    "container_port": 8000,
+    "native_core_api_grpc": true,
+    "native_otel_auto_instrumentation": true
+  },
+  "authority_and_credentials": {
+    "langgraph_cloud_license_key_present": false,
+    "langsmith_api_key_present": true,
+    "langsmith_endpoint_present": true,
+    "database_uri_present": false,
+    "redis_uri_present": false,
+    "langgraph_aes_key_present": false,
+    "managed_deployment_list_http_status": 403,
+    "managed_deployment_api_authorized": false,
+    "license_beacon_egress_reachable": true,
+    "credential_values_recorded": false
+  },
+  "native_data_plane": {
+    "required_runtime_services": [
+      "Postgres",
+      "Redis"
+    ],
+    "native_cli_default_postgres_image": "pgvector/pgvector:pg16",
+    "native_cli_default_redis_image": "redis:6",
+    "native_cli_default_volume": "langgraph-data",
+    "host_postgres_listener": false,
+    "host_redis_listener": false,
+    "host_postgres_binaries": false,
+    "host_redis_binaries": false,
+    "redis_image_cached": true,
+    "pgvector_pg16_image_cached": false,
+    "unrelated_stale_postgres_container_reusable": false,
+    "custom_state_service_allowed": false
+  },
+  "current_runtime": {
+    "mode": "langgraph_dev_in_memory",
+    "pid": 3582357,
+    "listener": "127.0.0.1:2026",
+    "process_rss_bytes": 197296000,
+    "cgroup": "/system.slice/devspace-zesnexus.service",
+    "independent_lifecycle": false,
+    "production_claimed": false,
+    "secure_mcp_tunnel_live": true,
+    "secure_mcp_tunnel_ready": true
+  },
+  "host_capacity": {
+    "cpus": 16,
+    "memory_total_gib": 30,
+    "memory_available_gib": 10,
+    "swap_total_gib": 8,
+    "swap_free_mib_approx": 1,
+    "root_disk_total_gib": 301,
+    "root_disk_used_gib": 232,
+    "root_disk_free_gib": 57,
+    "root_disk_used_percent": 81,
+    "docker_images_gib": 12.26,
+    "docker_local_volumes_gib": 105.4,
+    "docker_build_cache_gib": 5.599,
+    "concurrent_dind_memory_gib": 6.666,
+    "concurrent_dind_cpu_percent_observed": 183.52,
+    "activation_window_suitable": false,
+    "reason": "swap_exhausted_disk_high_and_heavy_concurrent_dind_workload"
+  },
+  "deployment_boundary": {
+    "secret_file_target": "/etc/devspace/chatgpt-langchain-production.env",
+    "secret_file_required_mode": "0600",
+    "tracked_secret_file_allowed": false,
+    "host_api_binding": "loopback_only",
+    "public_write_capable_mcp_listener_allowed": false,
+    "thin_root_owned_compose_overlay_allowed_for": [
+      "external_secret_env_file",
+      "loopback_port_override"
+    ],
+    "custom_orchestrator_allowed": false
+  },
+  "activation_sequence": [
+    "supply licensed standalone authority",
+    "establish root-only production env",
+    "select dedicated Postgres and Redis ownership",
+    "wait for a low-load capacity window",
+    "start native standalone stack on a new loopback staging port",
+    "qualify health threads runs store todo hitl and coding mcp",
+    "prove persistence across API-container restart",
+    "qualify disposable direct ChatGPT write path",
+    "switch tunnel target without changing the frozen tool ABI",
+    "retain rollback route then retire development runtime"
+  ],
+  "subtractive_dispositions": [
+    {
+      "item": "langgraph_dev_as_steady_state",
+      "disposition": "retire_after_cutover"
+    },
+    {
+      "item": "managed_langsmith_deployment",
+      "disposition": "defer_until_authorized"
+    },
+    {
+      "item": "licensed_standalone_agent_server",
+      "disposition": "use_native"
+    },
+    {
+      "item": "custom_checkpoint_database_or_queue",
+      "disposition": "reject"
+    },
+    {
+      "item": "full_self_hosted_langsmith_stack",
+      "disposition": "defer_or_reject_until_sovereignty_gap_is_measured"
+    },
+    {
+      "item": "custom_mcp_otel_layer",
+      "disposition": "reject_native_otel_exists"
+    },
+    {
+      "item": "kubernetes_helm_now",
+      "disposition": "defer_with_ha_or_scale_falsifier"
+    },
+    {
+      "item": "thin_deployment_overlay",
+      "disposition": "allow_for_secret_and_loopback_binding_only"
+    }
+  ],
+  "hold_exit_criteria": [
+    "license authority present",
+    "Postgres ownership explicit",
+    "Redis ownership explicit",
+    "root-only secret env present",
+    "capacity window suitable",
+    "staging and rollback routes reserved",
+    "persistence test plan accepted"
+  ],
+  "runtime_mutated": false,
+  "services_started": false,
+  "credentials_recorded": false
+}

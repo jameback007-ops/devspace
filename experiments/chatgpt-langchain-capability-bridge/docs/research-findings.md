@@ -253,6 +253,43 @@ score leaves only the two expected tracked source changes.
 Disposition: **use C0 to delete and replace first; require a durable measured
 native gap before the smallest custom binding is considered**. See
 `evidence/gate-c0-harness-characterization-20260822.json`.
+
+## Finding 14 — production is a native authority and lifecycle gate
+
+The production image and application configuration are technically ready. The
+image is the licensed Postgres runtime, includes the native core API, supports
+native OTel auto-instrumentation, and retains the custom `/coding/mcp` route.
+The current development runtime is not a production candidate because it is
+in-memory and its process is owned by `devspace-zesnexus.service`.
+
+The current environment lacks the standalone license, `DATABASE_URI`, and
+`REDIS_URI`. No dedicated Postgres or Redis listener is active. The current
+LangSmith key also receives `403 Forbidden` from the managed Deployment list
+API, so managed deployment cannot be treated as an available shortcut.
+
+The native CLI already generates Redis and pgvector/Postgres services and a
+durable volume. Therefore:
+
+- licensed standalone Agent Server: **USE NATIVE**;
+- custom checkpoint, queue, or deployment control plane: **REJECT**;
+- managed Deployment: **DEFER until account authority exists**;
+- full self-hosted LangSmith stack: **DEFER/REJECT until a real sovereignty gap
+  is measured**;
+- Kubernetes/Helm: **DEFER_WITH_FALSIFIER** until HA, multi-node scale, or
+  isolation requires it;
+- thin deployment overlay: **ALLOW only for root-owned secrets and loopback
+  port binding**.
+
+Activation is also held by the host window: root disk is 81 percent used, swap
+is exhausted, and a concurrent DIND workload is consuming about 6.7 GiB and
+multi-core CPU. Starting the data plane now would reduce rollback clarity and
+test quality.
+
+Disposition: **prepare the native activation contract, wait for license and a
+controlled capacity window, then prove Postgres/Redis persistence before tunnel
+cutover and DevSpace retirement**. See
+`docs/native-agent-server-production-readiness.md` and
+`evidence/native-agent-server-production-readiness-20260822.json`.
 The one-to-one tunnel/trace diagnosis is in
 `evidence/gate-c0-call-amplification-diagnosis-20260822.json`.
 
@@ -337,3 +374,6 @@ a standalone production deployment.
 C0 characterization and subtractive dispositions are recorded in
 `evidence/gate-c0-harness-characterization-20260822.json`. They do not authorize
 a broad DevSpace port or expansion of the 24-tool core.
+
+Native production readiness and the held activation sequence are recorded in
+`evidence/native-agent-server-production-readiness-20260822.json`.
