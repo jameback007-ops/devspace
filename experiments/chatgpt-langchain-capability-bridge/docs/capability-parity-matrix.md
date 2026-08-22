@@ -29,15 +29,17 @@ subtractive capability extraction. It is not a platform-selection scorecard.
 | Persistent PTY / stdin / kill / reconnect | Provider-native command handle | Adapter passed with native contract fake | Live provider qualification |
 | Tool observability | LangSmith `trace` + native Threads | Passed live and in C0 characterization | Multi-workload trace characterization |
 | Observability UI | LangSmith Studio / Deployment Threads tab | Native surface available; no custom dashboard | Production deployment exposure |
-| Tool catalog stability | Frozen 24-tool v2 ABI | Descriptor test ready | ChatGPT scan/reconnect stress |
+| Tool catalog identity | Versioned 24-tool v2 qualification snapshot | Descriptor test ready | ChatGPT scan/reconnect stress |
 | Private transport | OpenAI Secure MCP Tunnel | Passed direct discovery/read/write/execute/checkpoint | Long-run reconnect stress |
-| Stable route substitution | Frozen MCP ABI over standalone bridge or Agent Server custom route | Passed without ChatGPT app rescan | Production deployment failover |
+| Stable route substitution | Same versioned MCP descriptor snapshot over standalone bridge or Agent Server custom route | Passed without ChatGPT app rescan | Production deployment failover |
 | Tunnel reconnect continuity | Explicit workstream + native thread/store/trace identities | Passed one restart with one immediate host transient before native trace | Repeated and long-horizon restart sample |
 | Provider-neutral interaction core | Participant/endpoint/capability/context/task/artifact/receipt refs | Passed unit and isolated native A2A qualification | Production internal-runtime adapter |
 | External peer interoperability | Official A2A SDK + Agent Server native A2A/Agent Card | Passed one self-contained SDK-to-Agent-Server route | Independent remote peer and auth |
 | WebChat inbound collaboration | Native interaction thread + Agent Server Store durable-pull projection | Passed inbox/ack qualification | Restart and push-notification continuity |
 | Interaction authority isolation | ZES authority refs are carried but never granted by communication | Passed schema, negative tests, and native route | Production policy/admission integration |
-| Candidate tool catalog stability | Frozen 25-tool v3 ABI | Descriptor and MCP route qualified | Explicit ChatGPT app rescan/deployment |
+| Candidate tool catalog identity | Versioned 25-tool v3 qualification snapshot; count is not a product freeze | Descriptor and MCP route qualified | Explicit ChatGPT app rescan/deployment |
+| Tool-surface evolution | Promote frequent/high-value stable capabilities; group or defer immature/rare ones | Policy defined | Usage evidence after broader operation |
+| A2A workflow maturity | Neutral transport/substrate only; role schemas, join policy, and choreography deferred | Bounded interoperability qualified | Stable agent-role and product-schema contracts |
 | Hidden WebChat reasoning checkpoint | No public seam | Not claimable | Remains a WebChat/platform property |
 | Hidden WebChat system prompt replacement | No public seam | Not possible through MCP | Use server instructions/skills/context instead |
 | Automatic WebChat history summarization | Deep Agents model-loop middleware | Not applicable to WebChat loop | Compare WebChat continuity empirically |
@@ -161,8 +163,9 @@ C0 now passes on the multi-file billing fixture:
 
 Extraction uses a strict default of REJECT/RETIRE/DEFER. C0 supports native
 Deep Agents coding and context, Agent Server workstream/state, and LangSmith
-observability; it does not justify expanding the 24-tool core or cloning
-DevSpace execution-scope and recovery machinery. See
+observability; it does not by itself justify a particular tool-surface addition
+or cloning DevSpace execution-scope and recovery machinery. Separate repeated
+usage and quality evidence can justify first-class tools. See
 `docs/ab-benchmark-protocol.md` and
 `evidence/gate-c0-harness-characterization-20260822.json`. The call-boundary
 diagnosis is in

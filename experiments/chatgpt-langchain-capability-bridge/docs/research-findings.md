@@ -104,8 +104,9 @@ The included LangSmith adapter reuses `SandboxClient`, `LangSmithSandbox`, and
 the native command handle. Other native providers can be added behind the same
 port without changing the MCP ABI.
 
-Disposition: **freeze the provider-neutral MCP ABI; replace providers behind
-it**.
+Disposition: **keep the provider-neutral contract versioned; replace providers
+behind it and evolve the tool surface when usage and quality justify a clearer
+first-class capability**.
 
 ## Finding 8 — persistent PTY is provider-specific, not a base guarantee
 
@@ -165,7 +166,7 @@ identical, ChatGPT required no app rescan and continued through the existing
 `ZES_LangChain_Runtime` namespace. Direct calls produced one native Agent
 Server thread, one LangSmith Thread with five MCP traces, and an Agent Server
 Store checkpoint. This demonstrates that runtime substitution can remain an
-implementation detail behind the frozen MCP contract.
+implementation detail behind the same versioned MCP descriptor snapshot.
 
 A tunnel-client-only restart then preserved the explicit workstream ref,
 native Agent Server thread, Agent Server Store checkpoint, and LangSmith
@@ -192,9 +193,11 @@ chatgpt-langchain-capability-bridge.tools.v2
 071b7d38d9205565264541ecc3eb84b5fa3681544d462eaf3511abf90e6a47b7
 ```
 
-Disposition: freeze the 24-tool v2 ABI throughout direct-host qualification and
-incumbent characterization. Internal native implementations may evolve behind
-it.
+Disposition: keep the 24-tool v2 descriptor set exact throughout that
+direct-host qualification and incumbent-characterization window so evidence is
+comparable. This is a test-snapshot constraint, not a long-term product rule;
+later tool additions are normal when their usage, semantics, and quality merit
+first-class placement.
 
 ## Finding 12 — Secure MCP Tunnel is the correct direct-host transport
 
@@ -238,7 +241,8 @@ Subtractive dispositions follow:
   PORT duplicate DevSpace implementations**;
 - explicit WebChat workstream identity: **KEEP the existing thin binding**;
 - atomic multi-file mutation: **DEFER_WITH_FALSIFIER**; one ergonomic sample
-  does not justify expanding the frozen core;
+  does not yet justify a dedicated first-class tool, while repeated high-value
+  use could;
 - extra native host/server invocations: **MEASURE through LangSmith and tunnel
   OTel; REJECT a custom dedup/activity layer** unless repeated evidence shows
   duplicate mutations, inconsistent terminal state, or material unresolved
@@ -295,10 +299,10 @@ The one-to-one tunnel/trace diagnosis is in
 
 ## Finding 15 — A2A belongs behind a provider-neutral interaction core
 
-The current AOQ role roster, leadership topology, agent count, model mix, and
-runtime placement are explicitly unstable. Building communication around those
-temporary names would make infrastructure own coordination policy. The stable
-boundary is instead a neutral interaction vocabulary: participant, endpoint,
+The current AOQ role roster, leadership topology, agent count, model mix,
+product schemas, and runtime placement are explicitly unstable. Building
+communication around those temporary names would make infrastructure own
+coordination policy. The current boundary is therefore a neutral interaction vocabulary: participant, endpoint,
 capability, context, correlation, message, task, artifact, receipt, delivery,
 trace, and authority references.
 
@@ -332,7 +336,10 @@ acknowledgement. Communication created no WorkItem, WorkspaceLease, execution,
 effect, or publication authority.
 
 Disposition: **USE a neutral core, use official A2A at the edge, preserve native
-internal runtime paths, and keep role/topology coordination above the substrate**.
+internal runtime paths, and keep role/topology coordination above the substrate.
+Stop A2A development at this bounded interoperability level until agent-role and
+product-schema contracts are materially more stable; do not pre-design a fixed
+workflow or choreography now**.
 See `docs/provider-neutral-interaction-a2a-architecture.md` and
 `evidence/native-a2a-interoperability-qualification-20260823.json`.
 
@@ -364,7 +371,8 @@ See `docs/provider-neutral-interaction-a2a-architecture.md` and
 - one WebChat workstream ref resolved to exactly one native Agent Server thread;
 - the same workstream grouped three MCP traces into one LangSmith Thread;
 - LangSmith tracing fail-open behavior passed;
-- 24-tool descriptor generation is deterministic and frozen.
+- the 24-tool v2 descriptor snapshot is deterministic and exact for its
+  qualification evidence; it is not a permanent product-count ceiling.
 
 ### Provider-neutral interaction candidate v3
 

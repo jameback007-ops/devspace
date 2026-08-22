@@ -39,7 +39,7 @@ The bridge is not a second coding agent. The default path contains no hidden
                          Studio UI
 ```
 
-## Stable v3 candidate tool ABI
+## Versioned v3 candidate tool ABI
 
 Phase 0 proved direct coding with 14 primitive tools. Version 2 added ten native
 capability tools. Version 3 preserves those 24 descriptors and adds one grouped
@@ -89,8 +89,12 @@ chatgpt-langchain-capability-bridge.tools.v3
 
 The descriptor fingerprint covers names, descriptions, schemas, and tool
 annotations. Implementations and native providers may change behind this ABI;
-the qualification surface must not drift without an explicit new ABI version
-and ChatGPT app rescan.
+descriptor changes require an explicit new ABI version and ChatGPT app rescan.
+The tool count itself is not an architectural target or a long-term freeze.
+Capabilities that are frequent, high-value, and clearer as first-class tools
+may be promoted into the normal surface; low-frequency or provider-specific
+operations may remain grouped or behind native runtime adapters. Tool placement
+is a quality and ergonomics decision, not a fixed-count policy.
 
 ## Native-first implementation
 
@@ -156,7 +160,7 @@ second model-loop harness around WebChat.
 
 ## Provider-neutral interaction and A2A
 
-The interaction core does not encode the current AOQ agent count, role names,
+The current interaction substrate does not encode the current AOQ agent count, role names,
 leadership tree, model provider, or workflow graph. It uses neutral references:
 
 ```text
@@ -170,7 +174,14 @@ A2A is the first transport adapter, not the canonical ZES ontology. Internal
 peers in one runtime may continue to use native LangGraph/Deep Agents calls;
 opaque or cross-runtime peers can use A2A. Future Hermes, Codex, model-local,
 or deterministic-service adapters can implement the same `InteractionAdapter`
-without changing the stable neutral core.
+without forcing the current role topology into transport code.
+
+This layer is intentionally only a bounded interoperability substrate for now.
+Agent-role definitions, product schemas, join policy, leadership behavior, and
+multi-agent workflow are still evolving, so the bridge does not attempt to
+freeze their message schemas or coordination graph early. Once those higher
+layers stabilize, repeated interaction patterns can be promoted or specialized
+using measured usage and quality rather than retrofitting today's assumptions.
 
 For WebChat, outbound calls are direct while inbound collaboration is durable
 pull: each workstream has a separate native interaction thread, Agent Server
@@ -381,7 +392,9 @@ selection.
 
 The v3 interaction candidate is intentionally not deployed to that live app.
 It has 25 tools and therefore requires an explicit ChatGPT app rescan after the
-candidate is integrated and the runtime activation boundary is approved.
+candidate is integrated and the runtime activation boundary is approved. This
+hold is about the maturity of the interaction/role/schema layer, not about
+preserving a 24-tool count.
 
 Gate C uses the subtractive characterization protocol in
 [`docs/ab-benchmark-protocol.md`](docs/ab-benchmark-protocol.md). Deterministic
@@ -392,9 +405,10 @@ The first C0 characterization used identical multi-file billing clones. Both
 DevSpace and the native route passed all four tests, passed `git diff --check`,
 changed exactly the same two source files, and produced the same patch digest.
 The evidence supports using native Deep Agents coding/context and native Agent
-Server/LangSmith state and observability. It does **not** authorize expansion of
-the frozen 24-tool core, a DevSpace control-plane port, or a platform winner
-claim. DevSpace-only observations default to REJECT, RETIRE, or
+Server/LangSmith state and observability. It does **not** authorize a particular
+tool-surface expansion from that benchmark alone, a DevSpace control-plane port,
+or a platform winner claim. Tool additions remain independently admissible when
+repeated use and quality justify them. DevSpace-only observations default to REJECT, RETIRE, or
 DEFER_WITH_FALSIFIER. See
 `evidence/gate-c0-harness-characterization-20260822.json`.
 

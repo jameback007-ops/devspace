@@ -3,10 +3,10 @@
 ## Decision
 
 ZES should not build A2A around the current AOQ role roster, one model family,
-or one agent runtime. The stable product boundary is an actor-neutral
-interaction substrate. Current roles, leadership policy, work topology, and
-runtime placement remain replaceable composition above or beside that
-substrate.
+or one agent runtime. The current product boundary is an actor-neutral
+interaction substrate. Current roles, leadership policy, work topology,
+product schemas, and runtime placement remain evolving composition above or
+beside that substrate.
 
 ```text
                     ZES interaction core
@@ -22,10 +22,16 @@ substrate.
        external peers    LangGraph/other    MCP + durable pull
 ```
 
-The core contains no `Lead`, `Research`, `Verifier`, parent/child tree, fixed
+The substrate contains no `Lead`, `Research`, `Verifier`, parent/child tree, fixed
 agent count, provider model, or workflow graph. A future coordination policy
 may route by dynamic capability, role, topology, cost, evidence, or authority
 without changing the interaction primitives.
+
+This is deliberately not a final multi-agent workflow design. Role schemas and
+coordination semantics are not yet stable enough to justify freezing request
+types, join rules, leadership flows, or message choreography. A2A is therefore
+qualified only to the level needed for neutral interoperability; higher-level
+workflow is deferred until those product contracts settle.
 
 ## Native-first decision ladder
 
@@ -55,10 +61,10 @@ The custom code is limited to neutral references, endpoint allowlisting,
 adapter selection, safe protocol compatibility, WebChat durable-pull delivery,
 and explicit authority separation.
 
-## Stable core
+## Current neutral substrate
 
-The stable core is deliberately smaller than either the A2A or LangGraph data
-model:
+The current substrate is deliberately smaller than either the A2A or LangGraph
+data model:
 
 ```text
 ParticipantRef
@@ -79,10 +85,11 @@ TraceContext
 AuthorityRef[]
 ```
 
-Payload meaning is selected by `kind` plus `schema_ref`. Product-specific
+Payload meaning may be selected by `kind` plus `schema_ref`. Product-specific
 semantics such as research requests, code review, incident response, leadership
-joins, or release decisions are schemas and coordination policy above the core,
-not hard-coded interaction enums.
+joins, or release decisions belong above this substrate. Those schemas are
+explicitly provisional until the role and workflow layer matures; transport
+code must not make today's schema names or choreography permanent.
 
 ## Adapter boundary
 
@@ -107,8 +114,8 @@ InteractionAdapter
 
 The initial registered adapter is `a2a`, implemented with the official Python
 SDK. A future internal LangGraph, local model, Codex, Hermes, or deterministic
-service adapter can be added behind the same core without inserting its native
-IDs into the stable product ontology.
+service adapter can be added behind the same substrate without inserting its
+native IDs into a prematurely fixed product ontology.
 
 For agents already inside one LangGraph or Deep Agents runtime, native
 subagent/task/run calls remain the preferred local path. A2A is the
@@ -225,5 +232,23 @@ It does not yet prove:
 - a production internal-runtime adapter;
 - role-specific coordination, joins, or leadership behavior.
 
-Those are later adapter, deployment, and coordination qualifications. They do
-not require changing the neutral core.
+Those are later adapter, deployment, schema, and coordination qualifications.
+The current neutral substrate should be preserved where it continues to fit,
+but it is not exempt from revision if later role/schema evidence shows a better
+boundary.
+
+## Tool-surface evolution policy
+
+The MCP catalog is versioned, not permanently frozen to 24 or 25 tools. During
+one qualification run the descriptor set remains exact so results are
+comparable, but normal product evolution may add, split, group, or retire tools.
+
+Promotion criteria are practical:
+
+- frequent use or material latency/quality benefit;
+- clearer model affordance as a first-class action;
+- stable semantics and authority boundary;
+- better reliability than repeatedly routing through a generic grouped tool.
+
+Conversely, immature role/workflow operations should remain behind the neutral
+`interaction` seam until their schemas and behavior are sufficiently stable.
