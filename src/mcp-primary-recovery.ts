@@ -127,7 +127,7 @@ const CAPABILITIES: Record<
     ],
     qualityCritical: true,
     effectful: false,
-    fallbackEligible: false,
+    fallbackEligible: true,
   },
   repository_publication_preflight: {
     requiredTools: ["execution_scope_status"],
@@ -156,7 +156,7 @@ const CAPABILITIES: Record<
     ],
     qualityCritical: true,
     effectful: false,
-    fallbackEligible: false,
+    fallbackEligible: true,
   },
   conversation_recovery: {
     requiredTools: [

@@ -88,6 +88,12 @@ const CRITICAL_TOOL_GROUPS = {
     "workspace_gc_preview",
     "workspace_gc_execute",
   ],
+  workspaceLifecycleContinuity: [
+    "workspace_list",
+    "workspace_status",
+    "workspace_candidate_inventory",
+    "workspace_gc_preview",
+  ],
   selfRepositoryPublication: [
     "self_repository_publication_preflight",
     "self_repository_publish",
@@ -170,6 +176,33 @@ const REQUIRED_CLIENT_TOOLS = [
   "skill_search",
 ] as const;
 
+const CONTINUITY_PROFILE_SCHEMA = "devspace.continuity-profile.v1" as const;
+const CONTINUITY_PROFILE_REF = "devspace.continuity-profile.v1" as const;
+const CONTINUITY_POLICY_REF =
+  "policy:devspace:degraded-operational-continuity:v1" as const;
+const CONTINUITY_REQUIRED_TOOLS = [
+  ...CRITICAL_TOOL_GROUPS.workspaceExecution,
+  ...CRITICAL_TOOL_GROUPS.nativeNavigation,
+  ...CRITICAL_TOOL_GROUPS.skillDiscovery,
+  ...CRITICAL_TOOL_GROUPS.executionObservability,
+  ...CRITICAL_TOOL_GROUPS.executionMessaging,
+  ...CRITICAL_TOOL_GROUPS.turnContinuity,
+  ...CRITICAL_TOOL_GROUPS.recoveryCapsules,
+  ...CRITICAL_TOOL_GROUPS.workspaceLifecycleContinuity,
+] as const;
+const CONTINUITY_OPERATIONAL_CAPABILITY_REFS = [
+  "workspace_read",
+  "workspace_mutation",
+  "process_continuation",
+  "cross_session_coordination",
+  "recovery_checkpoint",
+] as const;
+const CONTINUITY_EXCLUDED_CAPABILITY_REFS = [
+  "research_freshness",
+  "repository_publication_effect",
+  "conversation_recovery",
+] as const;
+
 /**
  * Read-only observation of the exact tools registered through the normal
  * DevSpace registration path. This registry never controls registration and is
@@ -229,15 +262,24 @@ export class RuntimeCapabilityRegistry {
         this.config.selfRepositoryPublication.effectsEnabled,
     });
     const surfaceEpoch = this.runtimeBindings.surfaceEpoch
-      ?? `nexus:${identity.fingerprintSha256.slice(0, 16)}`;
+      ?? `${this.config.toolMode === "continuity" ? "continuity" : "nexus"}:${
+        identity.fingerprintSha256.slice(0, 16)
+      }`;
     const initialized = toolNames.length > 0;
 
     const criticalToolGroups = this.criticalToolGroups(new Set(toolNames));
+    const continuityProfile = this.continuityProfile(
+      new Set(toolNames),
+      identity,
+      surfaceEpoch,
+    );
     const backendRuntime: NexusBackendRuntimeObservation = {
       schemaVersion: 1,
       backend: {
         name: "devspace",
-        implementation: "zes-nexus",
+        implementation: this.config.toolMode === "continuity"
+          ? "devspace-continuity"
+          : "zes-nexus",
         packageVersion: PACKAGE_VERSION,
         mcpServerVersion: this.config.mcpServerVersion,
         instanceRef: this.instanceRef,
@@ -298,6 +340,7 @@ export class RuntimeCapabilityRegistry {
     };
     return {
       ...enriched,
+      ...(continuityProfile ? { continuityProfile } : {}),
       runtimeBindingObservation: {
         build: runtime.build,
         acceleratorProfile: runtime.acceleratorProfile,
@@ -312,6 +355,9 @@ export class RuntimeCapabilityRegistry {
     const headers: Record<string, string> = {
       "Cache-Control": "no-store",
       "X-ZES-Nexus-Instance-Ref": this.instanceRef,
+      ...(this.config.toolMode === "continuity"
+        ? { "X-ZES-Continuity-Profile": CONTINUITY_PROFILE_REF }
+        : {}),
     };
     if (this.tools.size === 0) return headers;
     const snapshot = this.snapshot({ clientAttestation });
@@ -349,6 +395,10 @@ export class RuntimeCapabilityRegistry {
   private safeConfiguration(): Record<string, unknown> {
     return {
       toolMode: this.config.toolMode,
+      continuityProfileRef:
+        this.config.toolMode === "continuity"
+          ? CONTINUITY_PROFILE_REF
+          : undefined,
       widgets: this.config.widgets,
       codexNavigationTools: this.config.codexNavigationTools,
       executionObservabilityEnabled: this.config.executionObservability.enabled,
@@ -376,13 +426,85 @@ export class RuntimeCapabilityRegistry {
     };
   }
 
+  private continuityProfile(
+    registered: Set<string>,
+    identity: ToolSurfaceIdentity,
+    surfaceEpoch: string,
+  ): Record<string, unknown> | undefined {
+    if (this.config.toolMode !== "continuity") return undefined;
+
+    const requiredTools = uniqueSorted(CONTINUITY_REQUIRED_TOOLS);
+    const missingRequiredTools = requiredTools.filter(
+      (tool) => !registered.has(tool),
+    );
+    const optionalCapabilityRefs = this.config.artifactsEnabled
+      && registered.has("download_artifact")
+      ? ["artifact_transfer"]
+      : [];
+
+    return {
+      schemaVersion: CONTINUITY_PROFILE_SCHEMA,
+      profileRef: CONTINUITY_PROFILE_REF,
+      policyRef: CONTINUITY_POLICY_REF,
+      state: missingRequiredTools.length === 0 ? "ready" : "degraded",
+      surface: {
+        fingerprintBasis: "canonical_complete_mcp_tools_list_descriptors",
+        fingerprintSha256: identity.fingerprintSha256,
+        surfaceEpoch,
+        toolCount: identity.toolCount,
+        requiredTools,
+        missingRequiredTools,
+      },
+      admittedCapabilityRefs: [
+        ...CONTINUITY_OPERATIONAL_CAPABILITY_REFS,
+        ...optionalCapabilityRefs,
+      ],
+      excludedCapabilityRefs: [...CONTINUITY_EXCLUDED_CAPABILITY_REFS],
+      operatingContract: {
+        primaryRepairFirst: true,
+        repairExhaustionRequiredBeforeMissionFallback: true,
+        operationScopedSelectionRequired: true,
+        exactSurfaceAttestationRequired: true,
+        deterministicFailbackRequired: true,
+        isolatedWorkspaceMutationPermitted: true,
+        processContinuationPermitted: true,
+        executorLocalCheckpointPermitted: true,
+        continuityLocalPeerHandoffPermitted: true,
+        destructiveWorkspaceLifecyclePermitted: false,
+        freshResearchClaimPermitted: false,
+        repositoryPublicationPermitted: false,
+        runtimeDeploymentPermitted: false,
+        conversationEffectPermitted: false,
+        effectReplayPermitted: false,
+      },
+      isolationContract: {
+        separateServiceRequired: true,
+        separateStateDirectoryRequired: true,
+        independentlyPinnedReleaseRequired: true,
+        primaryDatabaseAuthorityShared: false,
+        canonicalAuthorityShared: false,
+        sameHostFailureDomainStillShared: true,
+      },
+      authority: {
+        authority: "executor_local_degraded_operational_continuity_only",
+        canonicalTaskOrDecisionAuthority: false,
+        writerLeaseAuthority: false,
+        publicationAuthority: false,
+        runtimeActivationAuthority: false,
+        effectReplayAuthority: false,
+      },
+    };
+  }
+
   private criticalToolGroups(
     registered: Set<string>,
   ): Record<string, unknown> {
     const groups: Record<string, CriticalToolGroupDefinition> = {
       workspaceExecution: {
         configured: true,
-        expectedTools: this.config.toolMode === "codex"
+        expectedTools:
+          this.config.toolMode === "codex"
+          || this.config.toolMode === "continuity"
           ? CRITICAL_TOOL_GROUPS.workspaceExecution
           : CRITICAL_TOOL_GROUPS.workspaceExecutionStandard,
       },
@@ -412,7 +534,9 @@ export class RuntimeCapabilityRegistry {
       },
       workspaceLifecycle: {
         configured: true,
-        expectedTools: CRITICAL_TOOL_GROUPS.workspaceLifecycle,
+        expectedTools: this.config.toolMode === "continuity"
+          ? CRITICAL_TOOL_GROUPS.workspaceLifecycleContinuity
+          : CRITICAL_TOOL_GROUPS.workspaceLifecycle,
       },
       selfRepositoryPublication: {
         configured: this.config.selfRepositoryPublication.enabled,
@@ -456,6 +580,7 @@ export class RuntimeCapabilityRegistry {
       nativeNavigation: {
         configured:
           this.config.toolMode === "full"
+          || this.config.toolMode === "continuity"
           || (this.config.toolMode === "codex" && this.config.codexNavigationTools),
         expectedTools: CRITICAL_TOOL_GROUPS.nativeNavigation,
       },
@@ -554,6 +679,10 @@ function cloneJsonValue(value: unknown): unknown {
   } catch {
     return undefined;
   }
+}
+
+function uniqueSorted(values: readonly string[]): string[] {
+  return [...new Set(values)].sort((left, right) => left.localeCompare(right));
 }
 
 interface LoadedDeploymentState {

@@ -20,6 +20,37 @@ assert.equal(loadConfig(baseEnv).toolMode, "minimal");
 assert.equal(loadConfig({ ...baseEnv, DEVSPACE_TOOL_MODE: "minimal" }).toolMode, "minimal");
 assert.equal(loadConfig({ ...baseEnv, DEVSPACE_TOOL_MODE: "full" }).toolMode, "full");
 assert.equal(loadConfig({ ...baseEnv, DEVSPACE_TOOL_MODE: "codex" }).toolMode, "codex");
+assert.equal(
+  loadConfig({ ...baseEnv, DEVSPACE_TOOL_MODE: "continuity" }).toolMode,
+  "continuity",
+);
+assert.throws(
+  () => loadConfig({
+    ...baseEnv,
+    DEVSPACE_TOOL_MODE: "continuity",
+    DEVSPACE_EXECUTION_MAILBOX: "0",
+  }),
+  /fixed degraded-operational profile.*DEVSPACE_EXECUTION_MAILBOX=0/,
+);
+assert.throws(
+  () => loadConfig({
+    ...baseEnv,
+    DEVSPACE_TOOL_MODE: "continuity",
+    DEVSPACE_CODEX_INTEGRATION: "1",
+  }),
+  /fixed degraded-operational profile.*DEVSPACE_CODEX_INTEGRATION=1/,
+);
+assert.throws(
+  () => loadConfig({
+    ...baseEnv,
+    DEVSPACE_TOOL_MODE: "continuity",
+    DEVSPACE_SELF_REPOSITORY_PUBLICATION: "1",
+    DEVSPACE_SELF_REPOSITORY_ROOT: process.cwd(),
+    DEVSPACE_SELF_REPOSITORY_EXPECTED_REMOTE_URL:
+      "https://github.com/example/devspace.git",
+  }),
+  /fixed degraded-operational profile.*DEVSPACE_SELF_REPOSITORY_PUBLICATION=1/,
+);
 assert.equal(loadConfig(baseEnv).codexNavigationTools, false);
 assert.equal(loadConfig(baseEnv).mcpServerVersion, "1.0.7-zes.1");
 assert.equal(

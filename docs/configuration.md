@@ -385,11 +385,39 @@ MCP clients discover metadata from:
 | `minimal` | Default. Exposes `open_workspace`, `read`, `write`, `edit`, and `bash`. Clients use `bash` with tools such as `rg`, `find`, and `ls` for inspection. |
 | `full` | Exposes the minimal tools plus dedicated `grep`, `glob`, and `ls` tools. |
 | `codex` | Experimental. Exposes `open_workspace`, `read`, `apply_patch`, `exec_command`, and `write_stdin`. Existing mutation and shell tools are hidden. |
+| `continuity` | Fixed degraded-operational fallback profile. Uses the Codex-style execution tools plus native navigation, execution-scope observability and messaging, turn continuity, recovery capsules, and read-only workspace lifecycle inspection. It rejects research, publication, conversation transport, Codex integration, subagents, and destructive workspace lifecycle effects. |
 
 `DEVSPACE_MINIMAL_TOOLS` remains a backward-compatible alias when
 `DEVSPACE_TOOL_MODE` is unset: `1` selects `minimal` and `0` selects `full`.
 The `codex` mode must be selected through `DEVSPACE_TOOL_MODE` and always uses
 its fixed short tool names regardless of `DEVSPACE_TOOL_NAMING`.
+
+The `continuity` mode is intended for an independently deployed secondary
+DevSpace service, not as a normal primary configuration. Startup fails when
+the fixed degraded-operational contract is weakened or expanded. The following
+conditions are mandatory:
+
+- `DEVSPACE_EXECUTION_OBSERVABILITY=1`;
+- `DEVSPACE_EXECUTION_MAILBOX=1`;
+- `DEVSPACE_TURN_CONTINUITY=1`;
+- `DEVSPACE_SUBAGENTS=0`;
+- `DEVSPACE_ZES_RESEARCH_CYCLE_MODE=off`;
+- `DEVSPACE_ZES_RESEARCH_INSTRUMENT_EXECUTION_ENABLED=0`;
+- `DEVSPACE_SELF_REPOSITORY_PUBLICATION=0`;
+- `DEVSPACE_CONVERSATION_TRANSPORT=0`;
+- `DEVSPACE_CODEX_INTEGRATION=0`.
+
+Continuity mode always exposes `grep`, `glob`, and `ls`; the
+`DEVSPACE_CODEX_NAVIGATION_TOOLS` flag is not required. It emits the
+machine-readable `devspace.continuity-profile.v1` projection through
+`execution_scope_status`, including the exact route fingerprint, admitted and
+excluded capability classes, isolation requirements, and authority ceiling.
+The profile permits isolated local workspace mutation, process continuation,
+executor-local checkpointing, and peer handoff only among sessions connected
+to that continuity service. It does not permit fresh-research claims,
+repository publication, runtime deployment, conversation effects, effect
+replay, or canonical task/decision authority. See
+[`degraded-operational-continuity.md`](degraded-operational-continuity.md).
 
 Set `DEVSPACE_CODEX_NAVIGATION_TOOLS=1` to add the upstream-native read-only
 `grep`, `glob`, and `ls` handlers to `codex` mode. This composes the dedicated

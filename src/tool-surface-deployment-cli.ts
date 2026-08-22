@@ -231,10 +231,12 @@ export async function probeToolSurface(argv: string[]): Promise<void> {
       generatedAt: new Date().toISOString(),
       serverInfo: client.getServerVersion(),
       backend: {
+        implementation: backend.implementation,
         packageVersion: backend.packageVersion,
         mcpServerVersion: backend.mcpServerVersion,
       },
       configuration: registeredSurface.configuration,
+      continuityProfile: runtime.continuityProfile,
       transportReliability: {
         state: listedResult.state,
         attemptCount: listedResult.attemptCount,

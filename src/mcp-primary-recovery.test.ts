@@ -178,6 +178,62 @@ test("quality-equivalent fallback is admitted only after primary recovery is exh
   );
 });
 
+test("continuity fallback can qualify the operational handoff and checkpoint core", () => {
+  const fallbackTools = [
+    "execution_scope_list",
+    "execution_scope_status",
+    "execution_scope_message_send",
+    "execution_scope_message_inbox",
+    "execution_scope_message_status",
+    "open_workspace",
+    "read",
+    "apply_patch",
+    "exec_command",
+    "write_stdin",
+    "recovery_capsule_record",
+    "recovery_capsule_status",
+    "turn_horizon_status",
+  ];
+  const assessment = assessMcpPrimaryRecovery({
+    primaryFunctionalState: "unavailable",
+    catalogStatus: "INDETERMINATE",
+    primaryRegisteredToolNames: primaryTools,
+    requiredCapabilityRefs: [
+      "workspace_mutation",
+      "process_continuation",
+      "cross_session_coordination",
+      "recovery_checkpoint",
+    ],
+    recovery: {
+      transportReconnect: "unavailable",
+      recoveryLease: "available",
+      restartSafety: "safe",
+      functionalRepair: "unavailable",
+      diagnosticAgent: "unavailable",
+    },
+    fallback: {
+      routeReachable: true,
+      observedToolNames: fallbackTools,
+      observedFingerprintSha256: "c".repeat(64),
+      qualityEquivalentAttested: true,
+      qualityEvidenceRefs: [
+        "receipt:continuity-edit-test-checkpoint-handoff-canary:v1",
+      ],
+      policyRef: "policy:devspace:degraded-operational-continuity:v1",
+    },
+  });
+
+  assert.equal(assessment.state, "USE_QUALITY_EQUIVALENT_FALLBACK");
+  assert.equal(assessment.fallback.admitted, true);
+  assert.deepEqual(assessment.fallback.missingRequiredTools, []);
+  assert.equal(
+    assessment.capabilities.every((capability) => capability.fallbackEligible),
+    true,
+  );
+  assert.equal(assessment.fallback.invocationAuthorized, false);
+  assert.equal(assessment.fallback.operationScopedSelectionRequired, true);
+});
+
 test("fallback tool names without a complete surface fingerprint are insufficient", () => {
   const assessment = assessMcpPrimaryRecovery({
     primaryFunctionalState: "unavailable",

@@ -1,0 +1,47 @@
+[Unit]
+Description=DevSpace degraded operational continuity MCP
+Documentation=file:/opt/devspace-continuity/current/docs/degraded-operational-continuity.md
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/opt/devspace-continuity/current/dist/cli.js
+ConditionPathExists=/etc/devspace/devspace-continuity.env
+
+[Service]
+Type=simple
+User=devspace-support
+Group=devspace-support
+UMask=0077
+EnvironmentFile=/etc/devspace/devspace-continuity.env
+StateDirectory=devspace-continuity
+StateDirectoryMode=0700
+RuntimeDirectory=devspace-continuity
+RuntimeDirectoryMode=0700
+ExecStart=/usr/local/bin/node /opt/devspace-continuity/current/dist/cli.js serve
+Restart=always
+RestartSec=5
+TimeoutStartSec=60
+TimeoutStopSec=30
+KillSignal=SIGTERM
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectControlGroups=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectKernelLogs=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/var/lib/devspace-continuity
+ReadWritePaths=/var/lib/devspace-continuity-worktrees
+ReadWritePaths=/srv/devspace/workspaces
+ReadWritePaths=/srv/devspace/src
+ReadWritePaths=/srv/zes-codex
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

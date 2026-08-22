@@ -38,6 +38,7 @@ MCP primary-recovery assessment
           fallback continuity assessment
                     |
                     +--> exact equivalent route ---> explicit selection
+                    +--> operational core route ---> bounded edit/test/checkpoint/handoff
                     +--> bounded read route --------> read-only claim ceiling
                     +--> recovery route ------------> repair/preserve only
                     +--> survival route ------------> checkpoint and safe-land
@@ -75,6 +76,34 @@ unreachable."
 
 The class describes semantic capability, not route health. Every admitted route
 must also be functionally healthy and carry a verified attestation.
+
+## Degraded operational continuity profile
+
+The secondary DevSpace service may run the fixed
+`DEVSPACE_TOOL_MODE=continuity` profile. The profile is intentionally degraded
+relative to Nexus as a whole, but its exact workspace execution, process
+continuation, continuity-local coordination, and recovery-checkpoint capability
+subsets may be attested as quality-equivalent for one operation. This avoids
+the false choice between a full second Nexus and a repair-only shell.
+
+Primary repair still runs first. When repair is exhausted, an exact
+operation-scoped selection may admit the continuity route for:
+
+```text
+workspace_read
+workspace_mutation
+process_continuation
+cross_session_coordination
+recovery_checkpoint
+```
+
+That admission does not extend to fresh research, repository publication,
+runtime deployment, conversation effects, effect replay, Codex control, or
+canonical task/decision authority. Continuity-local mailboxes and capsules use
+the secondary service's own state; they are handoff evidence, not shared Nexus
+authority. See
+[`degraded-operational-continuity.md`](degraded-operational-continuity.md) for
+the complete deployment, isolation, canary, and failback contract.
 
 ## Required route evidence
 
@@ -225,6 +254,12 @@ publication state, effect receipts, or durable product memory. State replication
 for observability or recovery must remain explicitly non-authoritative and
 reconcilable with the rightful owner.
 
+The supported secondary profile must also use its own immutable release,
+systemd service, configuration, OAuth secret, state directory, worktree root,
+port, route fingerprint, and `continuity:` surface epoch. Separate service and
+state boundaries reduce correlated Nexus failures; running on the same host
+still leaves host, disk, kernel, and host-network failures correlated.
+
 ## Current source boundary
 
 The initial source slice provides:
@@ -242,6 +277,11 @@ The initial source slice provides:
 - deterministic coverage showing that Legacy can qualify for recovery without
   the Nexus bootstrap ABI, that a selected recovery route has no mission
   authority, and that normal work fails back before continuing.
+- a fixed degraded-operational continuity profile that can complete an isolated
+  edit-test-checkpoint-handoff loop while excluding publication, deployment,
+  research, conversation, Codex-control, and destructive lifecycle effects;
+- a machine-readable `devspace.continuity-profile.v1` projection bound to the
+  exact secondary surface fingerprint and authority ceiling.
 
 It deliberately does not yet provide:
 
@@ -249,7 +289,7 @@ It deliberately does not yet provide:
 - a persistent fallback registry or a second control database;
 - a fallback invocation actuator;
 - automatic production failover;
-- runtime deployment or systemd ownership;
+- production runtime deployment or systemd ownership;
 - production SLO measurements.
 
 ## Stable runtime projection

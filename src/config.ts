@@ -14,7 +14,7 @@ import type { LocalAgentQueueConfig } from "./local-agent-queue.js";
 import { devspaceAgentsDir, devspaceSkillsDir, loadDevspaceFiles } from "./user-config.js";
 import { DEFAULT_DEVSPACE_MCP_SERVER_VERSION } from "./version.js";
 
-export type ToolMode = "minimal" | "full" | "codex";
+export type ToolMode = "minimal" | "full" | "codex" | "continuity";
 export type WidgetMode = "off" | "changes" | "full";
 export type ZesResearchCycleMode = "off" | "observe" | "enforce";
 
@@ -366,7 +366,12 @@ function parseCodexIntegrationConfig(
 
 function parseToolMode(env: NodeJS.ProcessEnv): ToolMode {
   const mode = env.DEVSPACE_TOOL_MODE;
-  if (mode === "minimal" || mode === "full" || mode === "codex") return mode;
+  if (
+    mode === "minimal"
+    || mode === "full"
+    || mode === "codex"
+    || mode === "continuity"
+  ) return mode;
   if (mode) throw new Error(`Invalid DEVSPACE_TOOL_MODE: ${mode}`);
 
   if (env.DEVSPACE_MINIMAL_TOOLS !== undefined) {
@@ -769,6 +774,46 @@ function defaultAgentDir(): string {
   return join(homedir(), ".codex");
 }
 
+function assertContinuityProfileConfig(config: ServerConfig): void {
+  if (config.toolMode !== "continuity") return;
+
+  const incompatible: string[] = [];
+  if (!config.executionObservability.enabled) {
+    incompatible.push("DEVSPACE_EXECUTION_OBSERVABILITY=0");
+  }
+  if (!config.executionMailbox.enabled) {
+    incompatible.push("DEVSPACE_EXECUTION_MAILBOX=0");
+  }
+  if (!config.turnContinuity.enabled) {
+    incompatible.push("DEVSPACE_TURN_CONTINUITY=0");
+  }
+  if (config.subagents) incompatible.push("DEVSPACE_SUBAGENTS=1");
+  if (config.zesResearchCycle.mode !== "off") {
+    incompatible.push(
+      `DEVSPACE_ZES_RESEARCH_CYCLE_MODE=${config.zesResearchCycle.mode}`,
+    );
+  }
+  if (config.zesResearchCycle.instrumentExecution.enabled) {
+    incompatible.push("DEVSPACE_ZES_RESEARCH_INSTRUMENT_EXECUTION_ENABLED=1");
+  }
+  if (config.selfRepositoryPublication.enabled) {
+    incompatible.push("DEVSPACE_SELF_REPOSITORY_PUBLICATION=1");
+  }
+  if (config.conversationTransport.enabled) {
+    incompatible.push("DEVSPACE_CONVERSATION_TRANSPORT=1");
+  }
+  if (config.codexIntegration.enabled) {
+    incompatible.push("DEVSPACE_CODEX_INTEGRATION=1");
+  }
+
+  if (incompatible.length > 0) {
+    throw new Error(
+      "DEVSPACE_TOOL_MODE=continuity requires the fixed degraded-operational "
+      + `profile; incompatible configuration: ${incompatible.join(", ")}`,
+    );
+  }
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
   const files = loadDevspaceFiles(env);
   const host = env.HOST ?? files.config.host ?? "127.0.0.1";
@@ -797,7 +842,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     ),
   );
 
-  return {
+  const config: ServerConfig = {
     host,
     port,
     oauth: parseOAuthConfig(env, files.auth.ownerToken),
@@ -895,6 +940,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     codexIntegration: parseCodexIntegrationConfig(env),
     logging: parseLoggingConfig(env),
   };
+  assertContinuityProfileConfig(config);
+  return config;
 }
 
 function numberConfigValue(value: number | undefined): string | undefined {

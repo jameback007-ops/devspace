@@ -480,6 +480,257 @@ test("codex mode can opt into the upstream native navigation tools", async (t) =
   assert.match(responseText(ls), /README\.md/);
 });
 
+test("continuity mode exposes a fixed degraded-operational coding surface", async (t) => {
+  const context = await fixture(t, {
+    toolMode: "continuity",
+    git: true,
+    runtimeCapabilities: true,
+  });
+  const listed = await context.client.listTools();
+  const names = new Set(listed.tools.map((tool) => tool.name));
+
+  for (const name of [
+    "open_workspace",
+    "read",
+    "apply_patch",
+    "exec_command",
+    "write_stdin",
+    "grep",
+    "glob",
+    "ls",
+    "skill_search",
+    "execution_scope_list",
+    "execution_scope_status",
+    "execution_scope_audit",
+    "execution_scope_message_send",
+    "execution_scope_message_inbox",
+    "execution_scope_message_status",
+    "execution_scope_message_receipt",
+    "turn_horizon_begin",
+    "turn_horizon_status",
+    "recovery_capsule_record",
+    "recovery_capsule_status",
+    "workspace_list",
+    "workspace_status",
+    "workspace_candidate_inventory",
+  ]) {
+    assert.ok(names.has(name), `${name} should be present in continuity mode`);
+  }
+
+  for (const name of [
+    "write",
+    "edit",
+    "bash",
+    "zes_research_cycle_open",
+    "zes_research_provider_invoke",
+    "self_repository_publish",
+    "execution_wake_execute",
+    "codex_turn_control",
+    "local_agent_message_send",
+    "workspace_close",
+    "workspace_gc_execute",
+  ]) {
+    assert.equal(
+      names.has(name),
+      false,
+      `${name} must not be exposed by the continuity profile`,
+    );
+  }
+
+  const session = "continuity-operational-session";
+  const opened = await callOpen(context.client, context.project, session);
+  const workspaceId = String(structuredContent(opened).workspaceId);
+  const patched = await context.client.callTool({
+    name: "apply_patch",
+    arguments: {
+      workspaceId,
+      patch: [
+        "*** Begin Patch",
+        "*** Add File: continuity.txt",
+        "+degraded operational fallback",
+        "*** End Patch",
+      ].join("\n"),
+    },
+    _meta: { "openai/session": session },
+  } as Parameters<Client["callTool"]>[0]);
+  assert.equal(patched.isError, undefined);
+
+  const checked = await context.client.callTool({
+    name: "exec_command",
+    arguments: {
+      workspaceId,
+      cmd: "git diff --check && grep -qx 'degraded operational fallback' continuity.txt",
+      yieldTimeMs: 2_000,
+    },
+    _meta: { "openai/session": session },
+  } as Parameters<Client["callTool"]>[0]);
+  assert.equal(
+    (checked.structuredContent as Record<string, unknown>).exitCode,
+    0,
+  );
+
+  const processStart = await context.client.callTool({
+    name: "exec_command",
+    arguments: {
+      workspaceId,
+      cmd: `${JSON.stringify(process.execPath)} -e "setTimeout(() => process.stdout.write('continuity-process-done\\n'), 75)"`,
+      yieldTimeMs: 1,
+    },
+    _meta: { "openai/session": session },
+  } as Parameters<Client["callTool"]>[0]);
+  const processSessionId = Number(
+    (processStart.structuredContent as Record<string, unknown>).sessionId,
+  );
+  assert.ok(Number.isInteger(processSessionId));
+  const processCompletion = await context.client.callTool({
+    name: "write_stdin",
+    arguments: {
+      workspaceId,
+      sessionId: processSessionId,
+      yieldTimeMs: 2_000,
+    },
+    _meta: { "openai/session": session },
+  } as Parameters<Client["callTool"]>[0]);
+  assert.match(responseAllText(processCompletion), /continuity-process-done/);
+  assert.equal(
+    (processCompletion.structuredContent as Record<string, unknown>).running,
+    false,
+  );
+
+  const capsule = await context.client.callTool({
+    name: "recovery_capsule_record",
+    arguments: {
+      workspaceId,
+      idempotencyKey: "continuity-operational-capsule-1",
+      intent: "rolling",
+      missionRef: "DEVSPACE-CONTINUITY-OPERATIONAL-TEST",
+      authorityOwnerRefs: ["owner:test-git-main"],
+      authorityStateRefs: ["git-main:test-initial"],
+      currentFrontier: "The isolated continuity edit and validation passed.",
+      currentCausalSlice: "Preserve the local worktree and hand off within the continuity service.",
+      established: ["Continuity mode can edit and validate an isolated workspace."],
+      validationState: "passed",
+      validationRefs: ["command:git-diff-check:exit-0"],
+      worktreeState: "intentional_dirty",
+      effectState: "none",
+      writerState: "held",
+      writerRefs: ["writer:continuity-test-workspace"],
+      retryPolicy: "normal",
+      safeToMutate: true,
+      safeToPublish: false,
+      exactNextAction: "Continue bounded work or fail back after primary verification.",
+      doNotRepeat: ["Do not publish from continuity mode."],
+      unresolved: ["Primary failback remains external to this test."],
+      checkpointRefs: ["workspace:continuity-test"],
+    },
+    _meta: { "openai/session": session },
+  } as Parameters<Client["callTool"]>[0]);
+  assert.equal(structuredData(capsule).recorded, true);
+  const capsuleStatus = await context.client.callTool({
+    name: "recovery_capsule_status",
+    arguments: {
+      workspaceId,
+      currentAuthorityStateRefs: ["git-main:test-initial"],
+    },
+    _meta: { "openai/session": session },
+  } as Parameters<Client["callTool"]>[0]);
+  assert.equal(structuredData(capsuleStatus).workspaceFreshness, "fresh");
+
+  const peerSession = "continuity-peer-session";
+  const peerOpened = await callOpen(
+    context.client,
+    context.project,
+    peerSession,
+  );
+  const peerWorkspaceId = String(structuredContent(peerOpened).workspaceId);
+  await context.client.callTool({
+    name: "read",
+    arguments: { workspaceId: peerWorkspaceId, path: "AGENTS.md" },
+    _meta: { "openai/session": peerSession },
+  } as Parameters<Client["callTool"]>[0]);
+  const scopeList = await context.client.callTool({
+    name: "execution_scope_list",
+    arguments: { limit: 10 },
+    _meta: { "openai/session": session },
+  } as Parameters<Client["callTool"]>[0]);
+  const peerScope = (structuredData(scopeList).scopes as Array<Record<string, any>>)
+    .find((scope) => scope.isCurrent === false && scope.materialized === true);
+  assert.ok(peerScope);
+  const sent = await context.client.callTool({
+    name: "execution_scope_message_send",
+    arguments: {
+      targetScopeRef: peerScope.scopeRef,
+      idempotencyKey: "continuity-operational-handoff-1",
+      kind: "handoff",
+      priority: "high",
+      body: "Continue the validated local candidate; do not publish from continuity mode.",
+      correlationRef: "continuity-operational-test",
+    },
+    _meta: { "openai/session": session },
+  } as Parameters<Client["callTool"]>[0]);
+  assert.equal(sent.isError, undefined, responseText(sent));
+  const sentMessage = structuredData(sent).message as Record<string, any>;
+  assert.equal(sentMessage.state, "accepted");
+  const inbox = await context.client.callTool({
+    name: "execution_scope_message_inbox",
+    arguments: { limit: 10 },
+    _meta: { "openai/session": peerSession },
+  } as Parameters<Client["callTool"]>[0]);
+  const messages = structuredData(inbox).messages as Array<Record<string, any>>;
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0]?.kind, "handoff");
+  const acted = await context.client.callTool({
+    name: "execution_scope_message_receipt",
+    arguments: {
+      messageId: sentMessage.messageId,
+      state: "acted",
+      note: "Continuity-local handoff canary completed.",
+    },
+    _meta: { "openai/session": peerSession },
+  } as Parameters<Client["callTool"]>[0]);
+  assert.equal(structuredData(acted).state, "acted");
+
+  const status = await context.client.callTool({
+    name: "execution_scope_status",
+    arguments: {},
+    _meta: { "openai/session": session },
+  } as Parameters<Client["callTool"]>[0]);
+  const statusData = structuredData(status);
+  const profile = statusData.backendRuntime.continuityProfile as Record<
+    string,
+    any
+  >;
+  assert.equal(profile.schemaVersion, "devspace.continuity-profile.v1");
+  assert.equal(profile.state, "ready");
+  assert.equal(
+    profile.policyRef,
+    "policy:devspace:degraded-operational-continuity:v1",
+  );
+  assert.equal(profile.operatingContract.repositoryPublicationPermitted, false);
+  assert.equal(
+    profile.operatingContract.destructiveWorkspaceLifecyclePermitted,
+    false,
+  );
+  assert.equal(profile.operatingContract.deterministicFailbackRequired, true);
+  assert.equal(profile.authority.canonicalTaskOrDecisionAuthority, false);
+  assert.equal(profile.isolationContract.primaryDatabaseAuthorityShared, false);
+  assert.deepEqual(profile.surface.missingRequiredTools, []);
+  assert.equal(
+    statusData.backendRuntime.backend.implementation,
+    "devspace-continuity",
+  );
+  assert.match(String(profile.surface.surfaceEpoch), /^continuity:/);
+  for (const capabilityRef of [
+    "workspace_read",
+    "workspace_mutation",
+    "process_continuation",
+    "cross_session_coordination",
+    "recovery_checkpoint",
+  ]) {
+    assert.ok(profile.admittedCapabilityRefs.includes(capabilityRef));
+  }
+});
+
 test("enforced ZES research cycle is registered and holds mutation before admission", async (t) => {
   const context = await fixture(t, {
     toolMode: "codex",

@@ -22,7 +22,12 @@ import {
   isArtifactDownloadSupportedPlatform,
   registerArtifactTools,
 } from "./artifact-tools.js";
-import { loadConfig, type ServerConfig, type WidgetMode } from "./config.js";
+import {
+  loadConfig,
+  type ServerConfig,
+  type ToolMode,
+  type WidgetMode,
+} from "./config.js";
 import { ExecutionScopeManager } from "./execution-observability.js";
 import {
   ExecutionMailboxManager,
@@ -299,6 +304,16 @@ const toolNames = {
   shell: "bash",
 } as const;
 
+function usesCodexExecutionTools(mode: ToolMode): boolean {
+  return mode === "codex" || mode === "continuity";
+}
+
+function exposesNativeNavigation(config: ServerConfig): boolean {
+  return config.toolMode === "full"
+    || config.toolMode === "continuity"
+    || (config.toolMode === "codex" && config.codexNavigationTools);
+}
+
 const workspaceIdDescription =
   "Workspace to use. Reuse the current project's workspaceId.";
 
@@ -572,11 +587,15 @@ function serverInstructions(config: ServerConfig): string {
       ? " If the turn successfully modifies files by creating, editing, overwriting, deleting, moving, or applying patches, call show_changes exactly once for that workspace after the final related file change and before your final response so the user can inspect the aggregate diff for that turn. Do not call it after every individual file change; do not skip it because individual file-change tools already returned diffs."
       : "";
 
-  if (config.toolMode === "codex") {
+  if (usesCodexExecutionTools(config.toolMode)) {
     const codexInspectionInstruction = config.codexNavigationTools
+      || config.toolMode === "continuity"
       ? ` Use ${toolNames.read} for direct file reads and prefer the native ${toolNames.grep}, ${toolNames.glob}, and ${toolNames.ls} tools for bounded workspace search and navigation. Use exec_command for tests, builds, Git inspection, package scripts, and commands that genuinely require a shell.`
       : ` Use ${toolNames.read} for direct file reads and exec_command for inspection, tests, builds, and other commands.`;
-    return `Use DevSpace for coding work. Call ${toolNames.openWorkspace} once for each project folder or isolated worktree, then keep using its workspaceId. During continued work in the same project or worktree, do not call ${toolNames.openWorkspace} again. Open another workspace only when changing projects, switching checkout/worktree mode, creating another isolated worktree, or when the current workspaceId is rejected.${codexInspectionInstruction} Use apply_patch for all file modifications and write_stdin to poll or interact with running processes. Follow instructions returned by ${toolNames.openWorkspace}; read applicable instruction and skill files before working in their scope.${workspaceLifecycleInstruction}${artifactInstruction}${showChangesInstruction}${codexIntegrationInstruction}${codexWorkspaceInstruction}${zesContinuationInstruction}${zesResearchCycleInstruction}${executionScopeInstruction}${executionMailboxInstruction}${turnContinuityInstruction}${localAgentInstruction}`;
+    const continuityInstruction = config.toolMode === "continuity"
+      ? " This server is the independently stateful degraded operational continuity profile, not the primary Nexus route. Use it only after bounded primary recovery is exhausted or for explicit continuity qualification. It may inspect and mutate isolated local workspaces, run and continue processes, preserve a Git-bound recovery capsule, and coordinate with scopes connected to this continuity service. It must not claim fresh-research equivalence, canonical task or decision authority, repository publication, runtime deployment, conversation effects, effect replay, or automatic takeover. Keep the primary repair pending, use operation-scoped fallback selection when a control plane is available, and fail back only after exact primary readiness and tool-surface verification."
+      : "";
+    return `Use DevSpace for coding work. Call ${toolNames.openWorkspace} once for each project folder or isolated worktree, then keep using its workspaceId. During continued work in the same project or worktree, do not call ${toolNames.openWorkspace} again. Open another workspace only when changing projects, switching checkout/worktree mode, creating another isolated worktree, or when the current workspaceId is rejected.${continuityInstruction}${codexInspectionInstruction} Use apply_patch for all file modifications and write_stdin to poll or interact with running processes. Follow instructions returned by ${toolNames.openWorkspace}; read applicable instruction and skill files before working in their scope.${workspaceLifecycleInstruction}${artifactInstruction}${showChangesInstruction}${codexIntegrationInstruction}${codexWorkspaceInstruction}${zesContinuationInstruction}${zesResearchCycleInstruction}${executionScopeInstruction}${executionMailboxInstruction}${turnContinuityInstruction}${localAgentInstruction}`;
   }
 
   const inspection = config.toolMode !== "full"
@@ -3357,45 +3376,47 @@ export function createMcpServer(
       },
     );
 
-    registerAppTool(
-      server,
-      toolNames.workspaceClose,
-      {
-        title: "Close workspace",
-        description:
-          "Close one persisted workspace. Managed worktrees are removed by default only when no process references them, the tree is clean, and HEAD is reachable from a persistent ref. force must be explicit to override dirty or unpublished-commit protection; it never overrides a running-process boundary.",
-        inputSchema: {
-          workspaceId: z.string().describe(workspaceIdDescription),
-          remove: z
-            .boolean()
-            .optional()
-            .describe("Defaults to true for managed worktrees and false for checkouts."),
-          force: z
-            .boolean()
-            .optional()
-            .describe("Explicitly permit removal of dirty or unpublished managed-worktree state."),
+    if (config.toolMode !== "continuity") {
+      registerAppTool(
+        server,
+        toolNames.workspaceClose,
+        {
+          title: "Close workspace",
+          description:
+            "Close one persisted workspace. Managed worktrees are removed by default only when no process references them, the tree is clean, and HEAD is reachable from a persistent ref. force must be explicit to override dirty or unpublished-commit protection; it never overrides a running-process boundary.",
+          inputSchema: {
+            workspaceId: z.string().describe(workspaceIdDescription),
+            remove: z
+              .boolean()
+              .optional()
+              .describe("Defaults to true for managed worktrees and false for checkouts."),
+            force: z
+              .boolean()
+              .optional()
+              .describe("Explicitly permit removal of dirty or unpublished managed-worktree state."),
+          },
+          outputSchema: resultOutputSchema({ data: z.unknown() }),
+          ...toolWidgetDescriptorMeta(config, "workspace"),
+          annotations: {
+            readOnlyHint: false,
+            destructiveHint: true,
+            idempotentHint: false,
+            openWorldHint: false,
+          },
         },
-        outputSchema: resultOutputSchema({ data: z.unknown() }),
-        ...toolWidgetDescriptorMeta(config, "workspace"),
-        annotations: {
-          readOnlyHint: false,
-          destructiveHint: true,
-          idempotentHint: false,
-          openWorldHint: false,
+        async (input) => {
+          const startedAt = performance.now();
+          const data = await activeWorkspaceLifecycle.close(input);
+          logToolCall(config, {
+            tool: toolNames.workspaceClose,
+            workspaceId: input.workspaceId,
+            success: true,
+            durationMs: Math.round(performance.now() - startedAt),
+          });
+          return jsonToolResponse(data);
         },
-      },
-      async (input) => {
-        const startedAt = performance.now();
-        const data = await activeWorkspaceLifecycle.close(input);
-        logToolCall(config, {
-          tool: toolNames.workspaceClose,
-          workspaceId: input.workspaceId,
-          success: true,
-          durationMs: Math.round(performance.now() - startedAt),
-        });
-        return jsonToolResponse(data);
-      },
-    );
+      );
+    }
 
     registerAppTool(
       server,
@@ -3426,40 +3447,42 @@ export function createMcpServer(
       },
     );
 
-    registerAppTool(
-      server,
-      toolNames.workspaceGcExecute,
-      {
-        title: "Execute workspace garbage collection",
-        description:
-          "Recompute and execute an exact workspace_gc_preview plan. The request fails when the plan digest changed; each candidate is revalidated again immediately before removal.",
-        inputSchema: {
-          ...gcInputSchema,
-          planIdSha256: z
-            .string()
-            .regex(/^[a-f0-9]{64}$/)
-            .describe("Exact planIdSha256 returned by workspace_gc_preview with the same options."),
+    if (config.toolMode !== "continuity") {
+      registerAppTool(
+        server,
+        toolNames.workspaceGcExecute,
+        {
+          title: "Execute workspace garbage collection",
+          description:
+            "Recompute and execute an exact workspace_gc_preview plan. The request fails when the plan digest changed; each candidate is revalidated again immediately before removal.",
+          inputSchema: {
+            ...gcInputSchema,
+            planIdSha256: z
+              .string()
+              .regex(/^[a-f0-9]{64}$/)
+              .describe("Exact planIdSha256 returned by workspace_gc_preview with the same options."),
+          },
+          outputSchema: resultOutputSchema({ data: z.unknown() }),
+          ...toolWidgetDescriptorMeta(config, "workspace"),
+          annotations: {
+            readOnlyHint: false,
+            destructiveHint: true,
+            idempotentHint: false,
+            openWorldHint: false,
+          },
         },
-        outputSchema: resultOutputSchema({ data: z.unknown() }),
-        ...toolWidgetDescriptorMeta(config, "workspace"),
-        annotations: {
-          readOnlyHint: false,
-          destructiveHint: true,
-          idempotentHint: false,
-          openWorldHint: false,
+        async (input) => {
+          const startedAt = performance.now();
+          const data = await activeWorkspaceLifecycle.execute(input);
+          logToolCall(config, {
+            tool: toolNames.workspaceGcExecute,
+            success: true,
+            durationMs: Math.round(performance.now() - startedAt),
+          });
+          return jsonToolResponse(data);
         },
-      },
-      async (input) => {
-        const startedAt = performance.now();
-        const data = await activeWorkspaceLifecycle.execute(input);
-        logToolCall(config, {
-          tool: toolNames.workspaceGcExecute,
-          success: true,
-          durationMs: Math.round(performance.now() - startedAt),
-        });
-        return jsonToolResponse(data);
-      },
-    );
+      );
+    }
   }
 
   if (activeSelfRepositoryPublication) {
@@ -3714,7 +3737,7 @@ export function createMcpServer(
     },
   );
 
-  if (config.toolMode !== "codex") {
+  if (!usesCodexExecutionTools(config.toolMode)) {
   registerAppTool(
     server,
     toolNames.write,
@@ -3908,7 +3931,7 @@ export function createMcpServer(
   );
   }
 
-  if (config.toolMode === "codex") {
+  if (usesCodexExecutionTools(config.toolMode)) {
     registerAppTool(
       server,
       "apply_patch",
@@ -4058,10 +4081,7 @@ export function createMcpServer(
     );
   }
 
-  if (
-    config.toolMode === "full"
-    || (config.toolMode === "codex" && config.codexNavigationTools)
-  ) {
+  if (exposesNativeNavigation(config)) {
     registerAppTool(
       server,
       toolNames.grep,
@@ -4272,7 +4292,7 @@ export function createMcpServer(
     );
   }
 
-  if (config.toolMode !== "codex") {
+  if (!usesCodexExecutionTools(config.toolMode)) {
   registerAppTool(
     server,
     toolNames.shell,
@@ -4389,7 +4409,7 @@ export function createMcpServer(
   );
   }
 
-  if (config.toolMode === "codex") {
+  if (usesCodexExecutionTools(config.toolMode)) {
     registerCodexProcessTools(
       server,
       config,
