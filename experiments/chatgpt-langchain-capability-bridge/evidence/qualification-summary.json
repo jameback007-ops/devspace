@@ -1,0 +1,96 @@
+{
+  "schema_version": "chatgpt-langchain-capability-bridge.qualification.v1",
+  "observed_at": "2026-08-22T10:07:45Z",
+  "repository_base_head_at_qualification": "3c362b24cb43d5028a873a9afff531f0cd8d2953",
+  "candidate_branch_base_head": "b99c1345d30ac7059b9fb07ec5335d88fd28eb7f",
+  "architecture_claim": {
+    "reasoning_owner": "chatgpt_webchat",
+    "delegated_llm_present": false,
+    "bridge_role": "thin_mcp_transport_and_workspace_adapter",
+    "native_components": [
+      "deepagents.LocalShellBackend",
+      "langgraph.StateGraph",
+      "langgraph.SqliteSaver",
+      "agent_server.Store",
+      "official MCP Python SDK"
+    ]
+  },
+  "versions": {
+    "deepagents": "0.7.8",
+    "langgraph": "1.2.11",
+    "mcp": "2.0.0",
+    "langgraph_api": "0.13.0",
+    "standalone_python": "3.13",
+    "agent_server_python": "3.13.15"
+  },
+  "tool_abi": {
+    "version": "chatgpt-langchain-capability-bridge.tools.v1",
+    "tool_count": 14,
+    "fingerprint_sha256": "8006cdd2a6c03e94b29fefbdab7f0dd1b9e1d7904e495d51c8e9f3ffab7b77e2"
+  },
+  "static_validation": {
+    "uv_lock_check": "passed",
+    "uv_dependency_check": "passed",
+    "ruff_check": "passed",
+    "ruff_format_check": "passed",
+    "pytest": {
+      "outcome": "passed",
+      "tests_passed": 7
+    },
+    "python_compileall": "passed"
+  },
+  "standalone_mcp_qualification": {
+    "initial_test_exit_code": 1,
+    "repaired_test_exit_code": 0,
+    "repaired_test_summary": "2 passed in 0.01s",
+    "git_diff_check_exit_code": 0,
+    "checkpoint_thread_id": "final-capability-qualification-20260822",
+    "checkpoint_id": "1f19e10c-2b44-6fbb-8001-cea7838f638d",
+    "checkpoint_events_after_container_restart": 1,
+    "checkpoint_validation_state_after_container_restart": "passed"
+  },
+  "agent_server_dev_qualification": {
+    "health_ok": true,
+    "native_run_status": "passed",
+    "native_checkpoint_id": "1f19e10d-a85d-60ba-8001-7493851ae8d8",
+    "custom_mcp_route": "/coding/mcp",
+    "custom_mcp_tool_count": 14,
+    "custom_mcp_checkpoint_storage": "agent_server_store"
+  },
+  "container_security_observation": {
+    "read_only_root_filesystem": true,
+    "linux_capabilities_dropped": [
+      "ALL"
+    ],
+    "no_new_privileges": true,
+    "workspace_mount_scope": "disposable_repository_only",
+    "host_zes_checkout_mounted": false,
+    "host_root_ssh_mounted": false
+  },
+  "built_images": {
+    "standalone_bridge": "sha256:13f14862907d82b486a4944e8ec1636b7ad6a4834a1bad5b69f550eccaf28ca6",
+    "agent_server_prototype": "sha256:57a4eb0314c10a981e11c2fc434907c5d9e790c1cb826161ed59ae8ee923f3b3",
+    "openai_tunnel_client_v0_0_12": "sha256:b1e9eb675e6a64775685c323c2af8c2810ea14e1a27c8ce4c68f2994cd7c5e8e"
+  },
+  "evidence_ceiling": {
+    "proven": [
+      "native backend composition",
+      "streamable HTTP MCP initialize/list/call",
+      "filesystem search edit and shell coding loop",
+      "Git diff commit and disposable worktree operations",
+      "dependency installation inside isolated container",
+      "bounded timeout behavior",
+      "LangGraph checkpoint persistence across bridge restart",
+      "Agent Server custom MCP route plus native thread run checkpoint and Store coexistence",
+      "production Agent Server image build on Python 3.13"
+    ],
+    "not_yet_proven": [
+      "direct ChatGPT host discovery and invocation without Legacy relay",
+      "actual Secure MCP Tunnel connection using user-owned credentials",
+      "workspace entitlement for write-capable custom MCP actions",
+      "persistent PTY or resumable long-running shell session",
+      "representative DevSpace versus bridge A/B coding workload",
+      "long-horizon WebChat continuity and connector-break recovery"
+    ]
+  }
+}

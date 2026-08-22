@@ -1,0 +1,12 @@
+{
+  "$schema": "https://langgra.ph/schema.json",
+  "dependencies": ["."],
+  "python_version": "3.13",
+  "graphs": {
+    "bridge_journal": "./src/chatgpt_langchain_bridge/agent_graph.py:graph"
+  },
+  "http": {
+    "app": "./src/chatgpt_langchain_bridge/agent_server_app.py:app"
+  },
+  "env": ".env.agent-server"
+}

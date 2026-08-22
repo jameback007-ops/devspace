@@ -1,0 +1,39 @@
+services:
+  bridge:
+    build:
+      context: .
+    environment:
+      BRIDGE_ALLOWED_ROOTS: /workspace
+      BRIDGE_STATE_DB: /state/checkpoints.sqlite
+      BRIDGE_HOST: 0.0.0.0
+      BRIDGE_PORT: 8765
+    ports:
+      - "127.0.0.1:${BRIDGE_PORT:-8765}:8765"
+    init: true
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 512
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=512m
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import socket; s=socket.create_connection(('127.0.0.1', 8765), 2); s.close()"
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+    volumes:
+      - type: bind
+        source: ${BRIDGE_WORKSPACE_HOST_PATH:?Set BRIDGE_WORKSPACE_HOST_PATH to an isolated repository}
+        target: /workspace
+      - bridge-state:/state
+    restart: unless-stopped
+
+volumes:
+  bridge-state:
