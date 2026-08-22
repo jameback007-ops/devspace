@@ -2,9 +2,11 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
+  applyHostObservationToRecoveryPlan,
   evaluateStablePrimaryProbes,
   isPrimaryRecoveryControlHealthy,
   loadRecoveryPolicy,
+  normalizeHostObservation,
   normalizeReadinessProbe,
   planPrimaryRecovery,
   primaryRecoveredResult,
@@ -231,6 +233,82 @@ test("healthy primary clears incident state", () => {
   });
   assert.equal(plan.state, "HEALTHY");
   assert.equal(plan.consecutiveFailures, 0);
+});
+
+test("host-disabled connector never restarts a healthy exact primary", () => {
+  const probe = normalizeReadinessProbe({
+    httpStatus: 200,
+    body: {
+      ok: true,
+      state: "READY",
+      database: { state: "ready" },
+      activity: {
+        activeToolCount: 0,
+        runningProcessCount: 0,
+        serviceChildProcessObservationState: "observed",
+        activeServiceChildProcessCount: 0,
+      },
+      restartSafety: { state: "safe", reasonCodes: [] },
+      backendInstanceRef: "healthy-instance",
+      surfaceEpoch: "nexus:healthy-surface",
+      toolSurfaceFingerprintSha256: "c".repeat(64),
+      serverSurfaceCurrent: true,
+      toolSurfaceFreshnessStatus: "CURRENT",
+    },
+  });
+  const basePlan = planPrimaryRecovery({
+    probe,
+    serviceState: "active",
+    state: { consecutiveFailures: 0, repairAttempts: 0 },
+    policy,
+  });
+  const plan = applyHostObservationToRecoveryPlan({
+    plan: basePlan,
+    probe,
+    hostObservation: "connector_disabled",
+  });
+  assert.equal(plan.state, "HOST_CONNECTOR_RECOVERY_REQUIRED");
+  assert.equal(plan.recoveryPlane, "host_connector");
+  assert.equal(plan.primaryRepairRequired, false);
+  assert.equal(plan.primaryRestartAllowed, false);
+  assert.equal(plan.effectAllowed, false);
+  assert.equal(plan.missionFallbackAuthorized, false);
+  assert.equal(plan.consecutiveFailures, 0);
+  assert.equal(plan.repairAttempts, 0);
+  assert.ok(
+    plan.reasonCodes.includes(
+      "server_restart_would_target_the_wrong_failure_plane",
+    ),
+  );
+  assert.ok(plan.exactNextAction.includes("Keep the healthy Nexus service running"));
+});
+
+test("host observation cannot mask a real primary failure", () => {
+  const basePlan = planPrimaryRecovery({
+    probe: failedProbe(),
+    serviceState: "active",
+    state: { consecutiveFailures: 2, repairAttempts: 0 },
+    policy,
+  });
+  const plan = applyHostObservationToRecoveryPlan({
+    plan: basePlan,
+    probe: failedProbe(),
+    hostObservation: "connector_disabled",
+  });
+  assert.equal(plan.state, "RESTART_PRIMARY");
+  assert.equal(plan.effectAllowed, true);
+});
+
+test("host observation accepts only bounded typed states", () => {
+  assert.equal(normalizeHostObservation(undefined), "unobserved");
+  assert.equal(
+    normalizeHostObservation("authentication_required"),
+    "authentication_required",
+  );
+  assert.throws(
+    () => normalizeHostObservation("restart_everything"),
+    /Unsupported Nexus host observation/,
+  );
 });
 
 test("functional readiness alone cannot clear a stale or unattested primary surface", () => {

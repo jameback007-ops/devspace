@@ -36,6 +36,12 @@ const LEGACY_RECOVERY_REQUIRED_TOOLS = [
 const RECOVERY_STATE_SCHEMA = "zes.nexus-primary-recovery-state.v1";
 const RECOVERY_RECEIPT_SCHEMA = "zes.nexus-primary-recovery-receipt.v1";
 const RECOVERY_PLAN_SCHEMA = "zes.nexus-primary-recovery-plan.v1";
+const HOST_OBSERVATION_VALUES = new Set([
+  "unobserved",
+  "connector_disabled",
+  "catalog_stale",
+  "authentication_required",
+]);
 
 function integer(value, fallback, minimum, maximum) {
   const parsed = Number(value);
@@ -173,6 +179,66 @@ export function loadRecoveryPolicy(environment = process.env) {
     conflictingRestartUnits: systemdUnitNames(
       environment.ZES_NEXUS_PRIMARY_RECOVERY_CONFLICTING_RESTART_UNITS,
     ),
+  };
+}
+
+export function normalizeHostObservation(value) {
+  const selected = value?.trim() || "unobserved";
+  if (!HOST_OBSERVATION_VALUES.has(selected)) {
+    throw new Error(
+      `Unsupported Nexus host observation: ${selected}`,
+    );
+  }
+  return selected;
+}
+
+export function applyHostObservationToRecoveryPlan({
+  plan,
+  probe,
+  hostObservation = "unobserved",
+}) {
+  const observation = normalizeHostObservation(hostObservation);
+  if (observation === "unobserved" || plan.state !== "HEALTHY") {
+    return plan;
+  }
+  if (!isPrimaryRecoveryControlHealthy(probe)) {
+    return plan;
+  }
+
+  const reasonCode = observation === "connector_disabled"
+    ? "host_connector_disabled_while_primary_healthy"
+    : observation === "catalog_stale"
+      ? "host_catalog_stale_while_primary_healthy"
+      : "host_authentication_required_while_primary_healthy";
+  return {
+    ...plan,
+    state: "HOST_CONNECTOR_RECOVERY_REQUIRED",
+    action: observation === "authentication_required"
+      ? "reauthenticate_or_reconnect_host_connector"
+      : "refresh_or_reconnect_host_connector",
+    effectAllowed: false,
+    diagnosticAgentRequired: false,
+    primaryRepairRequired: false,
+    primaryRestartAllowed: false,
+    hostObservation: observation,
+    recoveryPlane: "host_connector",
+    missionFallbackAuthorized: false,
+    exactNextAction:
+      "Keep the healthy Nexus service running. Refresh, reconnect, or reauthenticate the host connector as indicated by the host; then call the stable Nexus bootstrap and attest the refreshed client catalog before normal mission work resumes.",
+    reasonCodes: [...new Set([
+      ...(Array.isArray(plan.reasonCodes) ? plan.reasonCodes : []),
+      "primary_functional_and_exact_surface_verified",
+      reasonCode,
+      "server_restart_would_target_the_wrong_failure_plane",
+    ])],
+    policy: {
+      ...(plan.policy && typeof plan.policy === "object" ? plan.policy : {}),
+      hostObservationIsCallerEvidenceOnly: true,
+      hostObservationDoesNotAuthorizeServerRepair: true,
+      healthyPrimaryMustNotRestartForHostConnectorFailure: true,
+      hostConnectorActuatorOwnedByController: false,
+      fallbackMissionAuthorityGranted: false,
+    },
   };
 }
 
@@ -890,6 +956,9 @@ export function primaryRecoveredResult({
 
 async function main() {
   const policy = loadRecoveryPolicy();
+  const hostObservation = normalizeHostObservation(
+    process.env.ZES_NEXUS_PRIMARY_HOST_OBSERVATION,
+  );
   const owner = await acquireLease(policy);
   if (!owner) {
     console.log(JSON.stringify({
@@ -911,12 +980,17 @@ async function main() {
       serviceState(),
       activeSystemdUnits(policy.conflictingRestartUnits),
     ]);
-    const plan = planPrimaryRecovery({
+    const basePlan = planPrimaryRecovery({
       probe,
       serviceState: observedServiceState,
       state: previous,
       policy,
       competingRestartOwners,
+    });
+    const plan = applyHostObservationToRecoveryPlan({
+      plan: basePlan,
+      probe,
+      hostObservation,
     });
     const recoveryOwnerObservation = {
       configuredCompetingUnits: policy.conflictingRestartUnits,
@@ -924,7 +998,10 @@ async function main() {
       effectsEnabled: policy.effectsEnabled,
     };
 
-    if (plan.state === "HEALTHY") {
+    if (
+      plan.state === "HEALTHY"
+      || plan.state === "HOST_CONNECTOR_RECOVERY_REQUIRED"
+    ) {
       await rm(policy.statePath, { force: true });
       console.log(JSON.stringify({
         ...plan,

@@ -72,6 +72,29 @@ These boundaries produce two distinct recovery planes:
 - **host catalog recovery**, which needs an attested host-native or semantic UI
   actuator and otherwise ends at a typed manual-refresh requirement.
 
+When a fallback executor can observe a host-local failure that the Nexus server
+cannot see, it may pass one bounded observation to the out-of-band controller:
+
+```bash
+ZES_NEXUS_PRIMARY_HOST_OBSERVATION=connector_disabled \
+  node scripts/zes-nexus-primary-recovery.mjs
+```
+
+The accepted observations are `connector_disabled`, `catalog_stale`, and
+`authentication_required`. They are caller evidence, not server truth and not
+repair authority. If `/readyz` independently proves the primary runtime and
+exact tool surface healthy, the controller returns
+`HOST_CONNECTOR_RECOVERY_REQUIRED`, explicitly forbids a primary restart, and
+routes the next action to host refresh/reconnect/reauthentication. If the
+primary itself is degraded, the normal primary-repair state machine remains in
+control; a host observation cannot mask a real server failure.
+
+This is the intended Legacy recovery path for the failure class where one
+ChatGPT conversation reports the Nexus connector disabled while other
+conversations continue to call the same healthy Nexus runtime. Legacy may
+diagnose and preserve the causal frontier, but it still receives no mission
+authority and cannot manufacture a ChatGPT host refresh.
+
 ## Components
 
 ### 0. Capability orientation and failure-layer separation
