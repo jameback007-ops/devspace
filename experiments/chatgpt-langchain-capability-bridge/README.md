@@ -141,8 +141,9 @@ ChatGPT's private inference loop. Therefore:
 | Deep Agent automatic history summarization | **Cannot summarize hidden WebChat history** |
 | Deep Agent middleware around every model turn | **Not installed around WebChat** |
 
-The last three remain model-loop differences and must be measured in the A/B
-comparison rather than described as solved.
+The last three remain model-loop boundaries. They may be characterized
+empirically, but they are not parity requirements and do not justify cloning a
+second model-loop harness around WebChat.
 
 ## Native workstream observability
 
@@ -323,11 +324,24 @@ Gate A. Gate A now passes through the uniquely named
 `ZES_LangChain_Runtime` app: ChatGPT opened the disposable repository, read
 native context, repaired the source, read the mutation back, passed two tests,
 passed `git diff --check`, and persisted a checkpoint without Nexus, Legacy, or
-a second model. Migration remains blocked until the representative A/B and
-long-horizon continuity gates in
-[`docs/capability-parity-matrix.md`](docs/capability-parity-matrix.md) pass.
+a second model.
 
-Gate C uses the counterbalanced protocol in
+LangGraph, Deep Agents, Agent Server, and LangSmith are the owner-committed
+long-term ZES direction. Remaining gates control production readiness and the
+safe retirement order of incumbent machinery; they do not reopen platform
+selection.
+
+Gate C uses the subtractive characterization protocol in
 [`docs/ab-benchmark-protocol.md`](docs/ab-benchmark-protocol.md). Deterministic
 same-session replay is scored separately from independent fresh-chat behavior
-so tool-plane parity cannot be mistaken for model-quality evidence.
+so tool-plane behavior cannot be mistaken for model-quality evidence.
+
+The first C0 characterization used identical multi-file billing clones. Both
+DevSpace and the native route passed all four tests, passed `git diff --check`,
+changed exactly the same two source files, and produced the same patch digest.
+The evidence supports using native Deep Agents coding/context and native Agent
+Server/LangSmith state and observability. It does **not** authorize expansion of
+the frozen 24-tool core, a DevSpace control-plane port, or a platform winner
+claim. DevSpace-only observations default to REJECT, RETIRE, or
+DEFER_WITH_FALSIFIER. See
+`evidence/gate-c0-harness-characterization-20260822.json`.

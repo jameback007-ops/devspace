@@ -55,3 +55,11 @@ def test_prepare_and_score_representative_ab_workload(tmp_path: Path) -> None:
     assert devspace_score["passed"] is True
     assert native_score["passed"] is True
     assert devspace_score["diff_sha256"] == native_score["diff_sha256"]
+    assert devspace_score["status"] == [
+        " M src/billing/discounts.py",
+        " M src/billing/invoice.py",
+    ]
+    assert native_score["status"] == [
+        " M src/billing/discounts.py",
+        " M src/billing/invoice.py",
+    ]

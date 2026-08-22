@@ -83,6 +83,7 @@ def prepare(output_root: Path) -> dict[str, Any]:
         [sys.executable, "-m", "unittest", "discover", "-s", "tests", "-v"],
         cwd=template,
         check=False,
+        env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
     )
     if baseline.returncode == 0:
         raise AssertionError("representative fixture unexpectedly passed")

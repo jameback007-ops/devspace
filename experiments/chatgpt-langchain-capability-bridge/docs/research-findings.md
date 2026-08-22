@@ -1,9 +1,12 @@
 # Research findings and architecture disposition
 
-## Decision question
+## Architecture question
 
-Can ChatGPT WebChat use the LangChain ecosystem as a coding/runtime capability
-plane through MCP while ChatGPT remains the primary reasoning and coding owner?
+LangGraph, Deep Agents, Agent Server, and LangSmith are the owner-committed
+long-term ZES direction. The question is therefore not whether they defeat
+DevSpace. It is which mature native capabilities can be used directly, which
+WebChat boundaries require a thin binding, and which incumbent custom machinery
+should be rejected, deferred, or retired.
 
 ## Finding 1 — the direct capability seam is real
 
@@ -86,8 +89,8 @@ Equivalent content can be made available through skills, MCP server
 instructions, `AGENTS.md`, explicit durable state, and artifacts, but the
 execution semantics are not identical.
 
-Disposition: **record as an A/B harness difference; never claim 100% Deep Agent
-model-loop parity for WebChat**.
+Disposition: **record as a WebChat boundary; do not turn it into a parity gate
+or clone a second model-loop harness**.
 
 ## Finding 7 — sandbox capability should be provider-neutral
 
@@ -120,13 +123,13 @@ Disposition:
 
 - provider-neutral and LangSmith adapters: **implemented and behavior-tested**;
 - live LangSmith Sandbox: **blocked by external entitlement**;
-- live persistent PTY parity: **open migration subgate**;
+- live persistent PTY qualification: **open production capability subgate**;
 - direct Docker-isolated WebChat coding: **may proceed independently**.
 
 ## Finding 9 — tracing must be fail-open and payload-minimal
 
-LangSmith is useful for measuring tool latency/failure and comparing DevSpace
-with the bridge, but a tracing outage must not break a coding tool. The adapter
+LangSmith is useful for measuring tool latency/failure and characterizing the
+incumbent against the native route, but a tracing outage must not break a coding tool. The adapter
 therefore records only tool name and argument names, excludes values and
 outputs, and suppresses trace setup/flush failures while preserving the real
 tool outcome.
@@ -189,8 +192,9 @@ chatgpt-langchain-capability-bridge.tools.v2
 071b7d38d9205565264541ecc3eb84b5fa3681544d462eaf3511abf90e6a47b7
 ```
 
-Disposition: freeze the 24-tool v2 ABI throughout direct-host and A/B
-qualification. Internal native implementations may evolve behind it.
+Disposition: freeze the 24-tool v2 ABI throughout direct-host qualification and
+incumbent characterization. Internal native implementations may evolve behind
+it.
 
 ## Finding 12 — Secure MCP Tunnel is the correct direct-host transport
 
@@ -201,6 +205,45 @@ VPS; the repository contains no credential.
 
 Disposition: **USE for Gate A; do not route the new runtime through
 Nexus/DevSpace or a public reverse proxy**.
+
+## Finding 13 — C0 is an incumbent extraction instrument, not a platform vote
+
+The deterministic multi-file billing replay started both lanes from the same
+clean commit. Both reproduced two failures, passed all four tests after repair,
+changed exactly the same two source files, passed `git diff --check`, and
+produced the same patch digest.
+
+The harness observations were:
+
+- DevSpace exposed 12 visible calls, one atomic multi-file `apply_patch`, and a
+  bounded audit with 333 ms of observed tool service time;
+- the native route exposed 13 visible calls and completed the same repair using
+  native context, five reads, two exact edits, and three executions;
+- LangSmith recorded one native Thread with 29 root tool traces, zero errors,
+  and 16 additional server-observed invocations beyond visible calls. The exact
+  cause of those additional reads/open/status calls is not yet proven;
+- the same session ran DevSpace first, so wall time, reasoning quality, token
+  economy, and behavioral superiority are not valid comparisons.
+
+Subtractive dispositions follow:
+
+- filesystem, context, state, and observability: **USE NATIVE; RETIRE OR DO NOT
+  PORT duplicate DevSpace implementations**;
+- explicit WebChat workstream identity: **KEEP the existing thin binding**;
+- atomic multi-file mutation: **DEFER_WITH_FALSIFIER**; one ergonomic sample
+  does not justify expanding the frozen core;
+- extra native host/server invocations: **MEASURE through LangSmith first**;
+  do not create a new activity database;
+- DevSpace execution-scope, recovery, and ceremony systems: **REJECT PORT FROM
+  C0** because the workload did not falsify the mature native state plane.
+
+The benchmark runner initially generated `__pycache__` files while scoring.
+That observer effect was removed with `PYTHONDONTWRITEBYTECODE=1`, and the final
+score leaves only the two expected tracked source changes.
+
+Disposition: **use C0 to delete and replace first; require a durable measured
+native gap before the smallest custom binding is considered**. See
+`evidence/gate-c0-harness-characterization-20260822.json`.
 
 ## Qualification evidence to date
 
@@ -243,13 +286,26 @@ Nexus/DevSpace or a public reverse proxy**.
   checkpoint record, and checkpoint read;
 - no Nexus, Legacy, specialist, or second model performed the repair.
 
+### C0 incumbent characterization
+
+- identical DevSpace and native clones started at the same clean Git commit;
+- both reproduced two failures and passed all four tests after repair;
+- both changed exactly `discounts.py` and `invoice.py`;
+- both produced patch digest
+  `749a135c48de4db325545c6d02fdf421371d3bc225ac05ee2724a1f0ae58f8d9`;
+- DevSpace audit and LangSmith Threads supplied the metrics without a new
+  telemetry store;
+- the evidence has no platform-selection or model-behavior authority.
+
 ### Evidence ceiling
 
-Direct ChatGPT-host qualification now passes over Secure MCP Tunnel. Migration
-is not approved. Still open:
+Direct ChatGPT-host qualification and one deterministic incumbent
+characterization now pass. The LangGraph ecosystem direction is already
+committed; still open are production-readiness and optional broader
+characterization questions:
 
 - a live native persistent-process provider;
-- representative DevSpace versus bridge A/B workload;
+- repeated multi-workload characterization and optional fresh-chat C1 samples;
 - long-horizon cross-chat/catalog continuity;
 - production Agent Server activation with native Postgres/Redis and the
   required license authority.
@@ -266,3 +322,7 @@ Native workstream observability is recorded in
 Server is the native development runtime. The production image builds, but no
 `LANGGRAPH_CLOUD_LICENSE_KEY` is bound, so the bridge does not claim or emulate
 a standalone production deployment.
+
+C0 characterization and subtractive dispositions are recorded in
+`evidence/gate-c0-harness-characterization-20260822.json`. They do not authorize
+a broad DevSpace port or expansion of the 24-tool core.

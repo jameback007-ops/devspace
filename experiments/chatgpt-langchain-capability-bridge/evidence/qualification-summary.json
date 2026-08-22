@@ -1,6 +1,6 @@
 {
   "schema_version": "chatgpt-langchain-capability-bridge.qualification.v2",
-  "observed_at": "2026-08-22T15:08:00Z",
+  "observed_at": "2026-08-22T16:22:48Z",
   "candidate_branch": "agent/chatgpt-langchain-capability-bridge-20260822",
   "candidate_base_commit": "4908e7a8c9c5d13a5713f58381b2e5d2bb71d71c",
   "owner_main_at_takeover": "b99c1345d30ac7059b9fb07ec5335d88fd28eb7f",
@@ -32,6 +32,15 @@
       "official MCP Python SDK"
     ]
   },
+  "architecture_direction": {
+    "langgraph_deep_agents_agent_server_langsmith": "owner_committed_long_term_direction",
+    "devspace_role": "incumbent_baseline_for_subtractive_capability_extraction",
+    "benchmark_platform_selection_authority": false,
+    "benchmark_veto_authority": false,
+    "default_devspace_only_feature_disposition": "reject_retire_or_defer",
+    "custom_binding_threshold": "durable_generalizable_measured_native_gap_only",
+    "frozen_24_tool_core_expansion_authorized_by_c0": false
+  },
   "versions": {
     "bridge": "0.2.0",
     "deepagents": "0.7.8",
@@ -58,7 +67,7 @@
     "bandit": "passed",
     "pytest": {
       "outcome": "passed",
-      "tests_passed": 39
+      "tests_passed": 40
     },
     "python_compileall": "passed"
   },
@@ -226,6 +235,53 @@
     "zero_gap_availability_proven": false,
     "evidence_ref": "evidence/direct-tunnel-reconnect-continuity-20260822.json"
   },
+  "gate_c0_harness_characterization": {
+    "status": "passed",
+    "evidence_class": "deterministic_same_session_harness_characterization",
+    "platform_direction_authority": false,
+    "behavioral_claim_allowed": false,
+    "baseline_commit": "772b131a3837a0761a7c6a425bd12dd43fb688d7",
+    "baseline_tests_failed": 2,
+    "baseline_tests_passed": 2,
+    "terminal_tests_passed_per_lane": 4,
+    "both_lanes_passed": true,
+    "git_diff_check_passed": true,
+    "changed_files_exact": true,
+    "patches_equivalent": true,
+    "diff_sha256": "749a135c48de4db325545c6d02fdf421371d3bc225ac05ee2724a1f0ae58f8d9",
+    "devspace": {
+      "visible_tool_calls": 12,
+      "audit_sequence_range": "971-982",
+      "server_observed_tool_service_time_ms": 333,
+      "mutation_projection": "one_atomic_multi_file_apply_patch",
+      "transport_or_tool_errors": 0
+    },
+    "native": {
+      "visible_tool_calls": 13,
+      "agent_server_thread_id": "01a02a3e-a41e-7213-8e33-420da5ae1c14",
+      "langsmith_thread_count": 1,
+      "langsmith_root_trace_count": 29,
+      "langsmith_trace_error_count": 0,
+      "additional_server_observed_invocations": 16,
+      "server_observed_root_trace_latency_ms": 208.272,
+      "mutation_projection": "two_exact_native_edit_file_calls"
+    },
+    "subtractive_result": {
+      "native_coding_context_state_observability": "use_native",
+      "duplicate_devspace_runtime_machinery": "retire_or_do_not_port",
+      "webchat_workstream_identity": "retain_existing_thin_binding",
+      "atomic_multi_file_mutation": "defer_with_falsifier",
+      "host_call_amplification": "measure_with_langsmith_before_custom_work",
+      "devspace_execution_scope_and_recovery_port": "rejected_from_c0",
+      "tool_abi": "freeze_24_tool_core"
+    },
+    "benchmark_observer_effect": {
+      "initial_issue": "scorer_generated_python_bytecode_cache",
+      "correction": "PYTHONDONTWRITEBYTECODE=1",
+      "terminal_status": "only_expected_tracked_changes_remain"
+    },
+    "evidence_ref": "evidence/gate-c0-harness-characterization-20260822.json"
+  },
   "production_agent_server_gate": {
     "development_runtime": "qualified",
     "production_image_build": "passed",
@@ -245,6 +301,8 @@
       "direct ChatGPT write-capable coding through Secure MCP Tunnel",
       "direct ChatGPT continuity while the same frozen app ABI switched from standalone bridge to Agent Server custom route",
       "direct app workstream, Agent Server thread, checkpoint, and LangSmith Thread continuity across one tunnel-client restart",
+      "deterministic multi-file incumbent characterization with equivalent terminal patches across DevSpace and the native route",
+      "subtractive capability dispositions that preserve the frozen core and reject broad DevSpace control-plane porting",
       "Docker-isolated repair and checkpoint recovery after container restart",
       "Agent Server custom MCP route plus native thread run checkpoint and Store coexistence",
       "standalone and Agent Server image builds on Python 3.13",
@@ -252,7 +310,7 @@
     ],
     "not_yet_proven": [
       "live persistent PTY through an entitled native sandbox provider",
-      "representative DevSpace versus bridge A/B workload",
+      "repeated multi-workload characterization and optional independent fresh-chat C1 samples",
       "repeated and long-horizon WebChat continuity beyond one tunnel-client restart",
       "production Agent Server activation with Postgres Redis and license authority"
     ]

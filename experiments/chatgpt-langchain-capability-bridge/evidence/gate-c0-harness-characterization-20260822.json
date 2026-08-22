@@ -1,0 +1,207 @@
+{
+  "schema_version": "chatgpt-langchain-capability-bridge.gate-c0-harness-characterization.v1",
+  "observed_at": "2026-08-22T16:22:48Z",
+  "evidence_class": "deterministic_same_session_harness_characterization",
+  "architecture_direction": {
+    "langgraph_agent_server_ecosystem": "owner_committed_long_term_direction",
+    "devspace_role": "incumbent_baseline_for_subtractive_capability_extraction",
+    "benchmark_can_select_platform": false,
+    "benchmark_can_veto_langgraph_direction": false,
+    "behavioral_claim_allowed": false,
+    "default_devspace_only_disposition": "reject_retire_or_defer",
+    "tool_abi_expansion_authorized": false
+  },
+  "workload": {
+    "fixture": "fixtures/coding-ab-billing",
+    "baseline_commit": "772b131a3837a0761a7c6a425bd12dd43fb688d7",
+    "clones_started_clean": true,
+    "clones_started_at_identical_head": true,
+    "baseline_test_exit_code": 1,
+    "baseline_tests": {
+      "passed": 2,
+      "failed": 2
+    },
+    "expected_changed_files": [
+      "src/billing/discounts.py",
+      "src/billing/invoice.py"
+    ],
+    "repair": {
+      "gold_discount_threshold": "greater_than_to_greater_than_or_equal",
+      "tax_base": "subtotal_to_discounted_taxable_subtotal"
+    }
+  },
+  "terminal_score": {
+    "both_lanes_passed": true,
+    "patches_equivalent": true,
+    "diff_sha256": "749a135c48de4db325545c6d02fdf421371d3bc225ac05ee2724a1f0ae58f8d9",
+    "diff_line_count": 26,
+    "test_count": 4,
+    "git_diff_check_passed": true,
+    "changed_files_exact": true,
+    "observer_left_only_expected_tracked_changes": true,
+    "claim_ceiling": "tool_plane_and_harness_characterization_only"
+  },
+  "devspace_lane": {
+    "route": "ZES_Nexus",
+    "workspace_id": "ws_8c829860b4",
+    "workspace_mode": "checkout",
+    "audit_sequence_start": 971,
+    "audit_sequence_end": 982,
+    "model_visible_tool_calls": 12,
+    "tool_counts": {
+      "open_workspace": 1,
+      "read": 7,
+      "exec_command": 3,
+      "apply_patch": 1
+    },
+    "transport_or_tool_errors": 0,
+    "expected_baseline_command_exit_code": 1,
+    "mutation_projection": "one_atomic_multi_file_apply_patch",
+    "readback_performed": true,
+    "server_observed_tool_service_time_ms": 333,
+    "observation_window_seconds": 108.851,
+    "terminal_test_exit_code": 0,
+    "terminal_changed_files": [
+      "src/billing/discounts.py",
+      "src/billing/invoice.py"
+    ]
+  },
+  "native_lane": {
+    "route": "ZES_LangChain_Runtime_over_secure_mcp_tunnel",
+    "workspace_id": "ws_4ded51c73919",
+    "workstream_ref": "gate-c0-native-billing-20260822",
+    "agent_server_thread_id": "01a02a3e-a41e-7213-8e33-420da5ae1c14",
+    "agent_server_thread_status": "idle",
+    "model_visible_tool_calls": 13,
+    "model_visible_tool_counts": {
+      "workspace_open": 1,
+      "context_read": 1,
+      "read_file": 5,
+      "execute": 3,
+      "edit_file": 2,
+      "runtime_thread": 1
+    },
+    "mutation_projection": "two_exact_native_edit_file_calls",
+    "readback_performed": true,
+    "langsmith_thread_count": 1,
+    "langsmith_server_observed_root_traces": 29,
+    "langsmith_trace_errors": 0,
+    "server_observed_additional_invocations_beyond_model_visible_calls": 16,
+    "additional_invocation_attribution": "host_or_connector_replay_or_hydration_observed_but_not_causally_proven",
+    "langsmith_root_trace_counts": {
+      "mcp.workspace_open": 3,
+      "mcp.context_read": 2,
+      "mcp.read_file": 14,
+      "mcp.workspace_status": 4,
+      "mcp.execute": 3,
+      "mcp.edit_file": 2,
+      "mcp.runtime_thread": 1
+    },
+    "server_observed_root_trace_latency_ms": 208.272,
+    "latency_normalization": "LangSmith latency values were microseconds and were divided by 1000",
+    "observation_window_seconds": 198.947055,
+    "expected_baseline_command_exit_code": 1,
+    "terminal_test_exit_code": 0,
+    "terminal_changed_files": [
+      "src/billing/discounts.py",
+      "src/billing/invoice.py"
+    ]
+  },
+  "interpretation_limits": {
+    "same_reasoning_owner_used_both_lanes": true,
+    "lane_order": "devspace_then_native",
+    "solution_transfer_between_lanes_possible": true,
+    "model_reasoning_quality_comparison_valid": false,
+    "elapsed_wall_time_comparison_valid": false,
+    "token_economy_comparison_valid": false,
+    "server_service_metrics_are_directly_equivalent": false,
+    "hidden_webchat_reasoning_observed": false
+  },
+  "subtractive_capability_dispositions": [
+    {
+      "capability": "filesystem_search_edit_execute",
+      "devspace_observation": "mature workspace coding surface completed the repair",
+      "native_coverage": "Deep Agents BackendProtocol and LocalShellBackend completed the same repair",
+      "disposition": "use_native_and_retire_duplicate_new_runtime_implementation",
+      "custom_work": "none"
+    },
+    {
+      "capability": "hierarchical_project_instructions_and_skills",
+      "devspace_observation": "root AGENTS and skill metadata were projected; nested AGENTS was explicitly read",
+      "native_coverage": "MemoryMiddleware loaded root and nested AGENTS in workspace_open and SkillsMiddleware supplied progressive-disclosure metadata",
+      "disposition": "use_native_and_do_not_port_devspace_instruction_engine",
+      "custom_work": "WebChat projection only"
+    },
+    {
+      "capability": "runtime_state_and_tool_observability",
+      "devspace_observation": "bounded execution audit exposed exact tool lifecycle and service durations",
+      "native_coverage": "Agent Server owns thread state and LangSmith owns Threads Traces Runs and Studio",
+      "disposition": "retire_custom_execution_scope_clone_for_new_runtime",
+      "custom_work": "retain_only_explicit_workstream_binding_and_safe_metadata"
+    },
+    {
+      "capability": "atomic_multi_file_mutation",
+      "devspace_observation": "one apply_patch call changed two files atomically at the bridge boundary",
+      "native_coverage": "two exact edit_file calls produced an equivalent patch",
+      "disposition": "defer_without_core_tool_expansion",
+      "falsifier": "repeated real workloads prove non-atomic edits cause material correctness recovery or ceremony failures not covered by mature native or Git mechanisms"
+    },
+    {
+      "capability": "host_call_deduplication",
+      "devspace_observation": "audit count matched the 12 visible calls",
+      "native_coverage": "LangSmith observed 29 root traces for 13 visible calls with no errors or duplicate mutations",
+      "disposition": "defer_and_measure_not_clone_activity_state",
+      "falsifier": "repeated samples show write duplication material cost or reliability impact after connector and LangSmith-native diagnosis"
+    },
+    {
+      "capability": "devspace_recovery_ceremony_and_execution_scope_control_plane",
+      "devspace_observation": "not exercised by the bounded C0 repair",
+      "native_coverage": "Agent Server checkpoints Store Threads Runs and Secure MCP reconnect continuity already cover the tested state boundaries",
+      "disposition": "reject_port_from_c0_and_require_concrete_falsified_native_gap",
+      "custom_work": "none authorized"
+    },
+    {
+      "capability": "core_mcp_surface",
+      "devspace_observation": "incumbent exposes a much larger tool catalog",
+      "native_coverage": "frozen 24-tool ABI completed the representative deterministic repair",
+      "disposition": "freeze_24_tool_core",
+      "custom_work": "no additive tool justified by C0"
+    }
+  ],
+  "benchmark_runner_correction": {
+    "finding": "the initial scorer invocation generated Python __pycache__ files in measured clones",
+    "root_cause": "unittest subprocess did not disable bytecode writes",
+    "correction": "prepare and score subprocesses now set PYTHONDONTWRITEBYTECODE=1",
+    "post_correction_status": "only_the_two_expected_tracked_files_remain_changed"
+  },
+  "receipts": {
+    "prepare": {
+      "path": "/tmp/chatgpt-langchain-gate-c0-prepare.json",
+      "bytes": 2758,
+      "sha256": "8ca7eb30f79bbee5b03c58e9daf42b5fc9a1fadfb62c1b5a0411f9ad580b32c0"
+    },
+    "score": {
+      "path": "/tmp/chatgpt-langchain-gate-c0-score.json",
+      "bytes": 2530,
+      "sha256": "0f65a257b5691143bf17e39a3c1de7620cbb3ddfcfbf70be732cae7ad41b643f"
+    },
+    "native_observability": {
+      "path": "/tmp/chatgpt-langchain-gate-c0-native-observability.json",
+      "bytes": 11161,
+      "sha256": "1738ba908cbc0bf5a2ddc4553881caffc7f366201c5279b4d4299b10a8c342ba"
+    },
+    "devspace_audit": {
+      "scope_ref": "147ac39d04ab5b6b",
+      "sequence_range": "971-982"
+    }
+  },
+  "next_evidence": {
+    "c1_status": "optional_curiosity_and_behavioral_characterization_only",
+    "minimum_requirement": "fresh isolated chats and counterbalanced order",
+    "platform_direction_authority": false,
+    "production_readiness_gates_remain_separate": true
+  },
+  "credentials_recorded": false,
+  "private_reasoning_recorded": false,
+  "raw_source_payloads_recorded": false
+}

@@ -1,7 +1,9 @@
-# DevSpace parity and migration gates
+# Native qualification and incumbent extraction matrix
 
-The comparison separates native capability availability from capabilities that
-can actually wrap ChatGPT WebChat's private model loop.
+LangGraph, Deep Agents, Agent Server, and LangSmith are the committed long-term
+ZES direction. This matrix separates native capability qualification from
+WebChat model-loop boundaries and uses DevSpace only as an incumbent source for
+subtractive capability extraction. It is not a platform-selection scorecard.
 
 | Capability | Native basis | Qualification state | Remaining proof |
 |---|---|---:|---|
@@ -25,7 +27,7 @@ can actually wrap ChatGPT WebChat's private model loop.
 | Native sandbox provider port | `NativeSandboxProvider` + Deep Agents backend | Passed structurally | Select live provider |
 | LangSmith Sandbox | Native SDK + `LangSmithSandbox` | **Blocked: organization feature disabled** | Enable feature or select another provider |
 | Persistent PTY / stdin / kill / reconnect | Provider-native command handle | Adapter passed with native contract fake | Live provider qualification |
-| Tool observability | LangSmith `trace` + native Threads | Passed live with three grouped MCP traces | Representative A/B traces |
+| Tool observability | LangSmith `trace` + native Threads | Passed live and in C0 characterization | Multi-workload trace characterization |
 | Observability UI | LangSmith Studio / Deployment Threads tab | Native surface available; no custom dashboard | Production deployment exposure |
 | Tool catalog stability | Frozen 24-tool v2 ABI | Descriptor test ready | ChatGPT scan/reconnect stress |
 | Private transport | OpenAI Secure MCP Tunnel | Passed direct discovery/read/write/execute/checkpoint | Long-run reconnect stress |
@@ -35,7 +37,7 @@ can actually wrap ChatGPT WebChat's private model loop.
 | Hidden WebChat system prompt replacement | No public seam | Not possible through MCP | Use server instructions/skills/context instead |
 | Automatic WebChat history summarization | Deep Agents model-loop middleware | Not applicable to WebChat loop | Compare WebChat continuity empirically |
 
-## Migration gates
+## Qualification and extraction stages
 
 ### Gate A — direct WebChat coding over Secure MCP Tunnel
 
@@ -111,14 +113,14 @@ Gate D therefore passes identity and recovery continuity for one restart, but
 does not prove zero-gap availability. See
 `evidence/direct-tunnel-reconnect-continuity-20260822.json`.
 
-### Gate C — DevSpace versus bridge A/B
+### Gate C — incumbent characterization and capability extraction
 
 Run the same bounded task against identical repository clones:
 
 - DevSpace baseline;
 - ChatGPT + native LangChain capability plane.
 
-Compare:
+Characterize:
 
 - task correctness and test outcome;
 - elapsed time and tool-call count;
@@ -128,10 +130,30 @@ Compare:
 - context/skill selection quality;
 - ceremony and custom infrastructure required.
 
-Gate C first runs a deterministic capability replay on identical clones, then
-requires counterbalanced fresh WebChat chats for behavioral claims. The same
-session may establish tool/transport parity but cannot fairly establish model
-reasoning quality after learning the repair. See `docs/ab-benchmark-protocol.md`.
+Gate C has no platform-selection or veto authority. C0 runs deterministic
+capability replay on identical clones; optional C1 uses counterbalanced fresh
+WebChat chats only for behavioral characterization. The same session may
+establish tool/transport behavior but cannot fairly establish model reasoning
+quality after learning the repair.
+
+C0 now passes on the multi-file billing fixture:
+
+- both lanes passed all four tests and `git diff --check`;
+- both changed exactly the same two source files;
+- both produced patch digest
+  `749a135c48de4db325545c6d02fdf421371d3bc225ac05ee2724a1f0ae58f8d9`;
+- DevSpace used 12 visible calls including one multi-file `apply_patch`;
+- the native lane used 13 visible calls, while LangSmith observed 29 root
+  traces with zero errors, exposing additional host/server call amplification;
+- no behavioral, reasoning-quality, or elapsed-time superiority claim is valid
+  because the same session ran DevSpace first.
+
+Extraction uses a strict default of REJECT/RETIRE/DEFER. C0 supports native
+Deep Agents coding and context, Agent Server workstream/state, and LangSmith
+observability; it does not justify expanding the 24-tool core or cloning
+DevSpace execution-scope and recovery machinery. See
+`docs/ab-benchmark-protocol.md` and
+`evidence/gate-c0-harness-characterization-20260822.json`.
 
 ### Gate D — continuity and catalog failure
 
@@ -169,9 +191,22 @@ because no `LANGGRAPH_CLOUD_LICENSE_KEY` is bound. The qualified Agent Server
 runtime in this phase is the native in-memory development server, not a claimed
 production deployment.
 
-### Gate F — migration decision
+### Gate F — native rollout and incumbent retirement plan
 
-Migrate only when capability is at least equivalent to DevSpace for the target
-workload and reliability or operational simplicity is materially better.
-Native ecosystem breadth and architectural elegance are not sufficient without
-direct workload evidence.
+The platform direction is already committed. Evidence controls rollout quality
+and the order in which incumbent machinery can be retired; it does not reopen
+platform selection.
+
+For each DevSpace-only mechanism, choose one disposition:
+
+- **RETIRE** when a mature native component covers the durable need;
+- **REJECT** when it is niche, short-horizon, authority-misaligned, or
+  speculative parity;
+- **DEFER_WITH_FALSIFIER** when a concrete repeated gap has not yet been shown;
+- **THIN_BINDING** only when the gap is durable, generalizable, measured, and
+  not acceptably covered by a mature ecosystem component.
+
+Production Agent Server activation, persistence, isolation, and connector
+continuity remain readiness requirements. A weaker characterization metric may
+trigger diagnosis or a thin correction, but cannot by itself veto LangGraph
+adoption or cause a broad DevSpace port.

@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -16,7 +17,11 @@ EXPECTED_CHANGED_FILES = (
 
 
 def run(
-    command: list[str], *, cwd: Path, check: bool = False
+    command: list[str],
+    *,
+    cwd: Path,
+    check: bool = False,
+    env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         command,
@@ -24,6 +29,7 @@ def run(
         check=check,
         text=True,
         capture_output=True,
+        env=env,
     )
 
 
@@ -35,6 +41,7 @@ def score_lane(path: Path) -> dict[str, Any]:
     tests = run(
         [sys.executable, "-m", "unittest", "discover", "-s", "tests", "-v"],
         cwd=path,
+        env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
     )
     diff_check = run(["git", "diff", "--check"], cwd=path)
     diff = run(["git", "diff", "--no-ext-diff", "--binary"], cwd=path)

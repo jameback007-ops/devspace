@@ -127,7 +127,10 @@ async def qualify_once(
                 "workspace_id": workspace_id,
                 "mission_ref": "direct-chatgpt-coding-capability",
                 "frontier": "fixture repaired through primitive MCP tools",
-                "next_action": "run a representative repository A/B test",
+                "next_action": (
+                    "run representative incumbent characterization and "
+                    "subtractive capability extraction"
+                ),
                 "validation_state": "passed",
                 "refs": ["pytest:2-passed", "git-diff-check:passed"],
             },
