@@ -428,3 +428,19 @@ external root-only env file, and only a thin loopback-port/secret Compose
 binding. It must prove Postgres/Redis persistence and direct ChatGPT continuity
 before the development runtime is retired. The tracked
 `.env.agent-server.production.example` contains names/placeholders only.
+
+## Current development deployment — 2026-08-23
+
+The v3 candidate is published on `owner/main` and runs as the independent,
+loopback-only `zes-langchain-runtime-v3-dev.service` on port `2030`. The OpenAI
+Secure MCP Tunnel now targets `/coding/mcp` on that runtime. Direct WebChat
+qualification passed against a real `zes-worktree://zesnexus` lane, including
+native Agent Server durable write/read/delete and a clean terminal Git state.
+The prior port `2026` runtime remains available for bounded rollback.
+
+The ChatGPT connector already observes the v3 manifest and existing tools. The
+new `interaction` tool requires one draft-app **Scan tools** or connector refresh
+before it becomes callable in the host catalog. This cutover is a development
+runtime deployment, not licensed production activation; Postgres, Redis,
+license authority, and production isolation remain separate gates. See
+`evidence/dev-v3-cutover-20260823.json`.

@@ -1,0 +1,91 @@
+{
+  "schema_version": "chatgpt-langchain-capability-bridge.dev-v3-cutover.v1",
+  "observed_at": "2026-08-22T21:23:39+00:00",
+  "source_publication": {
+    "remote": "owner/main",
+    "published_commit": "362535eaa94c982b94839a7346ca075ca84bcb17",
+    "publication_method": "fresh fixed-remote compare-and-swap push",
+    "remote_readback_matched": true,
+    "publication_helper_state": "unavailable_for_unmanaged_worktree",
+    "publication_helper_blocker": "workspace_is_not_a_managed_worktree",
+    "candidate_clean": true,
+    "merge_commits_since_prior_main": 0
+  },
+  "development_runtime": {
+    "service": "zes-langchain-runtime-v3-dev.service",
+    "unit_path": "/etc/systemd/system/zes-langchain-runtime-v3-dev.service",
+    "enabled": true,
+    "active": true,
+    "restart_count": 0,
+    "loopback_url": "http://127.0.0.1:2030",
+    "health": {
+      "path": "/ok",
+      "status": "passed"
+    },
+    "source_commit": "362535eaa94c982b94839a7346ca075ca84bcb17",
+    "runtime_kind": "langgraph_dev_in_memory",
+    "graph_count": 4,
+    "tool_abi": {
+      "version": "chatgpt-langchain-capability-bridge.tools.v3",
+      "tool_count": 25,
+      "fingerprint_sha256": "4b2cb616cd56135dc65bc06c39f0e68f1f000a36fdd95dacd8f7465fcea0747f"
+    },
+    "native_planes": {
+      "agent_server": "available",
+      "worktree_binding": "available",
+      "material_durability": "available",
+      "interaction": "available",
+      "langsmith_observability": "enabled"
+    }
+  },
+  "secure_mcp_tunnel": {
+    "service": "openai-mcp-tunnel-zes-langchain-dev.service",
+    "active": true,
+    "restart_count": 0,
+    "target": "http://127.0.0.1:2030/coding/mcp",
+    "health": "live",
+    "readiness": "ready",
+    "rollback_unit_backup": "/etc/devspace/openai-mcp-tunnel-zes-langchain-dev.service.v2-backup",
+    "prior_runtime_retained": "http://127.0.0.1:2026"
+  },
+  "direct_webchat_qualification": {
+    "connector": "ZES_LangChain_Runtime",
+    "manifest_v3_observed": true,
+    "managed_worktree_reference": "zes-worktree://zesnexus",
+    "workstream_ref": "webchat-v3-cutover-direct-20260823",
+    "worktree_head": "362535eaa94c982b94839a7346ca075ca84bcb17",
+    "durable_write_status": "applied",
+    "durable_readback": "passed",
+    "durable_delete_status": "applied",
+    "terminal_git_status": "clean",
+    "material_execution_authority": "native_agent_server_run",
+    "delegated_llm_present": false
+  },
+  "catalog_state": {
+    "existing_v2_tools_remain_callable": true,
+    "v3_manifest_visible": true,
+    "new_interaction_tool_host_discovered": false,
+    "required_user_action": "Scan tools or refresh the ChatGPT draft app before invoking the new interaction tool"
+  },
+  "security": {
+    "runtime_listener_public": false,
+    "mcp_listener_public": false,
+    "tunnel_credentials_recorded": false,
+    "langsmith_credentials_recorded": false,
+    "worktree_catalog_mode": "0600 root:root",
+    "runtime_env_mode": "0600 root:root",
+    "langsmith_env_mode": "0600 root:root",
+    "rollback_unit_mode": "0600 root:root"
+  },
+  "production_state": {
+    "activated": false,
+    "blocking_gates": [
+      "LANGGRAPH_CLOUD_LICENSE_KEY not bound",
+      "dedicated Postgres not bound",
+      "dedicated Redis not bound",
+      "production secret environment not prepared",
+      "production sandbox or equivalent OS isolation not qualified"
+    ]
+  },
+  "evidence_ceiling": "Development v3 source publication and direct WebChat cutover are terminal. This is not licensed production Agent Server activation."
+}
