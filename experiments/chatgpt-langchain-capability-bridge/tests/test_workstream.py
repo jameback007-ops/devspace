@@ -23,6 +23,9 @@ class FakeAgentServer:
             "thread_id": "0198f8ab-1234-7000-8000-000000000001",
             "status": "idle",
             "updated_at": "2026-08-22T00:00:00+00:00",
+            "interaction_thread_id": "0198f8ab-1234-7000-8000-000000000002",
+            "interaction_thread_status": "idle",
+            "interaction_thread_updated_at": "2026-08-22T00:00:01+00:00",
         }
 
 
@@ -34,6 +37,8 @@ def test_explicit_workstream_binds_native_thread() -> None:
     assert binding.source == "webchat_supplied"
     assert binding.state == "created_agent_thread"
     assert binding.agent_thread_status == "idle"
+    assert binding.interaction_thread_id
+    assert binding.interaction_thread_status == "idle"
 
 
 def test_missing_workstream_mints_uuid7_ref() -> None:

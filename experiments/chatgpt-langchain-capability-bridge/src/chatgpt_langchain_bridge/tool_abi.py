@@ -5,13 +5,13 @@ import json
 from collections.abc import Iterable
 from typing import Any
 
-ABI_VERSION = "chatgpt-langchain-capability-bridge.tools.v2"
+ABI_VERSION = "chatgpt-langchain-capability-bridge.tools.v3"
 ABI_FINGERPRINT_SHA256 = (
-    "071b7d38d9205565264541ecc3eb84b5fa3681544d462eaf3511abf90e6a47b7"
+    "4b2cb616cd56135dc65bc06c39f0e68f1f000a36fdd95dacd8f7465fcea0747f"
 )
-PREDECESSOR_ABI_VERSION = "chatgpt-langchain-capability-bridge.tools.v1"
+PREDECESSOR_ABI_VERSION = "chatgpt-langchain-capability-bridge.tools.v2"
 PREDECESSOR_ABI_FINGERPRINT_SHA256 = (
-    "8006cdd2a6c03e94b29fefbdab7f0dd1b9e1d7904e495d51c8e9f3ffab7b77e2"
+    "071b7d38d9205565264541ecc3eb84b5fa3681544d462eaf3511abf90e6a47b7"
 )
 ABI_TOOL_NAMES = (
     "artifact_transfer",
@@ -25,6 +25,7 @@ ABI_TOOL_NAMES = (
     "execute",
     "glob",
     "grep",
+    "interaction",
     "ls",
     "observability_status",
     "process",

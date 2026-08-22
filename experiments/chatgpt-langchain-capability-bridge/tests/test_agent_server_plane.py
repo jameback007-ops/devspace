@@ -49,6 +49,10 @@ class FakeThreads:
             self.states[thread_id].update(values)
         return {"thread_id": thread_id, "values": self.states[thread_id]}
 
+    def update(self, thread_id: str, *, metadata: dict[str, Any], **kwargs):
+        self.values[thread_id]["metadata"] = metadata
+        return self.values[thread_id]
+
     def delete(self, thread_id: str) -> None:
         self.values.pop(thread_id, None)
 
@@ -126,7 +130,7 @@ def make_plane() -> AgentServerPlane:
     return AgentServerPlane(
         AgentServerPlaneConfig(
             url="http://agent-server.test",
-            allowed_assistant_ids=("bridge_journal",),
+            allowed_assistant_ids=("bridge_journal", "bridge_interaction"),
             specialist_assistants=(("research", "assistant-research"),),
             store_namespace_prefix=("bridge-runtime",),
             thread_metadata_key="bridge_owner",
@@ -178,6 +182,8 @@ def test_workstream_binding_creates_then_resolves_native_thread() -> None:
     assert created["state"] == "created_agent_thread"
     assert resolved["state"] == "resolved_existing_agent_thread"
     assert resolved["thread_id"] == created["thread_id"]
+    assert resolved["interaction_thread_id"] == created["interaction_thread_id"]
+    assert resolved["interaction_thread_id"] != resolved["thread_id"]
     assert resolved["metadata"]["bridge_workstream_ref"] == "webchat-workstream-1"
     assert resolved["metadata"]["bridge_owner"] == "test"
     assert resolved["metadata"]["bridge_reasoning_owner"] == "chatgpt_webchat"
@@ -188,6 +194,7 @@ def test_workstream_binding_rejects_duplicate_native_threads() -> None:
     metadata = {
         "bridge_owner": "test",
         "bridge_workstream_ref": "duplicate",
+        "bridge_thread_role": "runtime",
         "bridge_reasoning_owner": "chatgpt_webchat",
     }
     client.threads.create(graph_id="bridge_journal", metadata=metadata)
@@ -195,7 +202,7 @@ def test_workstream_binding_rejects_duplicate_native_threads() -> None:
     plane = AgentServerPlane(
         AgentServerPlaneConfig(
             url="http://agent-server.test",
-            allowed_assistant_ids=("bridge_journal",),
+            allowed_assistant_ids=("bridge_journal", "bridge_interaction"),
             thread_metadata_key="bridge_owner",
             thread_metadata_value="test",
         ),
@@ -204,6 +211,36 @@ def test_workstream_binding_rejects_duplicate_native_threads() -> None:
 
     with pytest.raises(BridgeError, match="multiple Agent Server threads"):
         plane.bind_workstream("duplicate")
+
+
+def test_workstream_binding_migrates_legacy_runtime_thread() -> None:
+    client = FakeClient()
+    legacy = client.threads.create(
+        graph_id="bridge_journal",
+        metadata={
+            "bridge_owner": "test",
+            "bridge_workstream_ref": "legacy-workstream",
+            "bridge_reasoning_owner": "chatgpt_webchat",
+        },
+    )
+    plane = AgentServerPlane(
+        AgentServerPlaneConfig(
+            url="http://agent-server.test",
+            allowed_assistant_ids=("bridge_journal", "bridge_interaction"),
+            thread_metadata_key="bridge_owner",
+            thread_metadata_value="test",
+        ),
+        client_factory=lambda **_: client,
+    )
+
+    binding = plane.bind_workstream("legacy-workstream")
+
+    assert binding["state"] == "migrated_legacy_agent_thread"
+    assert binding["thread_id"] == legacy["thread_id"]
+    assert (
+        client.threads.values[legacy["thread_id"]]["metadata"]["bridge_thread_role"]
+        == "runtime"
+    )
 
 
 def test_optional_specialist_is_explicit_and_allowlisted() -> None:

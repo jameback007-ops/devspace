@@ -140,7 +140,7 @@ class WorkspaceRegistry:
 
     def capability_manifest(self) -> dict[str, Any]:
         return {
-            "schema_version": "chatgpt-langchain-capability-bridge.v2",
+            "schema_version": "chatgpt-langchain-capability-bridge.v3",
             "tool_abi": {
                 "version": ABI_VERSION,
                 "fingerprint_sha256": ABI_FINGERPRINT_SHA256,
@@ -148,12 +148,12 @@ class WorkspaceRegistry:
                 "predecessor": {
                     "version": PREDECESSOR_ABI_VERSION,
                     "fingerprint_sha256": PREDECESSOR_ABI_FINGERPRINT_SHA256,
-                    "qualification_role": "phase_0_primitive_coding_proof",
+                    "qualification_role": "direct_coding_and_native_runtime_baseline",
                 },
                 "compatibility_policy": (
-                    "v2 is the direct-host qualification ABI; freeze names, action "
-                    "enums, required inputs, and descriptor semantics after its final "
-                    "fingerprint is sealed"
+                    "v3 adds one grouped provider-neutral interaction tool; freeze names, "
+                    "action enums, required inputs, and descriptor semantics after its "
+                    "final fingerprint is sealed"
                 ),
             },
             "reasoning_owner": "chatgpt_webchat",
@@ -166,6 +166,7 @@ class WorkspaceRegistry:
                     "langgraph.SqliteSaver (standalone) or Agent Server Store"
                 ),
                 "transport": "official MCP Python SDK 2.x",
+                "peer_interaction": "official A2A Python SDK 1.1.x at the adapter edge",
             },
             "capabilities": list(ABI_TOOL_NAMES),
             "known_limits": [
@@ -174,6 +175,7 @@ class WorkspaceRegistry:
                 "LangGraph persists tool-plane state but cannot wrap ChatGPT's hidden model loop",
                 "ChatGPT host-side MCP catalog freshness remains an external failure plane",
                 "Deep Agents automatic summarization and system-prompt middleware remain agent-loop capabilities, not WebChat middleware",
+                "A2A communication does not grant ZES work, workspace, or effect authority",
             ],
         }
 

@@ -26,6 +26,9 @@ class WorkstreamBinding:
     agent_thread_id: str | None = None
     agent_thread_status: str | None = None
     agent_thread_updated_at: str | None = None
+    interaction_thread_id: str | None = None
+    interaction_thread_status: str | None = None
+    interaction_thread_updated_at: str | None = None
     provider_error_type: str | None = None
 
     def public_view(self) -> dict[str, Any]:
@@ -38,10 +41,14 @@ class WorkstreamBinding:
             "agent_thread_id": self.agent_thread_id,
             "agent_thread_status": self.agent_thread_status,
             "agent_thread_updated_at": self.agent_thread_updated_at,
+            "interaction_thread_id": self.interaction_thread_id,
+            "interaction_thread_status": self.interaction_thread_status,
+            "interaction_thread_updated_at": self.interaction_thread_updated_at,
             "provider_error_type": self.provider_error_type,
             "authority": {
                 "workstream_identity": "webchat_supplied_or_bridge_minted_ref",
                 "runtime_state": "langgraph_agent_server_thread_when_available",
+                "interaction_state": "langgraph_agent_server_a2a_thread_when_available",
                 "trace_grouping": "langsmith_thread_metadata",
                 "custom_activity_store_created": False,
             },
@@ -98,6 +105,9 @@ class WorkstreamBindingPlane:
             agent_thread_id=native.get("thread_id"),
             agent_thread_status=native.get("status"),
             agent_thread_updated_at=native.get("updated_at"),
+            interaction_thread_id=native.get("interaction_thread_id"),
+            interaction_thread_status=native.get("interaction_thread_status"),
+            interaction_thread_updated_at=native.get("interaction_thread_updated_at"),
         )
 
     @staticmethod

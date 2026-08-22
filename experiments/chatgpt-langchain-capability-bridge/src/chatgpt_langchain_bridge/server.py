@@ -69,7 +69,7 @@ def build_server(
     server = MCPServer(
         name="chatgpt-langchain-capability-bridge",
         title="ChatGPT LangChain Coding Capability Bridge",
-        version="0.2.0",
+        version="0.3.0",
         instructions=(
             "ChatGPT is the reasoning and coding owner. Call primitive coding tools "
             "directly. Use context_discover/context_read for native Deep Agents skills "
@@ -80,6 +80,8 @@ def build_server(
             "sandbox provider with resumable process handles. "
             "Use runtime_thread todos_read/todos_write for native TodoListMiddleware "
             "state, and runtime_run run_command for native LangGraph interrupt resume. "
+            "Use interaction for provider-neutral peer discovery, A2A tasks, artifacts, "
+            "and WebChat durable-pull updates; communication never grants material authority. "
             "This MCP plane cannot replace ChatGPT's hidden system prompt or automatically "
             "summarize ChatGPT's hidden conversation history."
         ),
@@ -524,6 +526,56 @@ def build_server(
         """Read LangSmith tracing configuration without exposing credentials."""
 
         return capabilities.observability.status()
+
+    @server.tool(annotations=EXECUTION, structured_output=True)
+    @instrument("interaction")
+    async def interaction(
+        action: Literal[
+            "manifest", "discover", "send", "get", "cancel", "inbox", "ack"
+        ],
+        workspace_id: str = "",
+        endpoint_ref: str = "",
+        text: str = "",
+        data: dict[str, Any] | None = None,
+        context_ref: str = "",
+        correlation_ref: str = "",
+        task_id: str = "",
+        interaction_ref: str = "",
+        kind: Literal[
+            "message", "request", "response", "task", "status", "artifact", "receipt"
+        ] = "message",
+        schema_ref: str = "",
+        authority_refs: list[str] | None = None,
+        trace_context: dict[str, str] | None = None,
+        metadata: dict[str, Any] | None = None,
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        """Use the provider-neutral interaction plane and native A2A adapters.
+
+        Endpoint URLs are server-configured aliases, never arbitrary caller
+        URLs. A2A tasks/messages remain protocol-owned interaction handles;
+        they do not become ZES WorkItems, WorkspaceLeases, or effect authority.
+        WebChat inbound delivery is a durable-pull projection over native Agent
+        Server threads and Store.
+        """
+
+        return await capabilities.interactions.operate(
+            action,
+            workspace_id=workspace_id,
+            endpoint_ref=endpoint_ref,
+            text=text,
+            data=data,
+            context_ref=context_ref,
+            correlation_ref=correlation_ref,
+            task_id=task_id,
+            interaction_ref=interaction_ref,
+            kind=kind,
+            schema_ref=schema_ref,
+            authority_refs=authority_refs,
+            trace_context=trace_context,
+            metadata=metadata,
+            limit=limit,
+        )
 
     return server
 

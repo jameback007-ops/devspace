@@ -5,6 +5,7 @@ from typing import Any, Mapping
 from .agent_server_plane import AgentServerPlane
 from .artifact_plane import ArtifactPlane
 from .context_plane import ContextPlane
+from .interaction import InteractionPlane
 from .observability import ObservabilityPlane
 from .process_plane import ProcessPlane
 from .registry import WorkspaceRegistry
@@ -28,6 +29,7 @@ class CapabilityRuntime:
         agent_server: AgentServerPlane | None = None,
         observability: ObservabilityPlane | None = None,
         workstreams: WorkstreamBindingPlane | None = None,
+        interactions: InteractionPlane | None = None,
     ) -> None:
         self.registry = registry
         self.journal = journal
@@ -38,6 +40,10 @@ class CapabilityRuntime:
         self.agent_server = agent_server or AgentServerPlane()
         self.observability = observability or ObservabilityPlane()
         self.workstreams = workstreams or WorkstreamBindingPlane(self.agent_server)
+        self.interactions = interactions or InteractionPlane(
+            registry,
+            self.agent_server,
+        )
         self.observability.set_context_resolver(self._trace_context)
 
     def open_workspace(
@@ -61,6 +67,7 @@ class CapabilityRuntime:
         )
         bootstrap["capability_manifest"] = self.manifest()
         bootstrap["workstream"] = binding.public_view()
+        bootstrap["peer_updates"] = self.interactions.bootstrap(binding)
         bootstrap["durable_state"] = self._durable_state_pointer(binding.workstream_ref)
         return {**workspace, "bootstrap": bootstrap}
 
@@ -74,6 +81,7 @@ class CapabilityRuntime:
             "agent_server": self.agent_server.manifest(),
             "observability": self.observability.status(),
             "workstream_binding": self.workstreams.manifest(),
+            "interaction": self.interactions.manifest(),
         }
         base["deep_agents_full_harness_relation"] = {
             "native_execution_backends_reused": True,
@@ -103,6 +111,7 @@ class CapabilityRuntime:
                     "thread_id": binding.trace_thread_id,
                     "workstream_ref": binding.workstream_ref,
                     "agent_server_thread_id": binding.agent_thread_id,
+                    "interaction_thread_id": binding.interaction_thread_id,
                     "workspace_id": workspace_id,
                     "bridge_reasoning_owner": "chatgpt_webchat",
                 }
@@ -115,6 +124,7 @@ class CapabilityRuntime:
                     "thread_id": binding.trace_thread_id,
                     "workstream_ref": binding.workstream_ref,
                     "agent_server_thread_id": binding.agent_thread_id,
+                    "interaction_thread_id": binding.interaction_thread_id,
                     "bridge_reasoning_owner": "chatgpt_webchat",
                 }
             if tool_name in {

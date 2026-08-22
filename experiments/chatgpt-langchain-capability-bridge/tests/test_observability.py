@@ -73,6 +73,32 @@ def test_tool_failure_remains_authoritative_when_trace_teardown_fails(
     assert plane.status()["trace_error_count"] == 1
 
 
+@pytest.mark.asyncio
+async def test_async_tool_trace_wraps_awaited_execution(monkeypatch) -> None:
+    monkeypatch.setenv("LANGSMITH_TRACING", "true")
+    monkeypatch.setenv("LANGSMITH_API_KEY", "bound-but-never-printed")
+    events: list[str] = []
+
+    class AsyncTrace:
+        def __enter__(self):
+            events.append("enter")
+            return self
+
+        def __exit__(self, *_):
+            events.append("exit")
+            return None
+
+    plane = ObservabilityPlane(trace_factory=lambda *_, **__: AsyncTrace())
+
+    @plane.instrument("async-test")
+    async def tool() -> str:
+        events.append("tool")
+        return "terminal"
+
+    assert await tool() == "terminal"
+    assert events == ["enter", "tool", "exit"]
+
+
 def test_observability_groups_tools_by_workstream_thread_metadata(monkeypatch) -> None:
     monkeypatch.setenv("LANGSMITH_TRACING", "true")
     monkeypatch.setenv("LANGSMITH_API_KEY", "bound-but-never-printed")

@@ -293,6 +293,49 @@ cutover and DevSpace retirement**. See
 The one-to-one tunnel/trace diagnosis is in
 `evidence/gate-c0-call-amplification-diagnosis-20260822.json`.
 
+## Finding 15 — A2A belongs behind a provider-neutral interaction core
+
+The current AOQ role roster, leadership topology, agent count, model mix, and
+runtime placement are explicitly unstable. Building communication around those
+temporary names would make infrastructure own coordination policy. The stable
+boundary is instead a neutral interaction vocabulary: participant, endpoint,
+capability, context, correlation, message, task, artifact, receipt, delivery,
+trace, and authority references.
+
+A2A 1.0 is mature enough to own cross-runtime wire behavior and Agent Server
+already exposes native A2A routes and Agent Cards. It should therefore be the
+initial external adapter, not the canonical ZES ontology. Internal peers inside
+one LangGraph/Deep Agents runtime may continue to use native task/run/subagent
+mechanisms. Future Hermes, Codex, model-local, or deterministic adapters can
+implement the same neutral `InteractionAdapter` without changing core
+identities.
+
+WebChat requires one special edge projection: it cannot receive arbitrary
+server push into a model turn. Each workstream therefore resolves a separate
+native interaction thread; inbound Agent Server A2A writes a bounded projection
+to Agent Server Store; `workspace_open` reports pending summaries and the
+grouped `interaction` tool performs discover/send/get/cancel/inbox/ack. This is
+delivery state only, not a transcript, task engine, or conversation-memory
+database.
+
+The pinned interoperability qualification also found a representation mismatch:
+LangGraph API 0.13 advertised lower-case `jsonrpc` and emitted the older
+kind-tagged response shape while `a2a-sdk` 1.1.2 strict v1 expected its current
+protobuf form. The official SDK already contains a v0.3 compatibility transport.
+The adapter therefore normalizes the binding label and supports an explicit
+per-endpoint `legacy-v0.3` compatibility mode rather than implementing JSON-RPC
+locally or weakening all peers.
+
+The isolated native route passed Agent Card discovery, one four-event A2A task,
+inbound projection, schema/trace/authority-ref preservation, durable pull, and
+acknowledgement. Communication created no WorkItem, WorkspaceLease, execution,
+effect, or publication authority.
+
+Disposition: **USE a neutral core, use official A2A at the edge, preserve native
+internal runtime paths, and keep role/topology coordination above the substrate**.
+See `docs/provider-neutral-interaction-a2a-architecture.md` and
+`evidence/native-a2a-interoperability-qualification-20260823.json`.
+
 ## Qualification evidence to date
 
 ### Phase 0
@@ -322,6 +365,21 @@ The one-to-one tunnel/trace diagnosis is in
 - the same workstream grouped three MCP traces into one LangSmith Thread;
 - LangSmith tracing fail-open behavior passed;
 - 24-tool descriptor generation is deterministic and frozen.
+
+### Provider-neutral interaction candidate v3
+
+- one grouped `interaction` tool extends the v2 surface to 25 tools;
+- runtime and interaction state use two distinct native Agent Server threads;
+- the core contains no current role name, agent count, hierarchy, or provider;
+- endpoint callers select allowlisted aliases rather than arbitrary URLs;
+- the official A2A SDK performs Agent Card discovery, task/message transport,
+  streaming, get, and cancel;
+- Agent Server Store contains only the bounded WebChat delivery projection;
+- async MCP tracing remains fail-open and excludes argument values and outputs;
+- the v3 descriptor fingerprint is
+  `4b2cb616cd56135dc65bc06c39f0e68f1f000a36fdd95dacd8f7465fcea0747f`;
+- v3 is qualified in an isolated Agent Server and has not replaced the live v2
+  ChatGPT app/runtime.
 
 ### Direct WebChat Gate A
 
@@ -356,7 +414,9 @@ characterization questions:
 - repeated multi-workload characterization and optional fresh-chat C1 samples;
 - long-horizon cross-chat/catalog continuity;
 - production Agent Server activation with native Postgres/Redis and the
-  required license authority.
+  required license authority;
+- a second independent remote A2A peer, production peer authentication, and a
+  production internal-runtime interaction adapter.
 
 The first direct-host run is recorded in
 `evidence/direct-webchat-host-boundary-20260822.json`. It records both the
@@ -373,7 +433,9 @@ a standalone production deployment.
 
 C0 characterization and subtractive dispositions are recorded in
 `evidence/gate-c0-harness-characterization-20260822.json`. They do not authorize
-a broad DevSpace port or expansion of the 24-tool core.
+a broad DevSpace port. The later v3 interaction tool is an independent
+owner-directed product requirement with separate native qualification, not a
+C0 extraction claim.
 
 Native production readiness and the held activation sequence are recorded in
 `evidence/native-agent-server-production-readiness-20260822.json`.

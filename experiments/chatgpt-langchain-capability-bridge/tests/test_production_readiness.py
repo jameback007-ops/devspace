@@ -51,7 +51,11 @@ def test_native_config_and_readiness_gate_do_not_claim_production() -> None:
     )
 
     assert "$schema" not in config
-    assert sorted(config["graphs"]) == ["bridge_hitl", "bridge_journal"]
+    assert sorted(config["graphs"]) == [
+        "bridge_hitl",
+        "bridge_interaction",
+        "bridge_journal",
+    ]
     assert evidence["status"] == "activation_held"
     assert (
         evidence["authority_and_credentials"]["langgraph_cloud_license_key_present"]
@@ -65,15 +69,14 @@ def test_native_config_and_readiness_gate_do_not_claim_production() -> None:
 
 
 def test_production_compose_override_is_only_a_thin_private_binding() -> None:
-    overlay = (
-        ROOT / "compose.agent-server.production.override.yaml"
-    ).read_text(encoding="utf-8")
+    overlay = (ROOT / "compose.agent-server.production.override.yaml").read_text(
+        encoding="utf-8"
+    )
 
     assert "127.0.0.1:${LANGGRAPH_HOST_PORT:-2027}:8000" in overlay
     assert "${LANGGRAPH_BRIDGE_ENV_FILE:?Set LANGGRAPH_BRIDGE_ENV_FILE}" in overlay
     assert (
-        "${LANGGRAPH_PRODUCTION_ENV_FILE:?Set LANGGRAPH_PRODUCTION_ENV_FILE}"
-        in overlay
+        "${LANGGRAPH_PRODUCTION_ENV_FILE:?Set LANGGRAPH_PRODUCTION_ENV_FILE}" in overlay
     )
     assert "langgraph-postgres:" in overlay
     assert "ports: !override []" in overlay

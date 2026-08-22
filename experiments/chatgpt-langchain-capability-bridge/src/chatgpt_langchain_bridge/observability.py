@@ -59,56 +59,88 @@ class ObservabilityPlane:
 
     def instrument(self, tool_name: str) -> Callable[[F], F]:
         def decorate(func: F) -> F:
+            if inspect.iscoroutinefunction(func):
+
+                @functools.wraps(func)
+                async def async_wrapped(*args: Any, **kwargs: Any) -> Any:
+                    if not self._enabled:
+                        return await func(*args, **kwargs)
+
+                    manager = self._start_trace(tool_name, func, args, kwargs)
+                    if manager is None:
+                        return await func(*args, **kwargs)
+                    try:
+                        result = await func(*args, **kwargs)
+                    except BaseException as exc:
+                        self._finish_trace(manager, exc)
+                        raise
+                    self._finish_trace(manager)
+                    return result
+
+                return cast(F, async_wrapped)
+
             @functools.wraps(func)
             def wrapped(*args: Any, **kwargs: Any) -> Any:
                 if not self._enabled:
                     return func(*args, **kwargs)
-
-                call_arguments = self._bind_arguments(func, args, kwargs)
-                trace_context = self._resolve_context(tool_name, call_arguments)
-                metadata = {
-                    "tool_name": tool_name,
-                    "payload_values_recorded": False,
-                    **trace_context,
-                }
-                tags = ["chatgpt-owned-coding-loop", "mcp-capability-plane"]
-                if trace_context.get("thread_id"):
-                    tags.append("langsmith-thread-bound")
-
-                try:
-                    manager = self._trace_factory(
-                        f"mcp.{tool_name}",
-                        run_type="tool",
-                        inputs={
-                            "positional_argument_count": len(args),
-                            "keyword_argument_names": sorted(kwargs),
-                        },
-                        project_name=self._project,
-                        tags=tags,
-                        metadata=metadata,
-                    )
-                    manager.__enter__()
-                except Exception as exc:
-                    self._record_trace_error(exc)
+                manager = self._start_trace(tool_name, func, args, kwargs)
+                if manager is None:
                     return func(*args, **kwargs)
-
                 try:
                     result = func(*args, **kwargs)
                 except BaseException as exc:
-                    try:
-                        manager.__exit__(type(exc), exc, exc.__traceback__)
-                    except Exception as trace_exc:
-                        self._record_trace_error(trace_exc)
+                    self._finish_trace(manager, exc)
                     raise
-                try:
-                    manager.__exit__(None, None, None)
-                except Exception as exc:
-                    self._record_trace_error(exc)
+                self._finish_trace(manager)
                 return result
 
             return cast(F, wrapped)
 
         return decorate
+
+    def _start_trace(
+        self,
+        tool_name: str,
+        func: Callable[..., Any],
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> Any | None:
+        call_arguments = self._bind_arguments(func, args, kwargs)
+        trace_context = self._resolve_context(tool_name, call_arguments)
+        metadata = {
+            "tool_name": tool_name,
+            "payload_values_recorded": False,
+            **trace_context,
+        }
+        tags = ["chatgpt-owned-coding-loop", "mcp-capability-plane"]
+        if trace_context.get("thread_id"):
+            tags.append("langsmith-thread-bound")
+        try:
+            manager = self._trace_factory(
+                f"mcp.{tool_name}",
+                run_type="tool",
+                inputs={
+                    "positional_argument_count": len(args),
+                    "keyword_argument_names": sorted(kwargs),
+                },
+                project_name=self._project,
+                tags=tags,
+                metadata=metadata,
+            )
+            manager.__enter__()
+        except Exception as exc:
+            self._record_trace_error(exc)
+            return None
+        return manager
+
+    def _finish_trace(self, manager: Any, exc: BaseException | None = None) -> None:
+        try:
+            if exc is None:
+                manager.__exit__(None, None, None)
+            else:
+                manager.__exit__(type(exc), exc, exc.__traceback__)
+        except Exception as trace_exc:
+            self._record_trace_error(trace_exc)
 
     @staticmethod
     def _bind_arguments(
@@ -134,6 +166,7 @@ class ObservabilityPlane:
             "thread_id",
             "workstream_ref",
             "agent_server_thread_id",
+            "interaction_thread_id",
             "workspace_id",
             "bridge_reasoning_owner",
         }

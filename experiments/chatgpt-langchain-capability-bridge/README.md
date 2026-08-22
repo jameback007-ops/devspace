@@ -1,9 +1,9 @@
-# ChatGPT → LangChain Native Capability Bridge
+# ChatGPT → LangChain Native Capability and Interaction Bridge
 
 This experiment qualifies a specific architecture:
 
 > ChatGPT WebChat remains the reasoning and coding owner while MCP projects
-> native Deep Agents, LangGraph, Agent Server, sandbox, and observability
+> native Deep Agents, LangGraph, Agent Server, A2A, sandbox, and observability
 > capabilities into the WebChat tool loop.
 
 The bridge is not a second coding agent. The default path contains no hidden
@@ -39,10 +39,11 @@ The bridge is not a second coding agent. The default path contains no hidden
                          Studio UI
 ```
 
-## Stable v2 tool ABI
+## Stable v3 candidate tool ABI
 
-Phase 0 proved direct coding with 14 primitive tools. Version 2 preserves those
-primitives and adds ten grouped native capability tools, for 24 total:
+Phase 0 proved direct coding with 14 primitive tools. Version 2 added ten native
+capability tools. Version 3 preserves those 24 descriptors and adds one grouped
+provider-neutral interaction tool, for 25 total:
 
 ### Primitive coding
 
@@ -76,13 +77,14 @@ runtime_run            durable runs / events / interrupts / Command resume
 runtime_store          contained Agent Server Store namespace
 specialist_task        explicit allowlisted specialists + native resume
 observability_status   credential-safe LangSmith tracing state
+interaction            neutral peer discovery/message/task/inbox adapter
 ```
 
 ABI identity:
 
 ```text
-chatgpt-langchain-capability-bridge.tools.v2
-071b7d38d9205565264541ecc3eb84b5fa3681544d462eaf3511abf90e6a47b7
+chatgpt-langchain-capability-bridge.tools.v3
+4b2cb616cd56135dc65bc06c39f0e68f1f000a36fdd95dacd8f7465fcea0747f
 ```
 
 The descriptor fingerprint covers names, descriptions, schemas, and tool
@@ -100,7 +102,9 @@ The custom code is limited to:
 - capability allowlists and Agent Server Store prefixing;
 - explicit state and evidence adapters;
 - one thin WebChat workstream-ref binding to native Agent Server and LangSmith
-  thread identities.
+  thread identities;
+- provider-neutral interaction projection and endpoint allowlisting;
+- WebChat-specific durable-pull delivery state.
 
 The bridge reuses:
 
@@ -117,6 +121,9 @@ The bridge reuses:
   allowlisted assistants;
 - Agent Server `threads.search` / `threads.create` as the runtime workstream
   state owner;
+- Agent Server's native A2A endpoint and Agent Card for inbound peers;
+- the official A2A Python SDK for cross-runtime discovery, messages, tasks,
+  artifacts, streaming, and cancellation;
 - LangSmith Threads for trace grouping and LangSmith Studio for inspection;
 - a provider-neutral sandbox port, with a LangSmith Sandbox adapter included;
 - the official MCP Python SDK and OpenAI Secure MCP Tunnel client.
@@ -135,6 +142,8 @@ ChatGPT's private inference loop. Therefore:
 | WebChat workstream identity | Explicit ref bound to one native Agent Server thread and LangSmith `thread_id` |
 | Structured planning / todos | Native `WriteTodosInput` in Agent Server thread state |
 | Agent Server HITL / interrupts | Read native interrupt state and resume with `run_command` |
+| Cross-runtime peer collaboration | `interaction` through a registered adapter; initial adapter is official A2A SDK |
+| WebChat inbound peer updates | Native Agent Server A2A thread plus bounded durable-pull projection |
 | Optional specialist agents | Explicit `specialist_task`, never automatic |
 | Primitive WebChat tool approval | ChatGPT app/host permission boundary, not LangGraph middleware |
 | Deep Agent hidden system prompt | **Cannot replace ChatGPT system prompt** |
@@ -144,6 +153,38 @@ ChatGPT's private inference loop. Therefore:
 The last three remain model-loop boundaries. They may be characterized
 empirically, but they are not parity requirements and do not justify cloning a
 second model-loop harness around WebChat.
+
+## Provider-neutral interaction and A2A
+
+The interaction core does not encode the current AOQ agent count, role names,
+leadership tree, model provider, or workflow graph. It uses neutral references:
+
+```text
+participant / endpoint / capability
+interaction / context / correlation
+message / request / response / task / artifact / receipt
+delivery state / trace context / authority refs
+```
+
+A2A is the first transport adapter, not the canonical ZES ontology. Internal
+peers in one runtime may continue to use native LangGraph/Deep Agents calls;
+opaque or cross-runtime peers can use A2A. Future Hermes, Codex, model-local,
+or deterministic-service adapters can implement the same `InteractionAdapter`
+without changing the stable neutral core.
+
+For WebChat, outbound calls are direct while inbound collaboration is durable
+pull: each workstream has a separate native interaction thread, Agent Server
+Store retains only a bounded delivery projection, `workspace_open` reports
+pending updates, and `interaction` reads or acknowledges them. No online,
+thinking, idle, or hung presence is inferred.
+
+Communication never grants ZES WorkItem, WorkspaceLease, execution, effect, or
+publication authority. A2A Task IDs and LangGraph Run IDs remain native handles
+linked by metadata rather than universal product identities.
+
+See
+[`docs/provider-neutral-interaction-a2a-architecture.md`](docs/provider-neutral-interaction-a2a-architecture.md)
+and `evidence/native-a2a-interoperability-qualification-20260823.json`.
 
 ## Native workstream observability
 
@@ -184,7 +225,7 @@ See `evidence/native-workstream-observability-20260822.json`.
 `LocalShellBackend` is not a sandbox. It is allowed only inside the supplied
 read-only Docker boundary with a disposable repository mount.
 
-The v2 MCP ABI is provider-neutral. `sandbox_workspace` selects one configured
+The MCP ABI is provider-neutral. `sandbox_workspace` selects one configured
 native provider through `NativeSandboxProvider`; `process` is available only
 when that provider supplies a resumable process handle with PTY, stdin, kill,
 and reconnect semantics.
@@ -234,7 +275,7 @@ The suite covers primitive coding, path containment, HTTP MCP round trips,
 LangGraph persistence, native skills and `AGENTS.md`, binary transfer, sandbox
 provider composition, native command-handle projection, Agent Server
 threads/runs/store, native todos, native interrupt/resume, explicit
-specialists, and fail-open LangSmith tracing.
+specialists, provider-neutral interaction/A2A, and fail-open LangSmith tracing.
 
 ## Isolated coding server
 
@@ -273,6 +314,8 @@ Two deterministic no-model graphs are included for qualification:
 - `bridge_journal` proves native runs, checkpoints, and todo state;
 - `bridge_hitl` proves native `interrupt()` observation and
   `Command(resume=...)` continuation through the MCP runtime plane.
+- `bridge_interaction` accepts native Agent Server A2A messages and writes the
+  bounded WebChat delivery projection to Agent Server Store.
 
 ```bash
 uv run langgraph dev --no-browser --no-reload --port 2026
@@ -291,7 +334,7 @@ queue, deployment, or telemetry service. See
 [`docs/native-agent-server-production-readiness.md`](docs/native-agent-server-production-readiness.md)
 and `evidence/native-agent-server-production-readiness-20260822.json`.
 
-The existing Secure MCP Tunnel was also switched in place from the standalone
+The existing v2 Secure MCP Tunnel was also switched in place from the standalone
 `/mcp` route to Agent Server `/coding/mcp` without changing the app catalog or
 24-tool ABI. The already-connected `ZES_LangChain_Runtime` app remained usable:
 it read the manifest, opened a workstream, resolved one native Agent Server
@@ -335,6 +378,10 @@ LangGraph, Deep Agents, Agent Server, and LangSmith are the owner-committed
 long-term ZES direction. Remaining gates control production readiness and the
 safe retirement order of incumbent machinery; they do not reopen platform
 selection.
+
+The v3 interaction candidate is intentionally not deployed to that live app.
+It has 25 tools and therefore requires an explicit ChatGPT app rescan after the
+candidate is integrated and the runtime activation boundary is approved.
 
 Gate C uses the subtractive characterization protocol in
 [`docs/ab-benchmark-protocol.md`](docs/ab-benchmark-protocol.md). Deterministic

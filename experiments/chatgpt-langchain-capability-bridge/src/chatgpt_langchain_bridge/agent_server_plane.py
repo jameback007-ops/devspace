@@ -23,6 +23,8 @@ class AgentServerPlaneConfig:
     thread_metadata_value: str = "v2"
     workstream_metadata_key: str = "bridge_workstream_ref"
     workstream_graph_id: str = "bridge_journal"
+    interaction_graph_id: str = "bridge_interaction"
+    thread_role_metadata_key: str = "bridge_thread_role"
     max_stream_events: int = 100
     request_timeout_seconds: float = 60.0
 
@@ -56,7 +58,8 @@ class AgentServerPlaneConfig:
         allowed_assistants = tuple(
             item.strip()
             for item in os.environ.get(
-                "BRIDGE_AGENT_SERVER_ASSISTANT_IDS", "bridge_journal,bridge_hitl"
+                "BRIDGE_AGENT_SERVER_ASSISTANT_IDS",
+                "bridge_journal,bridge_hitl,bridge_interaction",
             ).split(",")
             if item.strip()
         )
@@ -89,6 +92,14 @@ class AgentServerPlaneConfig:
             workstream_graph_id=os.environ.get(
                 "BRIDGE_AGENT_SERVER_WORKSTREAM_GRAPH_ID",
                 "bridge_journal",
+            ),
+            interaction_graph_id=os.environ.get(
+                "BRIDGE_AGENT_SERVER_INTERACTION_GRAPH_ID",
+                "bridge_interaction",
+            ),
+            thread_role_metadata_key=os.environ.get(
+                "BRIDGE_AGENT_SERVER_THREAD_ROLE_METADATA_KEY",
+                "bridge_thread_role",
             ),
             max_stream_events=int(
                 os.environ.get("BRIDGE_MAX_AGENT_SERVER_STREAM_EVENTS", "100")
@@ -150,7 +161,9 @@ class AgentServerPlane:
             },
             "workstream_binding": {
                 "metadata_key": self._config.workstream_metadata_key,
-                "graph_id": self._config.workstream_graph_id,
+                "runtime_graph_id": self._config.workstream_graph_id,
+                "interaction_graph_id": self._config.interaction_graph_id,
+                "thread_role_metadata_key": self._config.thread_role_metadata_key,
                 "resolver": "threads.search_then_create",
             },
             "dedicated_agent_server_required": True,
@@ -168,10 +181,43 @@ class AgentServerPlane:
         and Studio inspection. No parallel activity database is created.
         """
 
+        runtime = self._resolve_or_create_workstream_thread(
+            workstream_ref,
+            role="runtime",
+            graph_id=self._config.workstream_graph_id,
+        )
+        interaction = self._resolve_or_create_workstream_thread(
+            workstream_ref,
+            role="interaction",
+            graph_id=self._config.interaction_graph_id,
+        )
+        return {
+            "state": runtime["state"],
+            "workstream_ref": workstream_ref,
+            "thread_id": runtime["thread_id"],
+            "status": runtime.get("status"),
+            "created_at": runtime.get("created_at"),
+            "updated_at": runtime.get("updated_at"),
+            "metadata": runtime.get("metadata", {}),
+            "interaction_thread_id": interaction["thread_id"],
+            "interaction_thread_status": interaction.get("status"),
+            "interaction_thread_updated_at": interaction.get("updated_at"),
+            "native_source": "langgraph_sdk.threads",
+        }
+
+    def _resolve_or_create_workstream_thread(
+        self,
+        workstream_ref: str,
+        *,
+        role: str,
+        graph_id: str,
+    ) -> dict[str, Any]:
         client = self._client()
+        self._require_assistant(graph_id)
         metadata = self._owned_metadata(
             {
                 self._config.workstream_metadata_key: workstream_ref,
+                self._config.thread_role_metadata_key: role,
                 "bridge_reasoning_owner": "chatgpt_webchat",
             }
         )
@@ -183,15 +229,53 @@ class AgentServerPlane:
         )
         if len(matches) > 1:
             raise BridgeError(
-                "multiple Agent Server threads match one bridge workstream_ref"
+                "multiple Agent Server threads match one bridge workstream role"
             )
         if matches:
             thread = matches[0]
             state = "resolved_existing_agent_thread"
+        elif role == "runtime":
+            legacy_metadata = self._owned_metadata(
+                {
+                    self._config.workstream_metadata_key: workstream_ref,
+                    "bridge_reasoning_owner": "chatgpt_webchat",
+                }
+            )
+            legacy_matches = client.threads.search(
+                metadata=legacy_metadata,
+                limit=3,
+                sort_by="updated_at",
+                sort_order="desc",
+            )
+            legacy_matches = [
+                candidate
+                for candidate in legacy_matches
+                if not (
+                    candidate.get("metadata", {})
+                    if isinstance(candidate, dict)
+                    else getattr(candidate, "metadata", {})
+                ).get(self._config.thread_role_metadata_key)
+            ]
+            if len(legacy_matches) > 1:
+                raise BridgeError(
+                    "multiple legacy Agent Server threads match one bridge workstream"
+                )
+            if legacy_matches:
+                legacy = json_safe(legacy_matches[0])
+                thread = client.threads.update(
+                    str(legacy["thread_id"]),
+                    metadata={**legacy.get("metadata", {}), **metadata},
+                ) or client.threads.get(str(legacy["thread_id"]))
+                state = "migrated_legacy_agent_thread"
+            else:
+                thread = client.threads.create(
+                    graph_id=graph_id,
+                    metadata=metadata,
+                )
+                state = "created_agent_thread"
         else:
-            self._require_assistant(self._config.workstream_graph_id)
             thread = client.threads.create(
-                graph_id=self._config.workstream_graph_id,
+                graph_id=graph_id,
                 metadata=metadata,
             )
             state = "created_agent_thread"
@@ -205,7 +289,6 @@ class AgentServerPlane:
             "created_at": public.get("created_at"),
             "updated_at": public.get("updated_at"),
             "metadata": public.get("metadata", {}),
-            "native_source": "langgraph_sdk.threads",
         }
 
     def thread(

@@ -33,6 +33,11 @@ subtractive capability extraction. It is not a platform-selection scorecard.
 | Private transport | OpenAI Secure MCP Tunnel | Passed direct discovery/read/write/execute/checkpoint | Long-run reconnect stress |
 | Stable route substitution | Frozen MCP ABI over standalone bridge or Agent Server custom route | Passed without ChatGPT app rescan | Production deployment failover |
 | Tunnel reconnect continuity | Explicit workstream + native thread/store/trace identities | Passed one restart with one immediate host transient before native trace | Repeated and long-horizon restart sample |
+| Provider-neutral interaction core | Participant/endpoint/capability/context/task/artifact/receipt refs | Passed unit and isolated native A2A qualification | Production internal-runtime adapter |
+| External peer interoperability | Official A2A SDK + Agent Server native A2A/Agent Card | Passed one self-contained SDK-to-Agent-Server route | Independent remote peer and auth |
+| WebChat inbound collaboration | Native interaction thread + Agent Server Store durable-pull projection | Passed inbox/ack qualification | Restart and push-notification continuity |
+| Interaction authority isolation | ZES authority refs are carried but never granted by communication | Passed schema, negative tests, and native route | Production policy/admission integration |
+| Candidate tool catalog stability | Frozen 25-tool v3 ABI | Descriptor and MCP route qualified | Explicit ChatGPT app rescan/deployment |
 | Hidden WebChat reasoning checkpoint | No public seam | Not claimable | Remains a WebChat/platform property |
 | Hidden WebChat system prompt replacement | No public seam | Not possible through MCP | Use server instructions/skills/context instead |
 | Automatic WebChat history summarization | Deep Agents model-loop middleware | Not applicable to WebChat loop | Compare WebChat continuity empirically |
@@ -85,6 +90,9 @@ Use one representative task to exercise:
 - the same workstream ref grouping MCP traces into one LangSmith Thread;
 - native todos in thread state;
 - native interrupt observation and `Command(resume)` continuation;
+- provider-neutral peer discovery/message/task/artifact semantics;
+- one native interaction thread distinct from the runtime thread;
+- WebChat durable-pull pending projection and acknowledgement;
 - explicit specialist invocation only where justified;
 - LangSmith traces without payload values.
 
@@ -160,6 +168,13 @@ DevSpace execution-scope and recovery machinery. See
 diagnosis is in
 `evidence/gate-c0-call-amplification-diagnosis-20260822.json` and supports a
 REJECT disposition for a custom dedup or activity-store clone.
+
+C0 did not authorize the later v3 interaction addition. That addition is an
+independent owner-directed product requirement and passed its own native-first
+qualification. It adds one grouped interaction tool rather than importing a
+DevSpace control plane. See
+`docs/provider-neutral-interaction-a2a-architecture.md` and
+`evidence/native-a2a-interoperability-qualification-20260823.json`.
 
 ### Gate D — continuity and catalog failure
 

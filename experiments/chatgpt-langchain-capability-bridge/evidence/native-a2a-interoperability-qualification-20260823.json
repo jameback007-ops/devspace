@@ -1,0 +1,90 @@
+{
+  "schema_version": "chatgpt-langchain-capability-bridge.native-a2a-interoperability.v1",
+  "observed_at": "2026-08-22T20:15:30Z",
+  "candidate": {
+    "tool_abi_version": "chatgpt-langchain-capability-bridge.tools.v3",
+    "tool_count": 25,
+    "fingerprint_sha256": "4b2cb616cd56135dc65bc06c39f0e68f1f000a36fdd95dacd8f7465fcea0747f",
+    "deployed_to_live_webchat_runtime": false
+  },
+  "versions": {
+    "a2a_sdk": "1.1.2",
+    "langgraph": "1.2.11",
+    "langgraph_sdk": "0.4.3",
+    "langgraph_api": "0.13.0",
+    "mcp": "2.0.0"
+  },
+  "architecture": {
+    "stable_core": "provider_neutral_interaction_refs_and_lifecycle",
+    "registered_adapters": [
+      "a2a"
+    ],
+    "current_role_or_topology_assumptions": false,
+    "custom_wire_protocol_created": false,
+    "custom_task_scheduler_created": false,
+    "custom_message_database_created": false,
+    "webchat_delivery_mode": "agent_server_store_backed_durable_pull",
+    "communication_grants_material_authority": false,
+    "a2a_task_is_zes_work_item": false,
+    "langgraph_run_is_universal_task_identity": false
+  },
+  "native_path": {
+    "source": "MCP interaction tool",
+    "outbound_adapter": "official a2a-sdk ClientFactory and transport",
+    "peer": "native LangGraph Agent Server A2A endpoint",
+    "inbound_runtime": "bridge_interaction Agent Server thread",
+    "projection_store": "native Agent Server Store",
+    "webchat_readback": "interaction inbox and ack"
+  },
+  "qualification": {
+    "agent_card_discovery": "passed",
+    "agent_card_name": "chatgpt_capability_bridge_interaction",
+    "workstream_ref": "a2a-mcp-v3-final-qualification-20260823",
+    "runtime_thread_created": true,
+    "interaction_thread_created": true,
+    "native_task_id_observed": true,
+    "native_stream_event_count": 4,
+    "outbound_projection_state": "acknowledged",
+    "inbound_projection_count_before_ack": 1,
+    "inbound_projection_state_after_ack": "acknowledged",
+    "unseen_projection_count_after_ack": 0,
+    "preserved_fields": [
+      "participant_ref",
+      "workstream_ref",
+      "context_ref",
+      "schema_ref",
+      "authority_refs",
+      "traceparent",
+      "summary"
+    ],
+    "endpoint_url_exposed_in_public_projection": false,
+    "material_authority_created": false
+  },
+  "compatibility_observation": {
+    "strict_v1_result": "incompatible_with_pinned_agent_server_wire_representation",
+    "observed_binding_spelling": "jsonrpc",
+    "sdk_registered_binding_spelling": "JSONRPC",
+    "observed_response_representation": "kind_tagged_v0_3_shape",
+    "resolution": "official_a2a_sdk_v0_3_compat_transport",
+    "custom_jsonrpc_implementation_created": false,
+    "compatibility_mode": "endpoint_scoped_legacy-v0.3"
+  },
+  "evidence_ceiling": {
+    "proven": [
+      "neutral interaction core does not encode current ZES roles",
+      "official A2A SDK outbound interoperability with native Agent Server A2A",
+      "WebChat inbound durable-pull projection and acknowledgement",
+      "communication and material authority remain separate"
+    ],
+    "not_proven": [
+      "second independent remote A2A implementation",
+      "production peer authentication and authorization",
+      "push notification delivery across runtime restart",
+      "production internal-runtime adapter",
+      "role-specific coordination policy"
+    ]
+  },
+  "secret_values_recorded": false,
+  "raw_endpoint_urls_recorded_in_public_tool_output": false,
+  "raw_message_transcript_recorded_in_evidence": false
+}
