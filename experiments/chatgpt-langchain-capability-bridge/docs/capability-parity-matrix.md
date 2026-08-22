@@ -29,6 +29,7 @@ can actually wrap ChatGPT WebChat's private model loop.
 | Observability UI | LangSmith Studio / Deployment Threads tab | Native surface available; no custom dashboard | Production deployment exposure |
 | Tool catalog stability | Frozen 24-tool v2 ABI | Descriptor test ready | ChatGPT scan/reconnect stress |
 | Private transport | OpenAI Secure MCP Tunnel | Passed direct discovery/read/write/execute/checkpoint | Long-run reconnect stress |
+| Stable route substitution | Frozen MCP ABI over standalone bridge or Agent Server custom route | Passed without ChatGPT app rescan | Production deployment failover |
 | Hidden WebChat reasoning checkpoint | No public seam | Not claimable | Remains a WebChat/platform property |
 | Hidden WebChat system prompt replacement | No public seam | Not possible through MCP | Use server instructions/skills/context instead |
 | Automatic WebChat history summarization | Deep Agents model-loop middleware | Not applicable to WebChat loop | Compare WebChat continuity empirically |
@@ -92,6 +93,13 @@ thread status/updated time come from Agent Server, tool trajectory comes from
 LangSmith Threads, and inspection uses LangSmith Studio. No execution-scope
 database, trace store, dashboard, or custom run state machine was added. See
 `evidence/native-workstream-observability-20260822.json`.
+
+The live Secure MCP Tunnel was then switched from standalone `/mcp` to Agent
+Server `/coding/mcp` while the `ZES_LangChain_Runtime` app stayed connected and
+the ABI remained identical. Direct ChatGPT calls created one native Agent
+Server thread, produced one LangSmith Thread with five traces, and stored the
+checkpoint in Agent Server Store. See
+`evidence/direct-native-agent-server-route-20260822.json`.
 
 ### Gate C — DevSpace versus bridge A/B
 

@@ -1,0 +1,88 @@
+{
+  "schema_version": "chatgpt-langchain-capability-bridge.direct-native-agent-server-route.v1",
+  "observed_at": "2026-08-22T15:22:30Z",
+  "route_switch": {
+    "from": "standalone_bridge:/mcp",
+    "to": "langgraph_agent_server:/coding/mcp",
+    "transport": "openai_secure_mcp_tunnel",
+    "app_namespace": "ZES_LangChain_Runtime",
+    "chatgpt_app_rescan_required": false,
+    "tool_abi_changed": false,
+    "tool_count": 24,
+    "tool_abi_fingerprint_sha256": "071b7d38d9205565264541ecc3eb84b5fa3681544d462eaf3511abf90e6a47b7",
+    "tunnel_doctor": {
+      "result": "ok",
+      "passed_checks": 13,
+      "skipped_checks": 1
+    },
+    "tunnel_health": "live",
+    "tunnel_readiness": "ready",
+    "tunnel_restart_count": 0,
+    "standalone_bridge_preserved": true
+  },
+  "direct_chatgpt_calls": {
+    "capability_manifest": "passed",
+    "agent_server_plane_state": "available",
+    "observability_state": "enabled",
+    "workstream_binding_state": "available",
+    "workspace_open": "passed",
+    "workspace_list": "passed",
+    "ls": "passed",
+    "runtime_thread_get": "passed",
+    "checkpoint_record": "passed",
+    "checkpoint_read": "passed",
+    "checkpoint_storage": "agent_server_store"
+  },
+  "workstream": {
+    "workstream_ref": "webchat-native-runtime-20260822",
+    "source": "webchat_supplied",
+    "binding_state": "created_agent_thread",
+    "agent_server_thread_id": "01a02a10-32e6-73c2-b606-0143b1e90d3d",
+    "agent_server_thread_count": 1,
+    "agent_server_thread_status": "idle",
+    "agent_server_metadata": {
+      "bridge_workstream_ref": "webchat-native-runtime-20260822",
+      "bridge_reasoning_owner": "chatgpt_webchat",
+      "chatgpt_langchain_bridge": "v2",
+      "graph_id": "bridge_journal"
+    }
+  },
+  "langsmith": {
+    "project_id": "f247d454-fe43-49e7-8626-ea50bde744e1",
+    "project_name": "zes-chatgpt-langchain-capability-bridge",
+    "matching_thread_count": 1,
+    "trace_count": 5,
+    "trace_names": [
+      "mcp.workspace_open",
+      "mcp.ls",
+      "mcp.runtime_thread",
+      "mcp.checkpoint_record",
+      "mcp.checkpoint_read"
+    ],
+    "trace_error_count": 0,
+    "payload_values_recorded": false,
+    "outputs_recorded": false,
+    "inspection_ui": "langsmith_studio"
+  },
+  "runtime_boundary": {
+    "agent_server_mode": "langgraph_dev_in_memory",
+    "agent_server_listener": "127.0.0.1:2026",
+    "tunnel_runtime": "host_local_systemd_transient_unit",
+    "tunnel_unit": "openai-mcp-tunnel-zes-langchain-dev.service",
+    "tunnel_health_listener": "127.0.0.1:18080",
+    "production_claimed": false,
+    "langgraph_cloud_license_key_present": false,
+    "postgres_redis_production_activation": "not_started"
+  },
+  "authority_boundaries": {
+    "reasoning_owner": "chatgpt_webchat",
+    "delegated_model_present": false,
+    "custom_activity_database_created": false,
+    "custom_trace_store_created": false,
+    "custom_dashboard_created": false,
+    "hidden_webchat_reasoning_observable": false,
+    "agent_thread_status_is_webchat_reasoning_status": false
+  },
+  "secret_values_recorded": false,
+  "raw_source_payloads_recorded": false
+}

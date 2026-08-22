@@ -156,6 +156,14 @@ run state machine was created.
 Disposition: **USE Agent Server Threads + LangSmith Threads/Studio; keep only
 the thin workstream binding seam**.
 
+The transport was subsequently switched in place from the standalone bridge to
+the Agent Server custom MCP route. Because the 24-tool descriptor ABI was
+identical, ChatGPT required no app rescan and continued through the existing
+`ZES_LangChain_Runtime` namespace. Direct calls produced one native Agent
+Server thread, one LangSmith Thread with five MCP traces, and an Agent Server
+Store checkpoint. This demonstrates that runtime substitution can remain an
+implementation detail behind the frozen MCP contract.
+
 OpenTelemetry remains a native optional infra layer rather than an immediate
 bridge dependency. Agent Server already initializes native OTel metrics in the
 qualified runtime, while LangSmith covers the current application/tool

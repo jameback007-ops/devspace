@@ -285,6 +285,14 @@ steady-state standalone activation is intentionally held until the required
 production license authority and native Postgres/Redis backing services are
 available. The bridge does not substitute a custom persistence service.
 
+The existing Secure MCP Tunnel was also switched in place from the standalone
+`/mcp` route to Agent Server `/coding/mcp` without changing the app catalog or
+24-tool ABI. The already-connected `ZES_LangChain_Runtime` app remained usable:
+it read the manifest, opened a workstream, resolved one native Agent Server
+thread, called native runtime state, and recorded/read a checkpoint from Agent
+Server Store. LangSmith grouped those direct calls into one Thread containing
+five traces. See `evidence/direct-native-agent-server-route-20260822.json`.
+
 ## Direct ChatGPT qualification
 
 The preferred transport is OpenAI Secure MCP Tunnel:

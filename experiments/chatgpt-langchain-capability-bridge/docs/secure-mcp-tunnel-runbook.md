@@ -218,6 +218,15 @@ builds, but standalone production activation remains gated on the required
 license authority plus native Postgres and Redis backing services. No
 `LANGGRAPH_CLOUD_LICENSE_KEY` was bound during this qualification.
 
+Observed route-switch result: the same user-owned tunnel and same ChatGPT app
+were moved from standalone `/mcp` to Agent Server `/coding/mcp` with no tool
+rescan because the descriptor ABI stayed identical. Tunnel doctor passed,
+health remained `live`, readiness remained `ready`, and direct ChatGPT calls
+produced one Agent Server thread plus one LangSmith Thread with five traces.
+The current qualification uses a host-local transient systemd tunnel unit so
+Agent Server can remain bound to loopback; this is deliberately not presented
+as the production service definition.
+
 ## Failure classification
 
 | Symptom | Likely layer |

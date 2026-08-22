@@ -197,6 +197,20 @@
     "custom_dashboard_created": false,
     "hidden_webchat_reasoning_observable": false
   },
+  "direct_native_agent_server_route": {
+    "status": "passed",
+    "app_namespace": "ZES_LangChain_Runtime",
+    "tunnel_target": "langgraph_agent_server:/coding/mcp",
+    "app_rescan_required": false,
+    "agent_server_plane": "available",
+    "observability": "enabled",
+    "workstream_binding": "available",
+    "native_thread_count": 1,
+    "langsmith_thread_count": 1,
+    "langsmith_trace_count": 5,
+    "checkpoint_storage": "agent_server_store",
+    "evidence_ref": "evidence/direct-native-agent-server-route-20260822.json"
+  },
   "production_agent_server_gate": {
     "development_runtime": "qualified",
     "production_image_build": "passed",
@@ -214,6 +228,7 @@
       "thin WebChat workstream binding to one native Agent Server thread",
       "LangSmith Threads grouping of MCP tool traces without a custom trace store",
       "direct ChatGPT write-capable coding through Secure MCP Tunnel",
+      "direct ChatGPT continuity while the same frozen app ABI switched from standalone bridge to Agent Server custom route",
       "Docker-isolated repair and checkpoint recovery after container restart",
       "Agent Server custom MCP route plus native thread run checkpoint and Store coexistence",
       "standalone and Agent Server image builds on Python 3.13",
