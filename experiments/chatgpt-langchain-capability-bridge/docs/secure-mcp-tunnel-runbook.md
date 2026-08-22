@@ -227,6 +227,13 @@ The current qualification uses a host-local transient systemd tunnel unit so
 Agent Server can remain bound to loopback; this is deliberately not presented
 as the production service definition.
 
+After restarting tunnel-client, treat `/readyz=ready` as tunnel readiness, not
+as proof that the ChatGPT host has already converged on the replacement poller.
+The qualification observed one immediate host-side call failure before any
+native trace, followed by normal direct calls without app rescan. For operator
+workflows, perform a bounded read-only sentinel call and retry only after
+confirming that the first failure did not reach the native tool boundary.
+
 ## Failure classification
 
 | Symptom | Likely layer |

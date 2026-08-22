@@ -164,6 +164,13 @@ Server thread, one LangSmith Thread with five MCP traces, and an Agent Server
 Store checkpoint. This demonstrates that runtime substitution can remain an
 implementation detail behind the frozen MCP contract.
 
+A tunnel-client-only restart then preserved the explicit workstream ref,
+native Agent Server thread, Agent Server Store checkpoint, and LangSmith
+Thread. The first direct call after tunnel readiness failed before a native
+trace was created, then the same app recovered without rescan and subsequent
+calls used the existing identities. This isolates a brief host/control-plane
+convergence window and prevents an overclaim of zero-gap availability.
+
 OpenTelemetry remains a native optional infra layer rather than an immediate
 bridge dependency. Agent Server already initializes native OTel metrics in the
 qualified runtime, while LangSmith covers the current application/tool

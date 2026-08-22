@@ -1,0 +1,74 @@
+{
+  "schema_version": "chatgpt-langchain-capability-bridge.direct-tunnel-reconnect-continuity.v1",
+  "observed_at": "2026-08-22T15:46:26Z",
+  "scope": {
+    "app_namespace": "ZES_LangChain_Runtime",
+    "workstream_ref": "webchat-native-runtime-20260822",
+    "tool_abi_version": "chatgpt-langchain-capability-bridge.tools.v2",
+    "tool_abi_fingerprint_sha256": "071b7d38d9205565264541ecc3eb84b5fa3681544d462eaf3511abf90e6a47b7"
+  },
+  "controlled_effect": {
+    "kind": "secure_mcp_tunnel_client_restart_only",
+    "unit": "openai-mcp-tunnel-zes-langchain-dev.service",
+    "agent_server_restarted": false,
+    "standalone_bridge_restarted": false,
+    "chatgpt_app_rescanned": false,
+    "credentials_rotated": false,
+    "pre_restart_tunnel_pid": 3925015,
+    "post_restart_tunnel_pid": 137107,
+    "post_restart_unit_restart_count": 0
+  },
+  "runtime_readback": {
+    "tunnel_health": "live",
+    "tunnel_ready": "ready",
+    "agent_server_health_ok": true,
+    "agent_server_process_preserved": true,
+    "agent_server_process_id": 3582357
+  },
+  "host_continuity": {
+    "first_direct_call_after_ready": "failed_with_host_unknown_exception_group",
+    "first_failure_reached_native_tool_trace": false,
+    "manual_app_rescan_required": false,
+    "manual_app_reconnect_required": false,
+    "subsequent_workspace_list": "passed",
+    "subsequent_workspace_open": "passed",
+    "subsequent_checkpoint_read": "passed",
+    "subsequent_runtime_thread_get": "passed",
+    "classification": "brief_host_or_control_plane_reconnect_convergence_gap"
+  },
+  "identity_continuity": {
+    "pre_restart_agent_thread_id": "01a02a10-32e6-73c2-b606-0143b1e90d3d",
+    "post_restart_agent_thread_id": "01a02a10-32e6-73c2-b606-0143b1e90d3d",
+    "same_agent_thread": true,
+    "agent_thread_status": "idle",
+    "checkpoint_storage": "agent_server_store",
+    "checkpoint_event_count": 1,
+    "checkpoint_readback_preserved": true
+  },
+  "langsmith_continuity": {
+    "pre_restart_trace_count": 6,
+    "post_restart_trace_count": 12,
+    "matching_thread_count": 1,
+    "trace_error_count": 0,
+    "trace_names": [
+      "mcp.checkpoint_read",
+      "mcp.checkpoint_record",
+      "mcp.ls",
+      "mcp.runtime_thread",
+      "mcp.workspace_open",
+      "mcp.workspace_status"
+    ],
+    "duplicate_langsmith_thread_created": false
+  },
+  "claims": {
+    "connector_recovers_without_app_rescan": true,
+    "explicit_workstream_identity_survives_tunnel_restart": true,
+    "native_agent_thread_identity_survives_tunnel_restart": true,
+    "agent_server_store_checkpoint_survives_tunnel_restart": true,
+    "zero_gap_availability_proven": false,
+    "production_high_availability_proven": false,
+    "hidden_webchat_reasoning_observable": false
+  },
+  "secret_values_recorded": false,
+  "raw_tool_payloads_recorded": false
+}

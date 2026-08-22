@@ -211,6 +211,21 @@
     "checkpoint_storage": "agent_server_store",
     "evidence_ref": "evidence/direct-native-agent-server-route-20260822.json"
   },
+  "direct_tunnel_reconnect_continuity": {
+    "status": "passed_with_brief_host_convergence_gap",
+    "tunnel_client_restart_only": true,
+    "agent_server_process_preserved": true,
+    "manual_app_rescan_required": false,
+    "first_direct_call_after_ready": "failed_before_native_trace",
+    "subsequent_direct_calls": "passed",
+    "same_agent_thread": true,
+    "checkpoint_readback_preserved": true,
+    "langsmith_matching_thread_count": 1,
+    "langsmith_trace_count_before": 6,
+    "langsmith_trace_count_after": 12,
+    "zero_gap_availability_proven": false,
+    "evidence_ref": "evidence/direct-tunnel-reconnect-continuity-20260822.json"
+  },
   "production_agent_server_gate": {
     "development_runtime": "qualified",
     "production_image_build": "passed",
@@ -229,6 +244,7 @@
       "LangSmith Threads grouping of MCP tool traces without a custom trace store",
       "direct ChatGPT write-capable coding through Secure MCP Tunnel",
       "direct ChatGPT continuity while the same frozen app ABI switched from standalone bridge to Agent Server custom route",
+      "direct app workstream, Agent Server thread, checkpoint, and LangSmith Thread continuity across one tunnel-client restart",
       "Docker-isolated repair and checkpoint recovery after container restart",
       "Agent Server custom MCP route plus native thread run checkpoint and Store coexistence",
       "standalone and Agent Server image builds on Python 3.13",
@@ -237,7 +253,7 @@
     "not_yet_proven": [
       "live persistent PTY through an entitled native sandbox provider",
       "representative DevSpace versus bridge A/B workload",
-      "long-horizon WebChat continuity and catalog reconnect recovery",
+      "repeated and long-horizon WebChat continuity beyond one tunnel-client restart",
       "production Agent Server activation with Postgres Redis and license authority"
     ]
   }

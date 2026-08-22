@@ -293,6 +293,15 @@ thread, called native runtime state, and recorded/read a checkpoint from Agent
 Server Store. LangSmith grouped those direct calls into one Thread containing
 five traces. See `evidence/direct-native-agent-server-route-20260822.json`.
 
+A controlled tunnel-client-only restart preserved the same app namespace,
+explicit workstream, native Agent Server thread, Agent Server Store checkpoint,
+and LangSmith Thread without a rescan. The first direct call made immediately
+after tunnel `ready` returned a host-side `UNKNOWN` error before any native tool
+trace was created; subsequent direct calls succeeded and appended traces to the
+existing LangSmith Thread. Reconnect continuity is therefore demonstrated, but
+zero-gap availability is not. See
+`evidence/direct-tunnel-reconnect-continuity-20260822.json`.
+
 ## Direct ChatGPT qualification
 
 The preferred transport is OpenAI Secure MCP Tunnel:

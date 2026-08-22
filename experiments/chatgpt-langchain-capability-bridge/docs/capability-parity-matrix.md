@@ -30,6 +30,7 @@ can actually wrap ChatGPT WebChat's private model loop.
 | Tool catalog stability | Frozen 24-tool v2 ABI | Descriptor test ready | ChatGPT scan/reconnect stress |
 | Private transport | OpenAI Secure MCP Tunnel | Passed direct discovery/read/write/execute/checkpoint | Long-run reconnect stress |
 | Stable route substitution | Frozen MCP ABI over standalone bridge or Agent Server custom route | Passed without ChatGPT app rescan | Production deployment failover |
+| Tunnel reconnect continuity | Explicit workstream + native thread/store/trace identities | Passed one restart with one immediate host transient before native trace | Repeated and long-horizon restart sample |
 | Hidden WebChat reasoning checkpoint | No public seam | Not claimable | Remains a WebChat/platform property |
 | Hidden WebChat system prompt replacement | No public seam | Not possible through MCP | Use server instructions/skills/context instead |
 | Automatic WebChat history summarization | Deep Agents model-loop middleware | Not applicable to WebChat loop | Compare WebChat continuity empirically |
@@ -101,6 +102,15 @@ Server thread, produced one LangSmith Thread with five traces, and stored the
 checkpoint in Agent Server Store. See
 `evidence/direct-native-agent-server-route-20260822.json`.
 
+One controlled tunnel-client-only restart then preserved the same app
+namespace, explicit workstream ref, native Agent Server thread, Agent Server
+Store checkpoint, and LangSmith Thread without a rescan. The first direct call
+made immediately after tunnel readiness failed above the native trace boundary;
+later direct calls succeeded and appended to the existing LangSmith Thread.
+Gate D therefore passes identity and recovery continuity for one restart, but
+does not prove zero-gap availability. See
+`evidence/direct-tunnel-reconnect-continuity-20260822.json`.
+
 ### Gate C — DevSpace versus bridge A/B
 
 Run the same bounded task against identical repository clones:
@@ -123,12 +133,16 @@ Compare:
 After a durable checkpoint:
 
 1. disconnect or restart the tunnel sidecar;
-2. reconnect the draft ChatGPT app;
-3. open a new chat;
-4. recover from repository state plus LangGraph/Agent Server state;
-5. verify the tool count and fingerprint remain exact.
+2. issue a bounded read-only sentinel after tunnel readiness;
+3. reconnect the draft ChatGPT app only if the namespace does not recover;
+4. open a new chat;
+5. recover from repository state plus LangGraph/Agent Server state;
+6. verify the tool count and fingerprint remain exact.
 
 This gate distinguishes transport stability from ChatGPT host catalog caching.
+One same-chat tunnel restart now passes without app rescan, with one immediate
+host-side transient before native tracing. New-chat and repeated long-horizon
+samples remain open.
 
 ### Gate E — production boundary
 
