@@ -155,7 +155,7 @@ def build_server(
         """Create or overwrite one workspace-relative file through Deep Agents."""
 
         return _require_native_success(
-            "write_file", registry.write(workspace_id, file_path, content)
+            "write_file", capabilities.write_file(workspace_id, file_path, content)
         )
 
     @server.tool(annotations=MUTATION, structured_output=True)
@@ -171,7 +171,7 @@ def build_server(
 
         return _require_native_success(
             "edit_file",
-            registry.edit(
+            capabilities.edit_file(
                 workspace_id,
                 file_path,
                 old_string,
@@ -186,7 +186,7 @@ def build_server(
         """Delete one workspace-relative file."""
 
         return _require_native_success(
-            "delete_file", registry.delete(workspace_id, file_path)
+            "delete_file", capabilities.delete_file(workspace_id, file_path)
         )
 
     @server.tool(annotations=READ_ONLY, structured_output=True)

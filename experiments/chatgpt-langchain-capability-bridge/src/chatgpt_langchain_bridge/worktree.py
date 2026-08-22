@@ -135,6 +135,10 @@ class AgentServerWorktreeBindingStore:
     @classmethod
     def from_environment(cls) -> AgentServerWorktreeBindingStore:
         url = os.environ.get("BRIDGE_AGENT_SERVER_URL", "").strip()
+        if not url and os.environ.get(
+            "BRIDGE_AGENT_SERVER_SELF", ""
+        ).strip().casefold() in {"1", "true", "yes", "on"}:
+            url = f"http://127.0.0.1:{os.environ.get('PORT', '8000')}"
         if not url:
             raise BridgeError(
                 "managed worktree binding requires BRIDGE_AGENT_SERVER_URL"

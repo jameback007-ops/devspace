@@ -103,10 +103,14 @@ class DurableMaterialConfig:
         enabled = os.environ.get(
             "BRIDGE_DURABLE_MATERIAL_OPERATIONS", "false"
         ).strip().casefold() in {"1", "true", "yes", "on"}
+        agent_server_url = os.environ.get("BRIDGE_AGENT_SERVER_URL", "").strip()
+        if not agent_server_url and os.environ.get(
+            "BRIDGE_AGENT_SERVER_SELF", ""
+        ).strip().casefold() in {"1", "true", "yes", "on"}:
+            agent_server_url = f"http://127.0.0.1:{os.environ.get('PORT', '8000')}"
         return cls(
             enabled=enabled,
-            agent_server_url=os.environ.get("BRIDGE_AGENT_SERVER_URL", "").strip()
-            or None,
+            agent_server_url=agent_server_url or None,
             assistant_id=os.environ.get(
                 "BRIDGE_MATERIAL_OPERATION_ASSISTANT_ID",
                 "bridge_material_operation",

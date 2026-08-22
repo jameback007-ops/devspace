@@ -55,6 +55,7 @@ def test_native_config_and_readiness_gate_do_not_claim_production() -> None:
         "bridge_hitl",
         "bridge_interaction",
         "bridge_journal",
+        "bridge_material_operation",
     ]
     assert evidence["status"] == "activation_held"
     assert (

@@ -27,7 +27,7 @@ licensed LangGraph Agent Server image
 
 ### Ready
 
-- `langgraph.json` validates with two graphs and the custom HTTP app.
+- `langgraph.json` validates with four native graphs and the custom HTTP app.
 - Python 3.13 Wolfi production image builds successfully.
 - Image runtime edition is `postgres`; API variant is `licensed`.
 - Native image entrypoint contains the core API and Uvicorn lifecycle.

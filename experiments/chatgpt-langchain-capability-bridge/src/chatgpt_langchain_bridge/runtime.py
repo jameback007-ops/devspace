@@ -5,6 +5,7 @@ from typing import Any, Mapping
 from .agent_server_plane import AgentServerPlane
 from .artifact_plane import ArtifactPlane
 from .context_plane import ContextPlane
+from .durability import DurableMaterialExecutor
 from .interaction import InteractionPlane
 from .observability import ObservabilityPlane
 from .process_plane import ProcessPlane
@@ -12,6 +13,7 @@ from .registry import WorkspaceRegistry
 from .sandbox_plane import SandboxPlane
 from .state import Journal
 from .workstream import WorkstreamBindingPlane
+from .worktree import WorktreeBindingManager
 
 
 class CapabilityRuntime:
@@ -30,6 +32,8 @@ class CapabilityRuntime:
         observability: ObservabilityPlane | None = None,
         workstreams: WorkstreamBindingPlane | None = None,
         interactions: InteractionPlane | None = None,
+        worktrees: WorktreeBindingManager | None = None,
+        material: DurableMaterialExecutor | None = None,
     ) -> None:
         self.registry = registry
         self.journal = journal
@@ -44,6 +48,8 @@ class CapabilityRuntime:
             registry,
             self.agent_server,
         )
+        self.worktrees = worktrees or WorktreeBindingManager.from_environment()
+        self.material = material or DurableMaterialExecutor(registry)
         self.observability.set_context_resolver(self._trace_context)
 
     def open_workspace(
@@ -61,7 +67,14 @@ class CapabilityRuntime:
         """
 
         binding = self.workstreams.bind(thread_id)
-        workspace = self.registry.open(path, workstream=binding)
+        if self.worktrees.is_reference(path):
+            worktree_binding = self.worktrees.resolve(path, binding.workstream_ref)
+            workspace = self.registry.open_worktree(
+                worktree_binding,
+                workstream=binding,
+            )
+        else:
+            workspace = self.registry.open(path, workstream=binding)
         bootstrap = self.context.bootstrap(
             workspace["workspace_id"], target_path=target_path
         )
@@ -70,6 +83,30 @@ class CapabilityRuntime:
         bootstrap["peer_updates"] = self.interactions.bootstrap(binding)
         bootstrap["durable_state"] = self._durable_state_pointer(binding.workstream_ref)
         return {**workspace, "bootstrap": bootstrap}
+
+    def write_file(
+        self, workspace_id: str, file_path: str, content: str
+    ) -> dict[str, Any]:
+        return self.material.write_file(workspace_id, file_path, content)
+
+    def edit_file(
+        self,
+        workspace_id: str,
+        file_path: str,
+        old_string: str,
+        new_string: str,
+        replace_all: bool = False,
+    ) -> dict[str, Any]:
+        return self.material.edit_file(
+            workspace_id,
+            file_path,
+            old_string,
+            new_string,
+            replace_all,
+        )
+
+    def delete_file(self, workspace_id: str, file_path: str) -> dict[str, Any]:
+        return self.material.delete_file(workspace_id, file_path)
 
     def manifest(self) -> dict[str, Any]:
         base = self.registry.capability_manifest()
@@ -82,6 +119,8 @@ class CapabilityRuntime:
             "observability": self.observability.status(),
             "workstream_binding": self.workstreams.manifest(),
             "interaction": self.interactions.manifest(),
+            "worktree_binding": self.worktrees.manifest(),
+            "material_durability": self.material.manifest(),
         }
         base["deep_agents_full_harness_relation"] = {
             "native_execution_backends_reused": True,

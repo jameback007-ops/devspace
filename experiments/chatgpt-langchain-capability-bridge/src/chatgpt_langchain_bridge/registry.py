@@ -245,9 +245,10 @@ class WorkspaceRegistry:
             if existing_id is not None:
                 return self._workspaces[existing_id].public_view()
 
-            workspace_id = "ws_" + hashlib.sha256(
-                f"{root}\0{workstream_ref}".encode()
-            ).hexdigest()[:12]
+            workspace_id = (
+                "ws_"
+                + hashlib.sha256(f"{root}\0{workstream_ref}".encode()).hexdigest()[:12]
+            )
             safe_environment = dict(self._config.safe_environment)
             safe_environment.update(
                 {
