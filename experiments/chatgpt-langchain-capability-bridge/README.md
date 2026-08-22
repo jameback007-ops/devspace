@@ -1,70 +1,194 @@
-# ChatGPT → LangChain Coding Capability Bridge
+# ChatGPT → LangChain Native Capability Bridge
 
-This experiment tests one narrow architecture question:
+This experiment qualifies a specific architecture:
 
-> Can ChatGPT WebChat remain the reasoning and coding owner while MCP gives it
-> direct, near-DevSpace coding capability implemented primarily by native
-> LangChain ecosystem components?
+> ChatGPT WebChat remains the reasoning and coding owner while MCP projects
+> native Deep Agents, LangGraph, Agent Server, sandbox, and observability
+> capabilities into the WebChat tool loop.
 
-It deliberately does **not** invoke a second LLM or a Deep Agent coding loop.
-ChatGPT calls primitive tools itself:
+The bridge is not a second coding agent. The default path contains no hidden
+`create_deep_agent`, `model.invoke`, or delegated coding call.
 
 ```text
-ChatGPT WebChat (reasoning owner)
-        │
-        │ MCP tool calls
-        ▼
-Official MCP Python SDK
-        │
-        ├── Deep Agents LocalShellBackend
-        │     filesystem + search + edit + shell
-        │
-        └── LangGraph SqliteSaver
-              durable tool-plane checkpoints
+                         ChatGPT WebChat
+                    reasoning / coding owner
+                              │
+                              │ stable MCP ABI
+                              ▼
+                  WebChat-consumable capability plane
+       ┌──────────────────────┼────────────────────────┐
+       │                      │                        │
+ Deep Agents             LangGraph /              Native sandbox
+ backends                Agent Server             provider port
+       │                      │                        │
+ files/search/edit       checkpoint/store         isolated execute
+ skills/memory           threads/runs             optional PTY/resume
+ artifact transfer       optional specialists     provider lifecycle
+       └──────────────────────┼────────────────────────┘
+                              │
+                           LangSmith
+                     bounded tool observability
 ```
 
-## Why this is native-first
+## Stable v2 tool ABI
 
-The adapter contains only transport, workspace selection, path normalization,
-and stable tool schemas. It delegates implementation to:
+Phase 0 proved direct coding with 14 primitive tools. Version 2 preserves those
+primitives and adds ten grouped native capability tools, for 24 total:
 
-- `deepagents.LocalShellBackend` for `ls`, `read`, `write`, `edit`, `delete`,
-  `glob`, `grep`, and `execute`;
-- LangGraph `StateGraph` + `SqliteSaver` for durable checkpoint history;
-- the official MCP Python SDK for streamable HTTP transport.
+### Primitive coding
 
-Git, worktrees, package installation, tests, builds, and language CLIs are
-available through the native shell primitive rather than reimplemented as a
-large custom tool suite.
+```text
+capability_manifest
+workspace_open
+workspace_status
+workspace_list
+ls
+read_file
+write_file
+edit_file
+delete_file
+glob
+grep
+execute
+checkpoint_record
+checkpoint_read
+```
+
+### Native capability planes
+
+```text
+context_discover       Deep Agents SkillsMiddleware + MemoryMiddleware
+context_read           progressive skill / AGENTS.md disclosure
+artifact_transfer      BackendProtocol upload_files / download_files
+sandbox_workspace      provider-neutral native sandbox lifecycle
+process                optional native PTY / stdin / cancel / reconnect
+runtime_thread         threads / state / checkpoint history / native todos
+runtime_run            durable runs / events / interrupts / Command resume
+runtime_store          contained Agent Server Store namespace
+specialist_task        explicit allowlisted specialists + native resume
+observability_status   credential-safe LangSmith tracing state
+```
+
+ABI identity:
+
+```text
+chatgpt-langchain-capability-bridge.tools.v2
+071b7d38d9205565264541ecc3eb84b5fa3681544d462eaf3511abf90e6a47b7
+```
+
+The descriptor fingerprint covers names, descriptions, schemas, and tool
+annotations. Implementations and native providers may change behind this ABI;
+the qualification surface must not drift without an explicit new ABI version
+and ChatGPT app rescan.
+
+## Native-first implementation
+
+The custom code is limited to:
+
+- MCP transport and stable schemas;
+- workspace/provider selection and path containment;
+- bounded binary and process-output projection;
+- capability allowlists and Agent Server Store prefixing;
+- explicit state and evidence adapters.
+
+The bridge reuses:
+
+- Deep Agents `LocalShellBackend` for local container qualification;
+- Deep Agents backend protocol for file, search, edit, execute, and transfer;
+- Deep Agents `SkillsMiddleware` and `MemoryMiddleware` for native skills and
+  `AGENTS.md` loading;
+- LangChain `TodoListMiddleware`'s canonical `WriteTodosInput` schema, stored
+  directly in Agent Server thread state rather than in a bridge planner;
+- native LangGraph `interrupt()` plus Agent Server `Command(resume=...)` for
+  HITL continuation without replaying the effect in MCP;
+- LangGraph SQLite checkpointing in standalone mode;
+- Agent Server threads, runs, checkpoint history, Store, and optional
+  allowlisted assistants;
+- a provider-neutral sandbox port, with a LangSmith Sandbox adapter included;
+- the official MCP Python SDK and OpenAI Secure MCP Tunnel client.
+
+## Exact WebChat boundary
+
+Native capabilities can be exposed to WebChat, but Deep Agents cannot wrap
+ChatGPT's private inference loop. Therefore:
+
+| Capability | WebChat projection |
+|---|---|
+| Skills metadata and full `SKILL.md` | Explicit `context_discover` / `context_read` |
+| `AGENTS.md` project memory | Explicit ordered memory discovery and read |
+| Files, search, edits, execution | Direct primitive calls |
+| LangGraph state and Agent Server services | Direct typed calls |
+| Structured planning / todos | Native `WriteTodosInput` in Agent Server thread state |
+| Agent Server HITL / interrupts | Read native interrupt state and resume with `run_command` |
+| Optional specialist agents | Explicit `specialist_task`, never automatic |
+| Primitive WebChat tool approval | ChatGPT app/host permission boundary, not LangGraph middleware |
+| Deep Agent hidden system prompt | **Cannot replace ChatGPT system prompt** |
+| Deep Agent automatic history summarization | **Cannot summarize hidden WebChat history** |
+| Deep Agent middleware around every model turn | **Not installed around WebChat** |
+
+The last three remain model-loop differences and must be measured in the A/B
+comparison rather than described as solved.
+
+## Sandbox and persistent process state
+
+`LocalShellBackend` is not a sandbox. It is allowed only inside the supplied
+read-only Docker boundary with a disposable repository mount.
+
+The v2 MCP ABI is provider-neutral. `sandbox_workspace` selects one configured
+native provider through `NativeSandboxProvider`; `process` is available only
+when that provider supplies a resumable process handle with PTY, stdin, kill,
+and reconnect semantics.
+
+The included LangSmith Sandbox adapter is structurally qualified, but the
+currently bound LangSmith workspace returned
+`SandboxAuthenticationError: Sandbox feature is not enabled for this
+organization`. No alternative provider credential was found on this VPS.
+Consequently:
+
+- provider-neutral sandbox composition: **implemented and tested**;
+- LangSmith Sandbox live entitlement: **blocked externally**;
+- persistent PTY live qualification: **still open**;
+- direct WebChat coding through the isolated Docker backend: **not blocked**.
+
+See `evidence/langsmith-sandbox-entitlement-probe-20260822.json`.
 
 ## Security boundary
 
-`LocalShellBackend` is explicitly unrestricted and is **not a sandbox**. The
-prototype must therefore run inside the supplied Docker container or a native
-Deep Agents remote sandbox provider. Do not expose the host-local process as a
-remote write-capable MCP server.
+The standalone qualification container uses:
 
-The container should mount only an isolated test repository. The initial
-compose file binds the MCP port to loopback and does not configure public auth.
+- read-only root filesystem;
+- all Linux capabilities dropped;
+- `no-new-privileges`;
+- PID limit and private Compose network;
+- only one disposable repository plus a state volume mounted;
+- no ZES checkout, VPS root, SSH directory, or provider key mounted.
 
-## Run tests
+Agent Server must be a dedicated bridge runtime. Its assistant IDs are
+allowlisted, and Store access is prefixed under the configured bridge namespace.
+Optional specialists are also alias-to-assistant allowlisted.
+
+The tunnel sidecar receives only the OpenAI tunnel runtime credential file. The
+bridge container does not receive those credentials.
+
+## Local validation
 
 ```bash
-uv sync --extra test --python 3.13
+uv sync --extra test --extra agent-server --python 3.13
+uv lock --check
+uv pip check
 uv run pytest
+uv run python -m compileall -q src
 ```
 
-The suite verifies:
+The suite covers primitive coding, path containment, HTTP MCP round trips,
+LangGraph persistence, native skills and `AGENTS.md`, binary transfer, sandbox
+provider composition, native command-handle projection, Agent Server
+threads/runs/store, native todos, native interrupt/resume, explicit
+specialists, and fail-open LangSmith tracing.
 
-1. native Deep Agents filesystem/search/edit/shell use;
-2. Git-visible source mutation and execution;
-3. path-containment checks for file tools;
-4. LangGraph checkpoint persistence after reopening SQLite;
-5. a real streamable-HTTP MCP initialize/list/call round trip.
+## Isolated coding server
 
-## Run the isolated coding smoke server
-
-Prepare a disposable failing repository:
+Prepare a disposable failing repository and start the bridge:
 
 ```bash
 SMOKE_REPO="$(uv run python scripts/prepare_smoke_workspace.py)"
@@ -73,83 +197,55 @@ docker compose up --build -d
 uv run python scripts/probe_mcp.py
 ```
 
-The probe intentionally leaves the failing source untouched. The decisive test
-is performed from ChatGPT after connecting the MCP endpoint:
+The decisive ChatGPT sequence remains primitive and model-owned:
 
-1. call `workspace_open` for `/workspace`;
-2. inspect the repository with `ls`, `read_file`, `glob`, and `grep`;
-3. run the failing tests with `execute`;
-4. diagnose and repair the defect with `edit_file`;
-5. rerun tests, inspect `git diff`, and record a checkpoint.
-
-No `agent.run`, `delegate`, or hidden model call is present.
-
-The deterministic capability qualification uses the same MCP calls to exercise
-the complete repair path without introducing another model:
-
-```bash
-uv run python scripts/qualify_coding_fixture.py \
-  --url http://127.0.0.1:8765/mcp \
-  --workspace /workspace
+```text
+workspace_open
+→ context_discover / context_read when relevant
+→ ls / glob / read_file / grep
+→ execute(pytest)
+→ edit_file
+→ execute(pytest)
+→ execute(git diff --check && git diff)
+→ checkpoint_record
 ```
 
-This proves the tool plane. The separate WebChat qualification still matters
-because only the ChatGPT host can prove model-facing tool discovery and actual
-tool-selection behavior.
+## Agent Server seam
 
-For a model-owner rehearsal without an installed ChatGPT app, `call_tool.py`
-invokes exactly one primitive per process. This lets the current ChatGPT session
-choose the sequence and interpret each result while the final direct-connector
-gate remains pending:
+The same MCP application mounts at `/coding/mcp` as an Agent Server custom
+route. Agent Server retains its native health, threads, runs, checkpoint,
+assistants, Store, queue, and deployment surfaces. The built-in graph-as-tool
+MCP route is not used as the primary benchmark because that would transfer the
+coding loop to a graph-owned model.
 
-```bash
-uv run python scripts/call_tool.py workspace_open '{"path":"/workspace"}' \
-  --url http://127.0.0.1:8765/mcp
-```
+Two deterministic no-model graphs are included for qualification:
 
-## Run inside native Agent Server
-
-The same MCP application can be inserted as an Agent Server custom route while
-Agent Server retains its native runs, threads, assistants, store, auth, and
-deployment APIs:
+- `bridge_journal` proves native runs, checkpoints, and todo state;
+- `bridge_hitl` proves native `interrupt()` observation and
+  `Command(resume=...)` continuation through the MCP runtime plane.
 
 ```bash
-mkdir -p /tmp/chatgpt-langchain-agent-server-workspace
-uv sync --extra agent-server --python 3.13
 uv run langgraph dev --no-browser --no-reload --port 2026
-```
-
-The primitive MCP route is then `http://127.0.0.1:2026/coding/mcp`; Agent
-Server's own health endpoint remains `http://127.0.0.1:2026/ok`. The built-in
-Agent Server `/mcp` route is not used for this benchmark because it exposes a
-whole graph as a tool rather than letting ChatGPT own each coding decision.
-
-Run the combined qualification probe while the server is active:
-
-```bash
 uv run python scripts/probe_agent_server.py
 ```
 
-It verifies one native Agent Server thread/run/checkpoint and one primitive MCP
-checkpoint stored through Agent Server's own Store from the custom route.
+## Direct ChatGPT qualification
 
-The environment file is non-secret and exists only to keep `langgraph.json`
-portable across `dev`, `build`, and `up`. Deployment credentials belong in the
-deployment environment, not this file.
+The preferred transport is OpenAI Secure MCP Tunnel:
 
-## Current evidence ceiling
+```text
+ChatGPT
+  ↕ OpenAI tunnel control plane
+tunnel-client sidecar
+  ↕ private Compose network
+bridge:8765/mcp
+```
 
-The local prototype proves the native backend composition and MCP transport.
-It does not yet prove ChatGPT host catalog stability, remote authentication,
-persistent PTY/process continuation, or long-horizon WebChat continuity. Those
-are explicit next gates rather than assumed properties.
+The runtime credentials already live outside the repository in a root-only
+environment file. `compose.tunnel.yaml` reads that file through
+`TUNNEL_RUNTIME_ENV_FILE` and never exposes the bridge publicly.
 
-See [`docs/research-findings.md`](docs/research-findings.md) and
-[`docs/capability-parity-matrix.md`](docs/capability-parity-matrix.md).
-The exact local qualification receipts and evidence ceiling are recorded in
-[`evidence/qualification-summary.json`](evidence/qualification-summary.json).
-
-For the actual private WebChat connection gate, use
-[`docs/secure-mcp-tunnel-runbook.md`](docs/secure-mcp-tunnel-runbook.md). It
-adds the official OpenAI `tunnel-client` as a sidecar and leaves the MCP server
-on the private Docker network.
+Use [`docs/secure-mcp-tunnel-runbook.md`](docs/secure-mcp-tunnel-runbook.md) for
+Gate A. Migration remains blocked until the representative A/B and continuity
+gates in [`docs/capability-parity-matrix.md`](docs/capability-parity-matrix.md)
+pass.

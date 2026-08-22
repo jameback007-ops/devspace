@@ -1,0 +1,45 @@
+{
+  "schema_version": "chatgpt-langchain-capability-bridge.standalone-docker-qualification.v1",
+  "observed_at": "2026-08-22T13:25:00Z",
+  "tool_abi": {
+    "version": "chatgpt-langchain-capability-bridge.tools.v2",
+    "tool_count": 24,
+    "fingerprint_sha256": "071b7d38d9205565264541ecc3eb84b5fa3681544d462eaf3511abf90e6a47b7"
+  },
+  "coding_fixture": {
+    "initial_test_exit_code": 1,
+    "repaired_test_exit_code": 0,
+    "repaired_test_summary": "2 passed in 0.01s",
+    "git_diff_check_exit_code": 0,
+    "bootstrap_instruction_paths": [
+      "AGENTS.md"
+    ],
+    "bootstrap_skill_names": [
+      "fixture-coding"
+    ]
+  },
+  "restart_continuity": {
+    "state": "present",
+    "storage": "langgraph_sqlite_checkpoint",
+    "total_event_count": 1,
+    "retained_event_count": 1,
+    "validation_state": "passed"
+  },
+  "container_security": {
+    "read_only_root_filesystem": true,
+    "linux_capabilities_dropped": [
+      "ALL"
+    ],
+    "security_options": [
+      "no-new-privileges:true"
+    ],
+    "pid_limit": 512,
+    "mount_targets": [
+      "/state",
+      "/workspace"
+    ],
+    "host_zes_checkout_mounted": false,
+    "host_root_ssh_mounted": false
+  },
+  "secret_values_recorded": false
+}

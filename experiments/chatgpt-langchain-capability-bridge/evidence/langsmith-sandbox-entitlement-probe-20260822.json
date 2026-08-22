@@ -1,0 +1,28 @@
+{
+  "schema_version": "chatgpt-langchain-capability-bridge.langsmith-sandbox-probe.v1",
+  "observed_at": "2026-08-22T11:57:00Z",
+  "operation": "SandboxClient.list_sandboxes and list_snapshots",
+  "credential_binding": {
+    "source_ref": "/etc/devspace/chatgpt-langchain.env",
+    "secret_value_recorded": false,
+    "secret_digest_recorded": false,
+    "endpoint_region": "apac"
+  },
+  "result": {
+    "status": "blocked_external_entitlement",
+    "exception_type": "SandboxAuthenticationError",
+    "safe_message": "Sandbox feature is not enabled for this organization"
+  },
+  "claims": {
+    "langsmith_general_credential_invalid": false,
+    "langsmith_sandbox_live_available": false,
+    "provider_neutral_adapter_invalid": false,
+    "persistent_pty_live_qualified": false,
+    "direct_docker_isolated_webchat_gate_blocked": false
+  },
+  "next_actions": [
+    "enable LangSmith Sandbox for the organization, or",
+    "bind another supported native Deep Agents sandbox provider behind NativeSandboxProvider",
+    "do not implement a custom host PTY as an automatic substitute"
+  ]
+}

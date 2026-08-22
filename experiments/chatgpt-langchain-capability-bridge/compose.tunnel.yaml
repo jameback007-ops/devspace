@@ -6,9 +6,9 @@ services:
     depends_on:
       bridge:
         condition: service_healthy
+    env_file:
+      - ${TUNNEL_RUNTIME_ENV_FILE:-/etc/tunnel-client/zes-agent-runtime.secret.env}
     environment:
-      CONTROL_PLANE_TUNNEL_ID: ${CONTROL_PLANE_TUNNEL_ID:?Create a tunnel in OpenAI Platform tunnel settings}
-      CONTROL_PLANE_API_KEY: ${CONTROL_PLANE_API_KEY:?Create a runtime API key with Tunnels Read + Use}
       MCP_SERVER_URL: url=http://bridge:8765/mcp,channel=main
       MCP_STARTUP_WAIT_TIMEOUT: 30s
       HEALTH_LISTEN_ADDR: 0.0.0.0:8080

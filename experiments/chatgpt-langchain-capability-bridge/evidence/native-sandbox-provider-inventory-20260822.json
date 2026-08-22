@@ -1,0 +1,45 @@
+{
+  "schema_version": "chatgpt-langchain-capability-bridge.native-sandbox-provider-inventory.v1",
+  "observed_at": "2026-08-22T11:59:00Z",
+  "inspection_scope": [
+    "/etc/devspace",
+    "/etc/tunnel-client",
+    "/srv/zes-aoq/aoq01-e77671a/state/secrets/providers",
+    "/root/.config",
+    "executable PATH"
+  ],
+  "secret_values_read_into_evidence": false,
+  "providers": {
+    "langsmith": {
+      "credential_binding_present": true,
+      "client_library_present": true,
+      "live_entitlement": "blocked_external_entitlement"
+    },
+    "daytona": {
+      "credential_binding_present": false,
+      "cli_present": false
+    },
+    "modal": {
+      "credential_binding_present": false,
+      "cli_present": false
+    },
+    "runloop": {
+      "credential_binding_present": false,
+      "cli_present": false
+    },
+    "vercel": {
+      "credential_binding_present": false,
+      "cli_present": false
+    },
+    "e2b": {
+      "credential_binding_present": false,
+      "cli_present": false
+    },
+    "aws_agentcore": {
+      "credential_binding_present": false,
+      "cli_present": false,
+      "aws_profile_present": false
+    }
+  },
+  "disposition": "retain provider-neutral ABI; no live provider is silently selected"
+}

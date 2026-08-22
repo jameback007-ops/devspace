@@ -53,6 +53,19 @@ def _structured(result: Any) -> Any:
 @pytest.mark.asyncio
 async def test_streamable_http_tool_roundtrip(tmp_path: Path) -> None:
     (tmp_path / "hello.txt").write_text("before\n", encoding="utf-8")
+    (tmp_path / "AGENTS.md").write_text(
+        "# Fixture\nUse the smallest valid edit.\n", encoding="utf-8"
+    )
+    skill_dir = tmp_path / ".agents" / "skills" / "fixture-coding"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\n"
+        "name: fixture-coding\n"
+        "description: Repair the fixture with validation\n"
+        "---\n"
+        "# Fixture coding\n",
+        encoding="utf-8",
+    )
     port = _free_port()
     env = os.environ.copy()
     env.update(
@@ -88,9 +101,19 @@ async def test_streamable_http_tool_roundtrip(tmp_path: Path) -> None:
             } <= names
 
             opened = _structured(
-                await session.call_tool("workspace_open", {"path": str(tmp_path)})
+                await session.call_tool(
+                    "workspace_open",
+                    {
+                        "path": str(tmp_path),
+                        "target_path": "hello.txt",
+                        "thread_id": "transport-test",
+                    },
+                )
             )
             workspace_id = opened["workspace_id"]
+            assert opened["bootstrap"]["instructions"][0]["path"] == "AGENTS.md"
+            assert opened["bootstrap"]["skills"][0]["name"] == "fixture-coding"
+            assert opened["bootstrap"]["durable_state"]["state"] == "empty"
 
             edited = _structured(
                 await session.call_tool(

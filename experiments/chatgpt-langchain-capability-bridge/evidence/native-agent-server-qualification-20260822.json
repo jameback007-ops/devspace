@@ -1,0 +1,43 @@
+{
+  "schema_version": "chatgpt-langchain-capability-bridge.native-agent-server-qualification.v1",
+  "observed_at": "2026-08-22T13:21:14Z",
+  "runtime": {
+    "mode": "langgraph_dev",
+    "url": "http://127.0.0.1:2026",
+    "custom_mcp_route": "/coding/mcp",
+    "health_ok": true
+  },
+  "tool_abi": {
+    "version": "chatgpt-langchain-capability-bridge.tools.v2",
+    "tool_count": 24,
+    "fingerprint_sha256": "071b7d38d9205565264541ecc3eb84b5fa3681544d462eaf3511abf90e6a47b7"
+  },
+  "native_todos": {
+    "schema": "langchain.agents.middleware.todo.WriteTodosInput",
+    "write": "passed",
+    "read": "passed",
+    "storage": "agent_server_thread_state",
+    "shadow_planner_created": false
+  },
+  "native_hitl": {
+    "graph_id": "bridge_hitl",
+    "model_present": false,
+    "interrupt_observed": true,
+    "interrupt_count": 1,
+    "resume_transport": "Agent Server run command payload",
+    "resume_payload_kind": "Command(resume=HITLResponse)",
+    "resume_run_stream_resumable": true,
+    "terminal_status": "resumed",
+    "interrupted_effect_replayed_by_bridge": false
+  },
+  "native_runtime": {
+    "thread_create": "passed",
+    "run_invoke": "passed",
+    "run_join": "passed",
+    "store_put_get": "passed",
+    "checkpoint_storage": "agent_server_store",
+    "thread_metadata_boundary": "passed"
+  },
+  "secret_values_recorded": false,
+  "raw_tool_payloads_recorded": false
+}

@@ -2,5 +2,10 @@
 .langgraph_api/
 .pytest_cache/
 .venv/
+.env
+.env.local
+.env.tunnel
+.env.capabilities
+*.secret.env
 **/__pycache__/
 *.pyc

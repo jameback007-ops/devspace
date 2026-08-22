@@ -9,6 +9,12 @@ from typing import Any
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 
+from chatgpt_langchain_bridge.tool_abi import (
+    ABI_FINGERPRINT_SHA256,
+    ABI_TOOL_NAMES,
+    ABI_VERSION,
+)
+
 
 def structured(result: Any) -> Any:
     value = getattr(result, "structured_content", None)
@@ -38,8 +44,28 @@ async def qualify_once(
     ):
         await session.initialize()
         tools = await session.list_tools()
-        opened = await call(session, "workspace_open", {"path": workspace})
+        tool_names = tuple(sorted(tool.name for tool in tools.tools))
+        if tool_names != ABI_TOOL_NAMES:
+            raise AssertionError(f"tool ABI mismatch: {tool_names!r}")
+        manifest = await call(session, "capability_manifest", {})
+        if manifest["tool_abi"]["version"] != ABI_VERSION:
+            raise AssertionError("tool ABI version mismatch")
+        if manifest["tool_abi"]["fingerprint_sha256"] != ABI_FINGERPRINT_SHA256:
+            raise AssertionError("tool ABI fingerprint mismatch")
+
+        opened = await call(
+            session,
+            "workspace_open",
+            {
+                "path": workspace,
+                "target_path": "src/coding_smoke/pricing.py",
+                "thread_id": thread_id,
+            },
+        )
         workspace_id = opened["workspace_id"]
+        bootstrap = opened["bootstrap"]
+        if bootstrap["durable_state"]["state"] not in {"empty", "present"}:
+            raise AssertionError("workspace bootstrap omitted durable-state pointer")
 
         source_before = await call(
             session,
@@ -106,9 +132,30 @@ async def qualify_once(
                 "refs": ["pytest:2-passed", "git-diff-check:passed"],
             },
         )
+        resumed = await call(
+            session,
+            "workspace_open",
+            {
+                "path": workspace,
+                "target_path": "src/coding_smoke/pricing.py",
+                "thread_id": thread_id,
+            },
+        )
+        if resumed["bootstrap"]["durable_state"]["event_count"] < 1:
+            raise AssertionError(
+                "workspace bootstrap did not project durable checkpoint"
+            )
         return {
             "tool_count": len(tools.tools),
+            "tool_abi": {
+                "version": ABI_VERSION,
+                "fingerprint_sha256": ABI_FINGERPRINT_SHA256,
+            },
             "workspace": opened,
+            "bootstrap_instruction_paths": [
+                item["path"] for item in bootstrap["instructions"]
+            ],
+            "bootstrap_skill_names": [item["name"] for item in bootstrap["skills"]],
             "source_before": source_before,
             "failing_test_exit_code": failing["exit_code"],
             "edit": edited,
@@ -116,6 +163,7 @@ async def qualify_once(
             "passing_test_output": passing["output"],
             "git_diff": diff,
             "checkpoint": checkpoint,
+            "resumed_durable_state": resumed["bootstrap"]["durable_state"],
         }
 
 

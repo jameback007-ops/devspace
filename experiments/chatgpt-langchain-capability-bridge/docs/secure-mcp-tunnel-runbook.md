@@ -1,48 +1,103 @@
-# Secure MCP Tunnel qualification runbook
+# Secure MCP Tunnel direct-WebChat qualification
 
-This is the preferred ChatGPT WebChat test path. It keeps the coding MCP server
-private and uses OpenAI's outbound-only Secure MCP Tunnel rather than a public
-reverse proxy or an ad hoc tunnel.
+This runbook connects ChatGPT directly to the LangChain capability bridge. It
+must not bind the tunnel to Nexus/DevSpace.
 
-## Preconditions
+## Fixed topology
 
-The operator needs all of the following from OpenAI Platform and ChatGPT:
+```text
+ChatGPT workspace
+   ↕ OpenAI Secure MCP Tunnel
+official tunnel-client v0.0.12
+   ↕ private Docker network
+chatgpt-langchain bridge:8765/mcp
+   ↕
+disposable repository + isolated checkpoint volume
+```
 
-1. a `tunnel_id` associated with the target ChatGPT workspace;
-2. a **runtime** API key whose principal has Tunnels Read + Use;
-3. ChatGPT developer-mode access and permission to create a draft app;
-4. a disposable repository prepared for the coding test.
+The bridge does not receive the OpenAI tunnel runtime key. The tunnel sidecar
+does not receive repository or LangSmith credentials.
 
-Tunnel CRUD permissions and ChatGPT developer-mode permissions are separate.
-Do not give an OpenAI admin key to the long-running tunnel daemon.
+## Prepared host state
 
-Current OpenAI product documentation describes full write/modify MCP actions as
-a Business and Enterprise/Edu beta. Pro availability is documented as
-read/fetch-only, although pre-existing or separately enabled connectors may
-behave differently. The WebChat qualification must therefore verify the actual
-workspace entitlement instead of assuming write access.
+The VPS already has:
 
-## Prepare the isolated repository
+- official `tunnel-client` v0.0.12;
+- the user-created tunnel ID and runtime API key in
+  `/etc/tunnel-client/zes-agent-runtime.secret.env`;
+- file ownership/mode `root:root 0600`;
+- the LangSmith binding separately in
+  `/etc/devspace/chatgpt-langchain.env`;
+- no active agent-runtime tunnel daemon yet.
+
+Never print, hash, copy to argv, or commit either credential file.
+
+## 1. Validate the frozen bridge
 
 ```bash
 cd experiments/chatgpt-langchain-capability-bridge
-uv sync --extra test --python 3.13
-export BRIDGE_WORKSPACE_HOST_PATH="$(uv run python scripts/prepare_smoke_workspace.py)"
-export BRIDGE_PORT=18765
+uv sync --extra test --extra agent-server --python 3.13
+uv lock --check
+uv pip check
+uv run pytest
 ```
 
-The bridge container receives only this repository and a checkpoint volume. It
-does not mount the VPS root, ZES checkout, SSH directory, or provider secrets.
+Expected model-facing ABI:
 
-## Start the private MCP server and official tunnel client
+```text
+version: chatgpt-langchain-capability-bridge.tools.v2
+tool count: 24
+fingerprint: 071b7d38d9205565264541ecc3eb84b5fa3681544d462eaf3511abf90e6a47b7
+```
 
-Supply credentials through the shell, a credential store, or systemd—not a
-committed `.env` file:
+Do not start the tunnel if any descriptor or test differs.
+
+## 2. Prepare the disposable coding repository
 
 ```bash
-export CONTROL_PLANE_TUNNEL_ID='tunnel_...'
-export CONTROL_PLANE_API_KEY='sk-...runtime-key...'
+export BRIDGE_WORKSPACE_HOST_PATH="$(uv run python scripts/prepare_smoke_workspace.py)"
+export TUNNEL_RUNTIME_ENV_FILE=/etc/tunnel-client/zes-agent-runtime.secret.env
+```
 
+The bridge container mounts only this repository and its isolated state volume.
+It must not mount ZES, `/root`, `~/.ssh`, or `/etc`.
+
+## 3. Start the private bridge
+
+```bash
+docker compose up --build -d bridge
+docker compose ps
+curl -fsS http://127.0.0.1:${BRIDGE_PORT:-8765}/healthz
+uv run python scripts/probe_mcp.py
+```
+
+The MCP listener may bind to VPS loopback for operator probes. It must not bind
+the public interface.
+
+## 4. Run tunnel doctor against the real MCP target
+
+Use the root-only runtime environment file without expanding values into the
+command line:
+
+```bash
+set -a
+. "$TUNNEL_RUNTIME_ENV_FILE"
+set +a
+
+tunnel-client doctor \
+  --control-plane.api-key env:CONTROL_PLANE_API_KEY \
+  --control-plane.tunnel-id "$CONTROL_PLANE_TUNNEL_ID" \
+  --mcp.server-url url=http://127.0.0.1:${BRIDGE_PORT:-8765}/mcp,channel=main \
+  --health.listen-addr 127.0.0.1:18080 \
+  --json
+```
+
+Doctor must pass the control-plane and MCP target checks. Do not substitute the
+Nexus URL or port.
+
+## 5. Start the official tunnel sidecar
+
+```bash
 docker compose \
   -f compose.yaml \
   -f compose.tunnel.yaml \
@@ -50,75 +105,92 @@ docker compose \
   up --build -d
 ```
 
-Local operator checks:
+Operator checks:
 
 ```bash
 curl -fsS http://127.0.0.1:18080/healthz
 curl -fsS http://127.0.0.1:18080/readyz
+docker compose -f compose.yaml -f compose.tunnel.yaml logs --tail=100 tunnel-client
 ```
 
-The tunnel client must remain healthy and ready during app discovery and every
-subsequent MCP call. Its admin UI is loopback-only at
-`http://127.0.0.1:18080/ui`.
+The admin UI remains loopback-only at `http://127.0.0.1:18080/ui`.
 
-## Connect from ChatGPT
+## 6. Scan the app in ChatGPT
 
-In ChatGPT developer mode:
+In the ChatGPT workspace associated with the tunnel:
 
-1. create a draft app;
-2. select **Tunnel** as the connection type;
-3. select or paste the same `tunnel_id`;
-4. scan the tools;
-5. confirm that the stable 14-tool primitive surface appears and that
-   `capability_manifest.tool_abi.fingerprint_sha256` is
-   `8006cdd2a6c03e94b29fefbdab7f0dd1b9e1d7904e495d51c8e9f3ffab7b77e2`;
-6. keep the app as a draft during qualification.
+1. enable developer mode;
+2. create or edit the draft app;
+3. choose **Tunnel** connection;
+4. select the prepared tunnel;
+5. scan tools;
+6. verify 24 exact tool names;
+7. call `capability_manifest` and verify the v2 fingerprint;
+8. keep the app in draft during qualification.
 
-The MCP surface must remain frozen during the A/B test. Implementations can
-change behind it, but changing required inputs or removing tools can invalidate
-ChatGPT's frozen tool snapshot and cause opaque call failures.
+The app scan is the authority for what ChatGPT currently sees. Backend health
+alone does not prove host catalog freshness.
 
-## Decisive WebChat prompt
+## 7. Direct ChatGPT coding test
 
-The test must make ChatGPT itself own the coding loop:
+Use this mission:
 
-> Open the disposable repository. Inspect it, run the tests, diagnose the
-> defect, edit the source yourself, rerun validation until it passes, inspect
-> the Git diff, and record a checkpoint. Do not delegate coding to another
-> model or agent.
+> Open the disposable repository. Discover relevant project instructions and
+> skills. Inspect the source and tests, run the failing tests, diagnose the
+> defect, edit the source yourself, rerun validation, inspect the Git diff, and
+> record a checkpoint. Do not delegate the repair to another model or agent.
 
-Expected observable sequence:
+Expected core sequence:
 
 ```text
-workspace_open → ls/glob/read_file/grep → execute(pytest)
-→ edit_file → execute(pytest) → execute(git diff --check && git diff)
+workspace_open
+→ context_discover / context_read
+→ ls / glob / read_file / grep
+→ execute(pytest)
+→ edit_file
+→ execute(pytest)
+→ execute(git diff --check && git diff)
 → checkpoint_record
 ```
 
-No `agent.run`, model invocation, or delegated coding tool exists in the
-prototype.
+`specialist_task` must not be used during Gate A. Sandbox/process tools are
+optional and currently blocked by live provider entitlement; they are not
+required for this disposable repair.
 
 ## Pass criteria
 
-- ChatGPT discovers and calls the primitive tools itself.
-- The initial tests fail and the repaired tests pass.
-- The source diff is minimal and valid.
-- No second LLM or Deep Agent model loop performs the repair.
-- The checkpoint is readable after reconnecting the draft app or opening a new
-  chat.
-- Tunnel `/readyz` remains healthy and the private MCP server never acquires a
-  public listener.
+- ChatGPT discovers the exact 24-tool v2 ABI.
+- Calls travel through the new Secure MCP Tunnel, not Legacy/Nexus.
+- ChatGPT itself selects the inspection, patch, and validation sequence.
+- Initial tests fail and repaired tests pass.
+- Diff is minimal and `git diff --check` passes.
+- Checkpoint is readable after a connector reconnect or new chat.
+- Tunnel remains ready and bridge remains private.
+- No credential, hidden reasoning, or source payload is emitted to logs/traces.
 
 ## Failure classification
 
 | Symptom | Likely layer |
 |---|---|
-| Tunnel absent from ChatGPT | workspace association or Tunnels Read + Use |
-| `/healthz` passes but `/readyz` fails | control-plane polling or API-key permission |
-| Tool scan fails | tunnel client, MCP protocol, or ChatGPT entitlement |
-| Tool exists but call schema errors | frozen ChatGPT tool snapshot vs live ABI |
-| File/shell operation fails | Deep Agents backend or container capability |
-| Checkpoint missing | LangGraph/Agent Server Store boundary |
+| Tunnel absent from ChatGPT | workspace association or Tunnel permissions |
+| `healthz` passes but `readyz` fails | control-plane key/polling/tunnel binding |
+| MCP doctor target fails | bridge health, path, or private routing |
+| Tool scan count/fingerprint differs | ChatGPT app snapshot or live ABI drift |
+| Primitive file/shell call fails | Deep Agents backend/container boundary |
+| Skill/memory missing | source path or native middleware loading |
+| Checkpoint missing | LangGraph/Agent Server state boundary |
+| Sandbox says provider not configured | expected unless a provider is selected |
+| LangSmith Sandbox auth failure | external organization feature entitlement |
 
-Do not repair a ChatGPT catalog problem by broadening the container mount or
-making the MCP server public.
+Do not repair a ChatGPT catalog problem by widening mounts, exposing a public
+MCP endpoint, or routing this runtime through DevSpace.
+
+## Stop and preserve evidence
+
+```bash
+docker compose -f compose.yaml -f compose.tunnel.yaml down
+```
+
+Preserve only bounded logs, test receipts, tool count/fingerprint, checkpoint
+identity, and Git diff. Do not preserve credential values or raw WebChat
+transcripts in repository evidence.

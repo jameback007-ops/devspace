@@ -3,6 +3,7 @@ from __future__ import annotations
 import operator
 from typing import Annotated, Any, TypedDict
 
+from langchain.agents.middleware.todo import Todo
 from langgraph.graph import END, START, StateGraph
 
 
@@ -17,6 +18,7 @@ class BridgeAgentServerState(TypedDict, total=False):
 
     events: Annotated[list[dict[str, Any]], operator.add]
     latest: dict[str, Any]
+    todos: list[Todo]
 
 
 def record(state: BridgeAgentServerState) -> dict[str, Any]:

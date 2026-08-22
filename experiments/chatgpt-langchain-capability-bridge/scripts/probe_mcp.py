@@ -9,6 +9,12 @@ from typing import Any
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 
+from chatgpt_langchain_bridge.tool_abi import (
+    ABI_FINGERPRINT_SHA256,
+    ABI_TOOL_NAMES,
+    ABI_VERSION,
+)
+
 
 def structured(result: Any) -> Any:
     value = getattr(result, "structured_content", None)
@@ -27,9 +33,22 @@ async def probe_once(url: str, workspace: str) -> None:
     ):
         await session.initialize()
         tools = await session.list_tools()
+        tool_names = tuple(sorted(tool.name for tool in tools.tools))
+        if tool_names != ABI_TOOL_NAMES:
+            raise AssertionError(f"tool ABI mismatch: {tool_names!r}")
         print("tools:", ", ".join(tool.name for tool in tools.tools))
+        manifest = structured(await session.call_tool("capability_manifest", {}))
+        if manifest["tool_abi"] != {
+            **manifest["tool_abi"],
+            "version": ABI_VERSION,
+            "fingerprint_sha256": ABI_FINGERPRINT_SHA256,
+        }:
+            raise AssertionError("capability manifest ABI identity mismatch")
         opened = structured(
-            await session.call_tool("workspace_open", {"path": workspace})
+            await session.call_tool(
+                "workspace_open",
+                {"path": workspace, "target_path": "src/coding_smoke/pricing.py"},
+            )
         )
         workspace_id = opened["workspace_id"]
         print("workspace:", json.dumps(opened, indent=2))

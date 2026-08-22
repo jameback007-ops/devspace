@@ -2,157 +2,197 @@
 
 ## Decision question
 
-Can WebChat use LangChain ecosystem capabilities as its coding harness through
-MCP without delegating coding to another model and without rebuilding DevSpace?
+Can ChatGPT WebChat use the LangChain ecosystem as a coding/runtime capability
+plane through MCP while ChatGPT remains the primary reasoning and coding owner?
 
-## Finding 1 — direct capability composition is viable
+## Finding 1 — the direct capability seam is real
 
-Deep Agents exposes a public backend protocol with native filesystem, search,
-mutation, file transfer, and shell execution methods. Those methods are usable
-without constructing or invoking `create_deep_agent`. An MCP adapter can expose
-them as primitives while ChatGPT remains the tool-loop owner.
+Deep Agents backends expose filesystem, search, mutation, execution, and file
+transfer independently of `create_deep_agent`. The Phase-0 bridge exercised
+those methods through MCP and completed a real failing-test repair without
+invoking another model.
 
-Disposition: **KEEP / PROTOTYPE**.
+Disposition: **USE**.
 
-## Finding 2 — Agent Server's default MCP direction is not the required seam
+## Finding 2 — 14 primitive tools proved coding, not full harness parity
 
-Agent Server naturally exposes deployed graphs or agents to callers. Calling
-that graph from ChatGPT would make ChatGPT delegate a task to the graph's model
-loop. That is useful later for specialist agents, but it does not prove the
-owner requirement for this experiment.
+The original 14-tool ABI proved that ChatGPT can code through native backend
+methods. It did not expose skills, project memory, artifact transfer, sandbox
+lifecycle, resumable processes, Agent Server services, specialists, or tracing.
 
-Disposition: **DEFER as the WebChat coding seam**; retain Agent Server for
-durable internal agents, background runs, and production deployment later.
+Disposition: retain v1 as evidence, supersede it for direct-host qualification
+with the stable 24-tool v2 ABI.
 
-Agent Server supports arbitrary Starlette/FastAPI custom routes in the same
-deployment. The prototype therefore mounts the primitive MCP server at
-`/coding/mcp` while preserving the native Agent Server API surface. Its
-checkpoint tools use Agent Server's native Store from the custom-route request
-context; the standalone bridge retains SQLite only as a local fallback. This is
-the clean insertion seam: Agent Server hosts, persists, and can secure the
-capability plane, but does not become a second coding model loop.
+## Finding 3 — skills and `AGENTS.md` can be projected natively
 
-## Finding 3 — LangGraph can still provide native durable state
+`SkillsMiddleware` can load skill metadata and `MemoryMiddleware` can load
+ordered project memory without invoking a Deep Agent model. The v2 bridge uses
+those native loaders, then exposes metadata-first progressive disclosure to
+WebChat through `context_discover` and `context_read`.
 
-A deterministic `StateGraph` compiled with `SqliteSaver` persists checkpoint
-history without an LLM. The bridge uses this only for explicit tool-plane
-frontiers. It does not claim to checkpoint ChatGPT's hidden reasoning state.
+This preserves the important native lifecycle while acknowledging that MCP
+cannot inject middleware directly into ChatGPT's hidden prompt construction.
 
-Disposition: **USE**, with a strict claim boundary.
+Disposition: **USE native loaders; keep the WebChat projection explicit**.
 
-## Finding 4 — LocalShellBackend requires an outer sandbox
+## Finding 4 — Agent Server is a service plane, not the default coder
 
-`LocalShellBackend` intentionally executes arbitrary host shell commands. Its
-`root_dir` controls the working directory and file-tool routing, not shell
-isolation. Running it directly on the ZES VPS would reproduce DevSpace's broad
-host authority and expose credentials or unrelated workspaces.
+Agent Server's native APIs are valuable for threads, runs, checkpoint history,
+Store, streaming, cancellation, queueing, and optional assistants. Exposing a
+whole model-backed graph as the default coding tool would transfer the coding
+loop away from ChatGPT, which violates the experiment's primary condition.
 
-The lowest-custom native-first option for the experiment is therefore:
+The clean seam is:
 
 ```text
-Docker/container boundary
-  └─ MCP bridge
-       └─ Deep Agents LocalShellBackend
-            └─ isolated mounted repository
+Agent Server
+  ├─ native thread/run/store APIs
+  └─ custom /coding/mcp route
+       └─ primitive and grouped capability tools
 ```
 
-When credentials and deployment policy are ready, a supported Deep Agents
-remote sandbox provider can replace Docker without changing the MCP surface.
+The bridge restricts ordinary runtime runs to allowlisted assistant IDs,
+prefixes Store namespaces, and exposes specialists only by configured alias.
 
-Disposition: **USE only inside an isolation boundary**.
+Disposition: **USE as runtime/service plane; do not make graph-as-coder the
+default route**.
 
-## Finding 5 — tool parity is different from harness parity
+## Finding 5 — native planning and HITL remain usable without owning WebChat
 
-The bridge can expose enough primitive authority for ChatGPT to code directly.
-It cannot inject Deep Agents middleware, summarization, subagent scheduling, or
-context offloading into ChatGPT's private inference loop. Those features remain
-available to internal Deep Agents, not automatically to WebChat.
+Two capabilities initially looked model-loop-bound but have clean service-plane
+seams:
 
-The migration decision must therefore measure two independent dimensions:
+- `TodoListMiddleware` defines the canonical `WriteTodosInput` schema. The
+  bridge validates that native schema and writes the resulting `todos` directly
+  into Agent Server thread state. It does not create a separate planner or task
+  database.
+- LangGraph `interrupt()` and Agent Server's native `Command(resume=...)`
+  payload can be observed and resumed through `runtime_run`. The bridge does
+  not replay the interrupted action or synthesize its own approval state.
 
-1. **coding capability parity** — can ChatGPT inspect, modify, execute, test,
-   build, use Git, and recover state?
-2. **model-loop harness parity** — does WebChat itself gain enough continuity,
-   context management, and operational reliability to outperform DevSpace?
+A deterministic no-model `bridge_hitl` graph now proves interrupt → persisted
+thread state → resume → terminal result through the same custom MCP route.
 
-Disposition: **do not overclaim from the first smoke test**.
+Disposition: **USE native planning state and native interrupt/resume; keep
+primitive WebChat confirmation at the ChatGPT host/app permission boundary**.
 
-## Finding 6 — MCP catalog instability remains possible but cheaper
+## Finding 6 — model-loop capabilities have a hard boundary
 
-ChatGPT still owns the outer MCP catalog. A host-side binding or snapshot issue
-can therefore hide the bridge. The architectural improvement is that the
-surface is small, versioned, stable, and backed by replaceable native
-components. Deep Agents and LangGraph can evolve behind the same schemas.
+Deep Agents automatic summarization, context offloading, prompt middleware, and
+hidden system prompt are applied inside a Deep Agent model loop. MCP cannot
+wrap ChatGPT WebChat's private model loop or rewrite its hidden system prompt.
 
-Disposition: freeze the top-level tool ABI during the experiment; change
-implementation behind it rather than adding tools repeatedly. The prototype
-now enforces an exact canonical descriptor fingerprint in tests and exposes it
-through `capability_manifest` so a ChatGPT draft app can be checked against the
-intended surface before a coding run.
+Equivalent content can be made available through skills, MCP server
+instructions, `AGENTS.md`, explicit durable state, and artifacts, but the
+execution semantics are not identical.
 
-## Prototype conclusion
+Disposition: **record as an A/B harness difference; never claim 100% Deep Agent
+model-loop parity for WebChat**.
 
-The seam exists. It requires a thin MCP adapter, not a custom coding harness.
-The current implementation is sufficient to proceed to a real WebChat coding
-test in an isolated repository. Migration is not yet approved; the remaining
-gates are empirical.
+## Finding 7 — sandbox capability should be provider-neutral
 
-## Executed prototype evidence
+Deep Agents defines a common sandbox/backend capability, while concrete remote
+providers differ in lifecycle and process features. The MCP surface should not
+encode one vendor. Version 2 therefore uses a small `NativeSandboxProvider`
+port and attaches the provider's native Deep Agents backend to the workspace
+registry.
 
-- Seven local behavioral tests pass, including a real streamable-HTTP MCP
-  initialize/list/call cycle and both SQLite and Agent Server Store journals.
-- The standalone bridge runs in a read-only Docker container with all Linux
-  capabilities dropped and only the disposable repository plus state volume
-  mounted.
-- The MCP repair qualification observed failing tests, edited the source through
-  the Deep Agents backend, produced `2 passed`, validated `git diff --check`, and
-  persisted its checkpoint across a container restart.
-- The current ChatGPT session also performed a model-owner rehearsal one
-  primitive at a time through the MCP client relay: it selected inspection
-  calls, interpreted both failures, read the implementation and tests, chose
-  the correction, invoked `edit_file`, validated `2 passed` plus the Git diff,
-  and recorded checkpoint `model-owner-rehearsal-20260822`. No second model or
-  agent participated. This proves the reasoning/tool sequence but not direct
-  ChatGPT host discovery, because Legacy still relayed each MCP request.
-- The shell plane created and committed inside a disposable Git worktree,
-  installed a pinned dependency from the network, exercised Node and Git, and
-  returned an explicit timeout receipt for a bounded long-running command.
-- Agent Server loaded the same MCP application as `/coding/mcp`, kept `/ok`,
-  assistants, threads, runs, checkpoints, queue workers, metrics, and Store
-  available, and completed a native thread/run/checkpoint probe.
+The included LangSmith adapter reuses `SandboxClient`, `LangSmithSandbox`, and
+the native command handle. Other native providers can be added behind the same
+port without changing the MCP ABI.
 
-The remaining highest-value falsifiers are actual ChatGPT connector discovery,
-OAuth-protected remote ingress, persistent command streaming/resume, and an A/B
-coding task against DevSpace on identical repository clones.
+Disposition: **freeze the provider-neutral MCP ABI; replace providers behind
+it**.
 
-## Finding 7 — an official private WebChat insertion path now exists
+## Finding 8 — persistent PTY is provider-specific, not a base guarantee
 
-OpenAI Secure MCP Tunnel is a better qualification route than publishing a
-shell-capable endpoint. Its customer-run `tunnel-client` opens outbound HTTPS,
-polls the OpenAI tunnel control plane, forwards requests to the private MCP
-server, and exposes local health/readiness/operator surfaces. The official
-client is available as a public binary and container image.
+The richer LangSmith command handle supports command identity, PTY, stdin,
+process-group kill, output offsets, reconnect, and SDK auto-reconnect. The v2
+`process` tool projects those semantics with only a bounded output buffer and
+sequence cursor.
 
-The prototype includes a pinned `ghcr.io/openai/tunnel-client:v0.0.12` sidecar
-that reaches the bridge only over the private Compose network. Starting it is
-intentionally blocked until a real tunnel ID and runtime API key are supplied.
+However, the currently bound LangSmith organization returned
+`SandboxAuthenticationError: Sandbox feature is not enabled for this
+organization`. The VPS has no credentials or installed clients for another
+supported remote sandbox provider.
 
-Disposition: **USE for the decisive WebChat test**. Do not substitute ngrok or
-expose an unauthenticated write-capable endpoint.
+Disposition:
 
-## Finding 8 — production Agent Server has an independent commercial gate
+- provider-neutral and LangSmith adapters: **implemented and behavior-tested**;
+- live LangSmith Sandbox: **blocked by external entitlement**;
+- live persistent PTY parity: **open migration subgate**;
+- direct Docker-isolated WebChat coding: **may proceed independently**.
 
-The custom route and native threads/runs/store work in local Agent Server dev
-mode, and a production image builds successfully. Running the Postgres/Redis
-Agent Server image locally then requires either a LangSmith API key with the
-required LangGraph access or a LangGraph Cloud license key. This is not a
-technical failure of the bridge, but it means the migration decision must
-separate:
+## Finding 9 — tracing must be fail-open and payload-minimal
 
-- open-source LangGraph + Deep Agents capability quality;
-- Agent Server development capability;
-- licensed or managed production deployment economics.
+LangSmith is useful for measuring tool latency/failure and comparing DevSpace
+with the bridge, but a tracing outage must not break a coding tool. The adapter
+therefore records only tool name and argument names, excludes values and
+outputs, and suppresses trace setup/flush failures while preserving the real
+tool outcome.
 
-Disposition: **do not make Agent Server licensing a prerequisite for the first
-WebChat coding test**. Use the standalone private bridge plus Secure MCP Tunnel,
-then evaluate managed/licensed deployment after capability parity is proven.
+Disposition: **USE with fail-open semantics and a strict payload ceiling**.
+
+## Finding 10 — catalog risk remains but is reduced
+
+ChatGPT still owns the host-side app/tool snapshot. A transport or catalog
+problem can therefore hide or stale the bridge even when the backend is
+healthy. The mitigation is a versioned surface with an exact canonical
+descriptor fingerprint:
+
+```text
+chatgpt-langchain-capability-bridge.tools.v2
+071b7d38d9205565264541ecc3eb84b5fa3681544d462eaf3511abf90e6a47b7
+```
+
+Disposition: freeze the 24-tool v2 ABI throughout direct-host and A/B
+qualification. Internal native implementations may evolve behind it.
+
+## Finding 11 — Secure MCP Tunnel is the correct direct-host transport
+
+The official tunnel client lets the private bridge make an outbound connection
+to OpenAI and receive MCP work without a public shell-capable endpoint. The
+user-owned tunnel and runtime key are already stored in a root-only file on the
+VPS; the repository contains no credential.
+
+Disposition: **USE for Gate A; do not route the new runtime through
+Nexus/DevSpace or a public reverse proxy**.
+
+## Qualification evidence to date
+
+### Phase 0
+
+- streamable-HTTP MCP initialize/list/call passed;
+- a disposable bug was repaired through native primitives;
+- tests changed from failing to `2 passed`;
+- Git diff/check/commit and worktree lifecycle passed;
+- dependency installation and bounded timeout passed;
+- LangGraph checkpoint survived bridge restart;
+- Agent Server custom route coexisted with native thread/run/Store;
+- standalone and Agent Server images built on Python 3.13.
+
+### Full native capability v2
+
+- native skills metadata and full skill read passed;
+- ordered root/nested `AGENTS.md` discovery and read passed;
+- native binary upload/download with checksum passed;
+- provider-neutral sandbox attachment/lifecycle contract passed;
+- native command-handle start/poll/stdin/cancel/reconnect adapter passed with a
+  contract-faithful fake;
+- Agent Server thread/run/events/Store and explicit specialist adapters passed;
+- native `WriteTodosInput` state passed in unit tests and on the live v2 route;
+- native LangGraph interrupt and Agent Server `Command(resume)` passed on the
+  live deterministic `bridge_hitl` graph;
+- LangSmith tracing fail-open behavior passed;
+- 24-tool descriptor generation is deterministic and frozen.
+
+### Evidence ceiling
+
+The bridge is ready for direct ChatGPT-host qualification over Secure MCP
+Tunnel. Migration is not approved. Still open:
+
+- direct ChatGPT scan and write-capable invocation;
+- connector/catalog reconnect stability;
+- a live native persistent-process provider;
+- representative DevSpace versus bridge A/B workload;
+- long-horizon cross-chat continuity.
