@@ -128,6 +128,11 @@ Compare:
 - context/skill selection quality;
 - ceremony and custom infrastructure required.
 
+Gate C first runs a deterministic capability replay on identical clones, then
+requires counterbalanced fresh WebChat chats for behavioral claims. The same
+session may establish tool/transport parity but cannot fairly establish model
+reasoning quality after learning the repair. See `docs/ab-benchmark-protocol.md`.
+
 ### Gate D — continuity and catalog failure
 
 After a durable checkpoint:

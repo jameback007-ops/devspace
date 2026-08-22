@@ -326,3 +326,8 @@ passed `git diff --check`, and persisted a checkpoint without Nexus, Legacy, or
 a second model. Migration remains blocked until the representative A/B and
 long-horizon continuity gates in
 [`docs/capability-parity-matrix.md`](docs/capability-parity-matrix.md) pass.
+
+Gate C uses the counterbalanced protocol in
+[`docs/ab-benchmark-protocol.md`](docs/ab-benchmark-protocol.md). Deterministic
+same-session replay is scored separately from independent fresh-chat behavior
+so tool-plane parity cannot be mistaken for model-quality evidence.
