@@ -10,8 +10,8 @@ from deepagents.backends import LocalShellBackend
 from langgraph.config import get_store
 from langgraph.func import entrypoint, task
 
-from .registry import BridgeError
-from .worktree import (
+from chatgpt_langchain_bridge.registry import BridgeError
+from chatgpt_langchain_bridge.worktree import (
     WorktreeBindingConfig,
     WorktreeBindingManager,
     WorktreeBindingStore,
