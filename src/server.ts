@@ -63,6 +63,11 @@ import {
   type McpWorkCapabilityRef,
 } from "./mcp-primary-recovery.js";
 import {
+  projectMcpFallbackRecovery,
+  type HostFallbackRecoveryObservation,
+  type McpFallbackRecoveryProjection,
+} from "./mcp-fallback-recovery-route.js";
+import {
   observeCurrentServiceChildProcesses,
   type ServiceProcessObservation,
 } from "./service-process-observation.js";
@@ -85,6 +90,7 @@ import { formatPathForPrompt } from "./skills.js";
 import {
   RuntimeCapabilityRegistry,
 } from "./runtime-capabilities.js";
+import type { McpCapabilityOrientation } from "./mcp-capability-orientation.js";
 import {
   type ResearchGuardDecision,
   type ResearchWorkspace,
@@ -545,7 +551,7 @@ function serverInstructions(config: ServerConfig): string {
     ? ""
     : " For a workspace containing the ZES control-kernel marker, use zes_research_cycle_open before material design or mutation, then prepare exact action bindings and obtain a native capability-bound ZES Research Reflex v3 admission with zes_research_cycle_assess. Use zes_research_provider_invoke when external evidence is required: Context7 covers exact upstream documentation; Exa search is the open-world discovery operation; Exa fetch and targeted Web fetch remain known-source lanes and cannot substitute for open-world discovery. Reopen judgment with zes_research_cycle_invalidate when evidence, scope, architecture, dependencies, currentness, owner direction, or failure causality changes. Before commit, use zes_research_cycle_verify_pre_commit; close the episode after the exact commit or terminal no-change/deferred/abandoned outcome. observe mode reports lifecycle drift without blocking; enforce mode holds source mutation, commit preparation, commit, and publication when the exact current lifecycle is absent or stale. Historical v1/v2 receipts may be decoded but cannot create a new admission through this action gate. These executor-local tools verify native receipts but never create semantic, writer, publication, release, activation, runtime, or effect authority.";
   const executionScopeInstruction = config.executionObservability.enabled
-    ? " Use execution_scope_list to discover recent DevSpace execution scopes. When a target explicitly recorded a recovery capsule, the list includes a compact capsule-derived semantic label/frontier hint; it is not a host chat title and absent capsule means unknown mission. Use execution_scope_status for linked workspaces, live processes, explicit semantic recovery state, the observation gap since the last MCP/tool event, the additive turnLanding resume projection, and additive read-only stable control-plane projections. Before selecting a fallback, or before capability-critical work after a backend/tool-surface change, call execution_scope_status with the exact requiredCapabilityRefs and the complete clientObservedToolNames from the current host catalog when available. Follow stableControlPlane.capabilities.primaryMcpRecovery: attest or refresh a stale catalog, reconnect or repair the primary, allow only one recovery owner, use an exact stable read-only projection when it fully satisfies the need, and admit fallback only after repair is exhausted and exact quality equivalence, the complete fallback descriptor fingerprint, bounded evidence refs, and its policy ref are established. Catalog-refresh and diagnostic exhaustion also require bounded receipt refs rather than naked booleans. For missing research, validation, canonical-state, recovery, publication, runtime, or other effect-critical capability, prefer a recoverable safe turn landing over silent quality reduction. Fail back to the primary only after functional readiness and the required catalog subset are verified. turnLanding joins a bounded persisted machine envelope to the latest explicit semantic capsule and distinguishes a clean turn boundary, a fresh or stale/missing semantic frontier, and process/effect reconciliation requirements without inferring mission from operational events. Scope inspection also returns the current backend runtime instance and an exact fingerprint of the registered model-facing tool surface. The server cannot see the host's cached tools/list result and cannot force the host to refresh it. A frozen catalog may still consume compatible additive control state through execution_scope_status; refresh or reconnect is needed only when the task genuinely requires a newer top-level tool or changed input schema rather than a compatible stable projection. A no-tool interval does not reveal whether the model is reasoning, queued, generating, or hung; model progress and provider generation remain unobservable between MCP calls. Use execution_scope_audit for bounded metadata-only tool lifecycle. Semantic state is never inferred from filenames or tool events, cross-scope authority freshness remains unverified unless a fixed rightful-owner projection explicitly revalidates it, and a recorded exact action remains historical until current canonical/runtime/writer/effect owners are rehydrated. These views never replace Git, canonical product state, runtime/effect readback, or writer/lease reconciliation, and they do not contain transcripts, prompts, private reasoning, tool outputs, patches, credentials, raw commands, or arbitrary paths."
+    ? " Use execution_scope_list to discover recent DevSpace execution scopes. When a target explicitly recorded a recovery capsule, the list includes a compact capsule-derived semantic label/frontier hint; it is not a host chat title and absent capsule means unknown mission. Use execution_scope_status for linked workspaces, live processes, explicit semantic recovery state, the observation gap since the last MCP/tool event, the additive turnLanding resume projection, and additive read-only stable control-plane projections. When unsure whether DevSpace has a capability or which tool begins it, read the compact top-level capabilityQuickstart first, then stableControlPlane.capabilities.mcpCapabilityOrientation for diagnostics, and select the smallest sufficient intent-matched group before inferring absence from model memory or the host catalog. Before selecting a fallback, or before capability-critical work after a backend/tool-surface change, call execution_scope_status with the exact requiredCapabilityRefs and, when available from one complete current tools/list response, clientObservedToolNames together with clientObservedSurfaceEpoch and clientObservedFingerprintSha256. Tool names alone establish diagnostic name coverage, not a current complete-catalog attestation. Follow stableControlPlane.capabilities.primaryMcpRecovery: attest or refresh a stale catalog, reconnect or repair the primary, allow only one recovery owner, use an exact stable read-only projection when it fully satisfies the need, and admit mission fallback only after repair is exhausted and exact quality equivalence, the complete fallback descriptor fingerprint, bounded evidence refs, and its policy ref are caller-attested. Caller-supplied fallback refs are classified by this read-only projection but are not independently verified by Nexus, and route selection never authorizes or dispatches a repair effect. fallback.available is a compatibility alias for one caller-observed route-reachability fact in this assessment; it is not proof that the primary can observe sibling host connectors and false without an observation must never be read as Legacy being unreachable. Prefer fallbackRouteReachable for fresh clients and inspect routeReachability, routeAttestationState, plannerAdmissionState, recovery selection, repair-effect authority, invocation, and terminal outcome separately. Catalog-refresh and diagnostic exhaustion also require bounded receipt refs rather than naked booleans. For missing research, validation, canonical-state, recovery, publication, runtime, or other effect-critical capability, prefer a recoverable safe turn landing over silent quality reduction. Fail back to the primary only after functional readiness, digest-pinned exact server-surface identity, and the current complete host catalog are verified and the stable projection returns FAILBACK_PRIMARY. turnLanding joins a bounded persisted machine envelope to the latest explicit semantic capsule and distinguishes a clean turn boundary, a fresh or stale/missing semantic frontier, and process/effect reconciliation requirements without inferring mission from operational events. Scope inspection also returns the current backend runtime instance and an exact fingerprint of the registered model-facing tool surface. The server cannot see the host's cached tools/list result and cannot force the host to refresh it. A frozen catalog may still consume compatible additive control state through execution_scope_status; refresh or reconnect is needed only when the task genuinely requires a newer top-level tool or changed input schema rather than a compatible stable projection. A no-tool interval does not reveal whether the model is reasoning, queued, generating, or hung; model progress and provider generation remain unobservable between MCP calls. Use execution_scope_audit for bounded metadata-only tool lifecycle. Semantic state is never inferred from filenames or tool events, cross-scope authority freshness remains unverified unless a fixed rightful-owner projection explicitly revalidates it, and a recorded exact action remains historical until current canonical/runtime/writer/effect owners are rehydrated. These views never replace Git, canonical product state, runtime/effect readback, or writer/lease reconciliation, and they do not contain transcripts, prompts, private reasoning, tool outputs, patches, credentials, raw commands, or arbitrary paths."
     : "";
   const executionMailboxInstruction = config.executionMailbox.enabled
     ? " Use execution_scope_message_send to leave a durable message for another known scope, reusing one idempotencyKey for retries. Acceptance means stored, not observed. When a tool result reports pending mail, call execution_scope_message_inbox before opening a new major frontier, then record acknowledged or acted state with execution_scope_message_receipt. Use execution_scope_message_status to inspect a message you sent or received. The mailbox is executor-local coordination, not task, decision, effect, writer, or canonical-memory authority, and it cannot wake or inject text directly into an inactive WebChat transcript."
@@ -1107,16 +1113,24 @@ function scopeRuntimeRelation(
 
 function stableControlPlaneProjection(
   input: {
+    mcpCapabilityOrientation?: McpCapabilityOrientation;
     primaryMcpRecovery?: McpPrimaryRecoveryAssessment;
+    mcpFallbackRecovery?: McpFallbackRecoveryProjection;
     continuationPreflight?: ZesContinuationPreflightProjection;
     scopePublicationPreflight?: ScopePublicationPreflight;
     selfRepositoryPublicationPreflight?: SelfRepositoryScopePublicationProjection;
   },
 ) {
   const capabilities = {
+    ...(input.mcpCapabilityOrientation === undefined
+      ? {}
+      : { mcpCapabilityOrientation: input.mcpCapabilityOrientation }),
     ...(input.primaryMcpRecovery === undefined
       ? {}
       : { primaryMcpRecovery: input.primaryMcpRecovery }),
+    ...(input.mcpFallbackRecovery === undefined
+      ? {}
+      : { mcpFallbackRecovery: input.mcpFallbackRecovery }),
     ...(input.continuationPreflight === undefined
       ? {}
       : { continuationPreflight: input.continuationPreflight }),
@@ -1169,6 +1183,44 @@ function stableControlPlaneProjection(
   } as const;
 }
 
+function capabilityQuickstartProjection(
+  orientation: McpCapabilityOrientation,
+) {
+  return {
+    schemaVersion: "devspace.mcp-capability-quickstart.v1",
+    capabilityRef: orientation.capabilityRef,
+    state: orientation.state,
+    exactNextAction: orientation.exactNextAction,
+    clientCatalog: {
+      toolNamesObserved: orientation.summary.clientToolNamesObserved,
+      attested: orientation.summary.clientCatalogAttested,
+      freshness: orientation.summary.clientCatalogFreshness,
+      reason: orientation.summary.clientCatalogReason,
+    },
+    groups: orientation.groups
+      .filter((group) => group.configured)
+      .map((group) => ({
+        name: group.name,
+        purpose: group.purpose,
+        intentRefs: group.intentRefs,
+        recommendedEntryTools: group.recommendedEntryTools,
+        effectClass: group.effectClass,
+        serverState: group.serverState,
+        clientState: group.clientState,
+      })),
+    policy: {
+      readBeforeInferringCapabilityAbsence: true,
+      observedNamesAloneAreNotCatalogAttestation: true,
+      directToolAbsenceMayBeHostCatalogLag: true,
+      stableReadbackMayExistWithoutNewDirectToolDiscovery: true,
+      routeSelectionDoesNotAuthorizeRepairEffect: true,
+      materialEffectsRequireSeparateFreshGate: true,
+      canonicalTaskDecisionWriterEffectPublicationOrMemoryAuthorityGranted:
+        false,
+    },
+  } as const;
+}
+
 function runtimeFreshnessStatus(
   runtime: Record<string, unknown>,
 ): OverallFreshnessStatus {
@@ -1198,6 +1250,14 @@ function runtimeRegisteredToolNames(
         (entry): entry is string => typeof entry === "string",
       )
     : [];
+}
+
+function runtimeWithoutCapabilityOrientation(
+  runtime: Record<string, unknown>,
+): Record<string, unknown> {
+  const copy = { ...runtime };
+  delete copy.capabilityOrientation;
+  return copy;
 }
 
 function setRuntimeCapabilityHeaders(
@@ -1282,7 +1342,49 @@ function registerExecutionScopeTools(
       .boolean()
       .optional()
       .describe(
-        "Whether an independently running fallback route was actually observed. Availability alone never establishes quality equivalence.",
+        "Compatibility alias for fallbackRouteReachable. It reports one caller observation for this assessment only; omission or false-by-default output does not mean the primary server observed the host-visible Legacy connector as unreachable.",
+      ),
+    fallbackRouteReachable: z
+      .boolean()
+      .optional()
+      .describe(
+        "Whether the caller independently observed the fallback route reachable for this assessment. The primary MCP cannot observe sibling host connectors, and reachability alone never establishes route attestation, quality equivalence, or planner admission.",
+      ),
+    fallbackRouteRef: z
+      .string()
+      .min(1)
+      .max(1_024)
+      .optional()
+      .describe(
+        "Opaque caller-owned reference for the independently observed fallback route. It grants no invocation or recovery authority.",
+      ),
+    fallbackRouteKind: z
+      .enum(["legacy", "continuity", "other"])
+      .optional()
+      .describe(
+        "Typed fallback route kind used only for continuity assessment and evidence classification.",
+      ),
+    fallbackRouteAttestationState: z
+      .enum(["verified", "unverified", "expired"])
+      .optional()
+      .describe(
+        "Caller-supplied state of an independently produced route attestation. Nexus classifies but does not verify this claim; even caller-verified reachability remains distinct from recovery selection, repair-effect authority, and mission admission.",
+      ),
+    fallbackRouteAttestationRef: z
+      .string()
+      .min(1)
+      .max(2_000)
+      .optional()
+      .describe(
+        "Caller-supplied bounded evidence reference for the independently observed fallback route and exact surface. Presence is not server verification.",
+      ),
+    fallbackFingerprintBasis: z
+      .string()
+      .min(1)
+      .max(256)
+      .optional()
+      .describe(
+        "Canonical fingerprint basis for the fallback tools/list observation. Defaults to canonical complete MCP tool descriptors.",
       ),
     fallbackObservedToolNames: z
       .array(z.string().min(1).max(1_024))
@@ -1302,7 +1404,7 @@ function registerExecutionScopeTools(
       .boolean()
       .optional()
       .describe(
-        "Explicit caller attestation that the fallback is quality-equivalent for the declared capability classes. It grants no effect authority.",
+        "Explicit caller attestation that the fallback is quality-equivalent for the declared capability classes. Nexus does not independently verify the claim through this read-only projection, and it grants no effect authority.",
       ),
     fallbackQualityEvidenceRefs: z
       .array(z.string().min(1).max(2_000))
@@ -1310,7 +1412,7 @@ function registerExecutionScopeTools(
       .max(20)
       .optional()
       .describe(
-        "Bounded evidence references supporting quality equivalence for the exact fallback surface and declared mission capability classes.",
+        "Caller-supplied bounded evidence references supporting quality equivalence for the exact fallback surface and declared mission capability classes. Presence alone is not evidence verification.",
       ),
     fallbackPolicyRef: z
       .string()
@@ -1319,6 +1421,54 @@ function registerExecutionScopeTools(
       .optional()
       .describe(
         "Typed policy reference governing the exact fallback route and capability boundary.",
+      ),
+    fallbackStateIsolationEvidenceRef: z
+      .string()
+      .min(1)
+      .max(2_000)
+      .optional()
+      .describe(
+        "Caller-supplied evidence that the fallback route does not share Nexus executor state, receipts, or recovery database authority. The stable projection does not verify the referenced evidence.",
+      ),
+    fallbackAuthorityIsolationEvidenceRef: z
+      .string()
+      .min(1)
+      .max(2_000)
+      .optional()
+      .describe(
+        "Caller-supplied evidence that the fallback route cannot acquire mission, canonical, writer, publication, effect, or memory authority. The stable projection does not verify the referenced evidence.",
+      ),
+    fallbackFailureDomainEvidenceRef: z
+      .string()
+      .min(1)
+      .max(2_000)
+      .optional()
+      .describe(
+        "Caller-supplied evidence that the fallback route survives independently of the primary Nexus failure domain. The stable projection does not verify the referenced evidence.",
+      ),
+    fallbackRecoveryAuthorityRef: z
+      .string()
+      .min(1)
+      .max(2_000)
+      .optional()
+      .describe(
+        "Caller-supplied bounded authority reference for primary inspection, repair, and verification through the fallback route. This status projection does not validate or exercise that authority, and it is not mission or replay authority.",
+      ),
+    fallbackFailbackProbeEvidenceRef: z
+      .string()
+      .min(1)
+      .max(2_000)
+      .optional()
+      .describe(
+        "Caller-supplied evidence binding the required post-repair Nexus readiness and exact-surface probe before failback. The stable projection does not verify the referenced probe.",
+      ),
+    fallbackRecoverySelectionRef: z
+      .string()
+      .min(1)
+      .max(2_000)
+      .optional()
+      .describe(
+        "Optional operation-scoped selection receipt for the exact recovery-only route. Without it, an eligible route is identified but not selected or invoked.",
       ),
     catalogRefreshEvidenceRefs: z
       .array(z.string().min(1).max(2_000))
@@ -1374,12 +1524,15 @@ function registerExecutionScopeTools(
         },
       });
       if (!Array.isArray(listed.scopes)) {
-        return jsonToolResponse({ ...listed, backendRuntime });
+        return jsonToolResponse({
+          ...listed,
+          backendRuntime: runtimeWithoutCapabilityOrientation(backendRuntime),
+        });
       }
       const scopes = listed.scopes.filter(isRecord);
       return jsonToolResponse({
         ...listed,
-        backendRuntime,
+        backendRuntime: runtimeWithoutCapabilityOrientation(backendRuntime),
         scopes: scopes.map((scope) => {
           const scopeRef = typeof scope.scopeRef === "string"
             ? scope.scopeRef
@@ -1420,7 +1573,7 @@ function registerExecutionScopeTools(
     {
       title: "Inspect DevSpace execution scope",
       description:
-        "Read one DevSpace execution scope by opaque scopeRef, including linked workspaces, live process sessions, the observation gap since the last MCP/tool event, the current backend runtime/tool-surface fingerprint, the persisted turnLanding machine-envelope/resume projection, and—when the target explicitly recorded one—the latest bounded semantic recovery capsule joined with local workspace freshness and later activity. Omit scopeRef for the current host scope. turnLanding distinguishes clean turn boundaries, fresh versus stale/missing semantic capsules, and running process/effect reconciliation without inferring mission from operational events. This stable bootstrap route can also carry additive read-only server-owned control-plane capability projections, so a frozen client catalog does not have to discover a newer top-level tool before reading a fixed continuation preflight. When configured, a publication projection may perform bounded fresh observation of its fixed remote authority but never imports a missing Git object through this status route. The server reports which critical tools are currently registered but cannot observe the host's cached tools/list result. Model progress and provider generation are not observable between MCP calls, so status never claims that a silent interval is normal reasoning or a hang. Semantic state is never inferred from filenames or tool events. Raw host session IDs, prompts, private reasoning, credentials, tool outputs, patches, raw commands, and arbitrary paths are never returned; capsule, landing, and control-plane projections remain executor-local observation rather than task, decision, writer, effect, or publication authority.",
+        "Read one DevSpace execution scope by opaque scopeRef. The response places a compact intent-oriented capabilityQuickstart near the front before linked workspaces and heavier runtime state, then includes live process sessions, the observation gap since the last MCP/tool event, the current backend runtime/tool-surface fingerprint, the full model-oriented capability directory, the persisted turnLanding machine-envelope/resume projection, and—when the target explicitly recorded one—the latest bounded semantic recovery capsule joined with local workspace freshness and later activity. Omit scopeRef for the current host scope. turnLanding distinguishes clean turn boundaries, fresh versus stale/missing semantic capsules, and running process/effect reconciliation without inferring mission from operational events. This stable bootstrap route can also carry additive read-only server-owned control-plane capability projections, so a frozen client catalog does not have to discover a newer top-level tool before learning what DevSpace can do or reading a fixed continuation preflight. When configured, a publication projection may perform bounded fresh observation of its fixed remote authority but never imports a missing Git object through this status route. The server reports which critical tools are currently registered but cannot observe the host's cached tools/list result or sibling MCP connector reachability. Model progress and provider generation are not observable between MCP calls, so status never claims that a silent interval is normal reasoning or a hang. Semantic state is never inferred from filenames or tool events. Raw host session IDs, prompts, private reasoning, credentials, tool outputs, patches, raw commands, and arbitrary paths are never returned; capability, capsule, landing, and control-plane projections remain executor-local observation rather than task, decision, writer, effect, publication, or memory authority.",
       inputSchema: {
         scopeRef: scopeRefSchema.optional(),
         ...clientCatalogInputSchema,
@@ -1438,11 +1591,23 @@ function registerExecutionScopeTools(
       requiredCapabilityRefs,
       activeMcpRoute,
       fallbackAvailable,
+      fallbackRouteReachable,
+      fallbackRouteRef,
+      fallbackRouteKind,
+      fallbackRouteAttestationState,
+      fallbackRouteAttestationRef,
+      fallbackFingerprintBasis,
       fallbackObservedToolNames,
       fallbackObservedFingerprintSha256,
       fallbackQualityEquivalentAttested,
       fallbackQualityEvidenceRefs,
       fallbackPolicyRef,
+      fallbackStateIsolationEvidenceRef,
+      fallbackAuthorityIsolationEvidenceRef,
+      fallbackFailureDomainEvidenceRef,
+      fallbackRecoveryAuthorityRef,
+      fallbackFailbackProbeEvidenceRef,
+      fallbackRecoverySelectionRef,
       catalogRefreshEvidenceRefs,
       diagnosticEvidenceRefs,
     }, { _meta }) => {
@@ -1479,6 +1644,11 @@ function registerExecutionScopeTools(
           clientObservedToolNames,
         },
       });
+      const mcpCapabilityOrientation = isRecord(
+        backendRuntime.capabilityOrientation,
+      )
+        ? backendRuntime.capabilityOrientation as unknown as McpCapabilityOrientation
+        : undefined;
       const repositoryFastPathContinuation = continuationPreflightProjector
         ? await continuationPreflightProjector.project({
             refresh: false,
@@ -1518,11 +1688,23 @@ function registerExecutionScopeTools(
           : []),
       ];
       const fallbackObservationProvided = fallbackAvailable !== undefined
+        || fallbackRouteReachable !== undefined
+        || fallbackRouteRef !== undefined
+        || fallbackRouteKind !== undefined
+        || fallbackRouteAttestationState !== undefined
+        || fallbackRouteAttestationRef !== undefined
+        || fallbackFingerprintBasis !== undefined
         || fallbackObservedToolNames !== undefined
         || fallbackObservedFingerprintSha256 !== undefined
         || fallbackQualityEquivalentAttested !== undefined
         || fallbackQualityEvidenceRefs !== undefined
-        || fallbackPolicyRef !== undefined;
+        || fallbackPolicyRef !== undefined
+        || fallbackStateIsolationEvidenceRef !== undefined
+        || fallbackAuthorityIsolationEvidenceRef !== undefined
+        || fallbackFailureDomainEvidenceRef !== undefined
+        || fallbackRecoveryAuthorityRef !== undefined
+        || fallbackFailbackProbeEvidenceRef !== undefined
+        || fallbackRecoverySelectionRef !== undefined;
       const catalogRefreshAttemptCount = catalogRefreshEvidenceRefs?.length ?? 0;
       const diagnosticAttemptCount = diagnosticEvidenceRefs?.length ?? 0;
       const primaryMcpRecovery = assessMcpPrimaryRecovery({
@@ -1554,7 +1736,11 @@ function registerExecutionScopeTools(
         ...(fallbackObservationProvided
           ? {
               fallback: {
-                available: fallbackAvailable ?? true,
+                available: fallbackAvailable,
+                routeReachable:
+                  fallbackRouteReachable
+                  ?? fallbackAvailable
+                  ?? (fallbackObservedToolNames === undefined ? undefined : true),
                 observedToolNames: fallbackObservedToolNames,
                 observedFingerprintSha256:
                   fallbackObservedFingerprintSha256,
@@ -1567,19 +1753,100 @@ function registerExecutionScopeTools(
           : {}),
         safeTurnLandingAvailable: true,
       });
+      const runtimeToolSurface = isRecord(backendRuntime.toolSurface)
+        ? backendRuntime.toolSurface
+        : undefined;
+      const runtimeBackend = isRecord(backendRuntime.backend)
+        ? backendRuntime.backend
+        : undefined;
+      const primaryFingerprintSha256 =
+        typeof runtimeToolSurface?.fingerprintSha256 === "string"
+          ? runtimeToolSurface.fingerprintSha256
+          : undefined;
+      const primarySurfaceEpoch =
+        typeof runtimeToolSurface?.surfaceEpoch === "string"
+          ? runtimeToolSurface.surfaceEpoch
+          : undefined;
+      const primaryInstanceRef =
+        typeof runtimeBackend?.instanceRef === "string"
+          ? runtimeBackend.instanceRef
+          : "current";
+      const fallbackRecoveryObservation:
+        HostFallbackRecoveryObservation | undefined = fallbackObservationProvided
+          ? {
+              routeRef: fallbackRouteRef,
+              routeKind: fallbackRouteKind,
+              routeReachable:
+                fallbackRouteReachable
+                ?? fallbackAvailable
+                ?? (fallbackObservedToolNames === undefined ? undefined : true),
+              observedToolNames: fallbackObservedToolNames,
+              observedFingerprintSha256:
+                fallbackObservedFingerprintSha256,
+              fingerprintBasis: fallbackFingerprintBasis,
+              attestationState: fallbackRouteAttestationState,
+              attestationRef: fallbackRouteAttestationRef,
+              policyRef: fallbackPolicyRef,
+              stateIsolationEvidenceRef:
+                fallbackStateIsolationEvidenceRef,
+              authorityIsolationEvidenceRef:
+                fallbackAuthorityIsolationEvidenceRef,
+              failureDomainEvidenceRef: fallbackFailureDomainEvidenceRef,
+              recoveryAuthorityRef: fallbackRecoveryAuthorityRef,
+              failbackProbeEvidenceRef: fallbackFailbackProbeEvidenceRef,
+              selectionRef: fallbackRecoverySelectionRef,
+            }
+          : undefined;
+      const mcpFallbackRecovery = projectMcpFallbackRecovery({
+        assessedAt: new Date().toISOString(),
+        primaryRecovery: primaryMcpRecovery,
+        primaryRouteRef: "route:nexus:primary",
+        primaryAttestationRef: `runtime:nexus:${primaryInstanceRef}`,
+        primaryAttestationState:
+          primaryMcpRecovery.primary.functionalState === "healthy"
+          && primaryFingerprintSha256 !== undefined
+            ? "verified"
+            : "unverified",
+        primarySurfaceEpoch,
+        primaryFingerprintSha256,
+        primaryRecoveryEvidenceRef:
+          `assessment:mcp-primary-recovery:${
+            primaryMcpRecovery.state.toLowerCase()
+          }`,
+        fallback: fallbackRecoveryObservation,
+      });
       const stableControlPlane = primaryMcpRecovery
+        || mcpCapabilityOrientation
+        || mcpFallbackRecovery
         || continuationPreflight
         || selfRepositoryPublicationPreflight
-        ? stableControlPlaneProjection({
+          ? stableControlPlaneProjection({
+            mcpCapabilityOrientation,
             primaryMcpRecovery,
+            mcpFallbackRecovery,
             continuationPreflight,
             scopePublicationPreflight: scopePublication,
             selfRepositoryPublicationPreflight,
           })
         : undefined;
-      return jsonToolResponse({
-        ...status,
+      const capabilityQuickstart = mcpCapabilityOrientation
+        ? capabilityQuickstartProjection(mcpCapabilityOrientation)
+        : undefined;
+      // Status exposes the compact front-loaded quickstart and the full stable
+      // control-plane orientation. Remove the internal runtime copy from this
+      // response to avoid making the model parse the same large directory
+      // three times. Other runtime snapshots may retain it for diagnostics.
+      const backendRuntimeForStatus = runtimeWithoutCapabilityOrientation(
         backendRuntime,
+      );
+      return jsonToolResponse({
+        schemaVersion: status.schemaVersion,
+        scope: status.scope,
+        ...(capabilityQuickstart === undefined
+          ? {}
+          : { capabilityQuickstart }),
+        ...status,
+        backendRuntime: backendRuntimeForStatus,
         ...(scope === undefined
           ? {}
           : { runtimeRelation: scopeRuntimeRelation(scope, backendRuntime) }),
@@ -1622,7 +1889,9 @@ function registerExecutionScopeTools(
         executionScopeIdentity(_meta),
         { limit, cursor },
       ),
-      backendRuntime: runtimeCapabilities.snapshot(),
+      backendRuntime: runtimeWithoutCapabilityOrientation(
+        runtimeCapabilities.snapshot(),
+      ),
     }),
   );
 }
@@ -4382,6 +4651,9 @@ export function createServer(
     const runtime = runtimeCapabilities.snapshot({ clientAttestation });
     const backend = isRecord(runtime.backend) ? runtime.backend : {};
     const toolSurface = isRecord(runtime.toolSurface) ? runtime.toolSurface : {};
+    const toolSurfaceFreshness = isRecord(runtime.toolSurfaceFreshness)
+      ? runtime.toolSurfaceFreshness
+      : {};
     const database = executionScopes.readinessProbe();
     const runningProcessCount = processSessions
       .inspect()
@@ -4409,6 +4681,16 @@ export function createServer(
       backendStartedAt: backend.startedAt,
       surfaceEpoch: toolSurface.surfaceEpoch,
       toolSurfaceFingerprintSha256: toolSurface.fingerprintSha256,
+      serverSurfaceCurrent:
+        toolSurfaceFreshness.serverCurrent === true
+          ? true
+          : toolSurfaceFreshness.serverCurrent === false
+            ? false
+            : null,
+      toolSurfaceFreshnessStatus:
+        typeof toolSurfaceFreshness.status === "string"
+          ? toolSurfaceFreshness.status
+          : "INDETERMINATE",
       serviceProcessObservation: serviceProcesses,
       policy: {
         ...readiness.policy,

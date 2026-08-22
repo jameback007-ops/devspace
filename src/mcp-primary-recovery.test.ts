@@ -153,7 +153,25 @@ test("quality-equivalent fallback is admitted only after primary recovery is exh
   });
   assert.equal(assessment.state, "USE_QUALITY_EQUIVALENT_FALLBACK");
   assert.equal(assessment.route, "fallback");
+  assert.equal(assessment.workMayContinue, false);
   assert.equal(assessment.fallback.admitted, true);
+  assert.equal(
+    assessment.fallback.routeAttestationState,
+    "caller_attested",
+  );
+  assert.equal(assessment.fallback.callerEvidenceVerifiedByServer, false);
+  assert.equal(assessment.fallback.operationScopedSelectionRequired, true);
+  assert.equal(assessment.fallback.invocationAuthorized, false);
+  assert.equal(
+    assessment.policy.fallbackAdmissionDoesNotAuthorizeInvocation,
+    true,
+  );
+  assert.ok(
+    assessment.reasonCodes.includes(
+      "operation_scoped_fallback_selection_required",
+    ),
+  );
+  assert.match(assessment.exactNextAction, /operation-scoped/);
   assert.equal(
     assessment.fallback.observedFingerprintSha256,
     "b".repeat(64),
@@ -183,6 +201,114 @@ test("fallback tool names without a complete surface fingerprint are insufficien
   assert.ok(
     assessment.fallback.blockingFactors.includes(
       "fallback_surface_fingerprint_missing_or_invalid",
+    ),
+  );
+});
+
+test("missing fallback observation is explicitly unobservable rather than unreachable", () => {
+  const assessment = assessMcpPrimaryRecovery({
+    primaryFunctionalState: "unavailable",
+    catalogStatus: "INDETERMINATE",
+    primaryRegisteredToolNames: primaryTools,
+    requiredCapabilityRefs: ["workspace_read"],
+    recovery: {
+      transportReconnect: "unavailable",
+      functionalRepair: "unavailable",
+      diagnosticAgent: "unavailable",
+    },
+  });
+  assert.equal(assessment.fallback.available, false);
+  assert.equal(
+    assessment.fallback.routeReachability.state,
+    "unobservable_by_primary",
+  );
+  assert.equal(
+    assessment.fallback.routeReachability.primaryCanObserveSiblingHostConnectors,
+    false,
+  );
+  assert.equal(
+    assessment.fallback.routeReachability.doesNotMeanHostConnectorUnavailable,
+    true,
+  );
+  assert.equal(assessment.fallback.routeAttestationState, "missing");
+  assert.ok(
+    assessment.fallback.blockingFactors.includes(
+      "fallback_route_observation_missing",
+    ),
+  );
+  assert.match(
+    assessment.fallback.exactAttestationNextAction,
+    /do not infer connector failure/,
+  );
+});
+
+test("reachable host fallback remains distinct from planner admission", () => {
+  const assessment = assessMcpPrimaryRecovery({
+    primaryFunctionalState: "unavailable",
+    catalogStatus: "INDETERMINATE",
+    primaryRegisteredToolNames: primaryTools,
+    requiredCapabilityRefs: ["workspace_read"],
+    recovery: {
+      transportReconnect: "unavailable",
+      functionalRepair: "unavailable",
+      diagnosticAgent: "unavailable",
+    },
+    fallback: {
+      routeReachable: true,
+      observedToolNames: ["open_workspace", "read"],
+      observedFingerprintSha256: "d".repeat(64),
+    },
+  });
+  assert.equal(
+    assessment.fallback.routeReachability.state,
+    "caller_observed_reachable",
+  );
+  assert.equal(
+    assessment.fallback.routeAttestationState,
+    "surface_observed",
+  );
+  assert.equal(assessment.fallback.plannerAdmissionState, "not_admitted");
+  assert.equal(assessment.fallback.admitted, false);
+  assert.ok(
+    assessment.fallback.blockingFactors.includes(
+      "fallback_quality_equivalence_unattested",
+    ),
+  );
+  assert.match(
+    assessment.fallback.exactAttestationNextAction,
+    /surface is observed but not qualified/,
+  );
+});
+
+test("conflicting fallback reachability aliases fail closed", () => {
+  const assessment = assessMcpPrimaryRecovery({
+    primaryFunctionalState: "unavailable",
+    catalogStatus: "INDETERMINATE",
+    primaryRegisteredToolNames: primaryTools,
+    requiredCapabilityRefs: ["workspace_read"],
+    recovery: {
+      transportReconnect: "unavailable",
+      functionalRepair: "unavailable",
+      diagnosticAgent: "unavailable",
+    },
+    fallback: {
+      available: false,
+      routeReachable: true,
+      observedToolNames: ["open_workspace", "read"],
+      observedFingerprintSha256: "e".repeat(64),
+      qualityEquivalentAttested: true,
+      qualityEvidenceRefs: ["receipt:quality"],
+      policyRef: "policy:fallback",
+    },
+  });
+  assert.equal(
+    assessment.fallback.routeReachability.state,
+    "conflicting_caller_observation",
+  );
+  assert.equal(assessment.fallback.admitted, false);
+  assert.ok(
+    assessment.fallback.blockingFactors.includes(
+      "fallback_route_observation_conflicting",
     ),
   );
 });
@@ -272,6 +398,23 @@ test("failback waits for a current primary catalog even for bootstrap-only work"
   assert.equal(assessment.state, "ATTEST_CLIENT_CATALOG");
   assert.equal(assessment.route, "none");
   assert.equal(assessment.workMayContinue, false);
+});
+
+test("observed client tool names without a current descriptor fingerprint do not attest the catalog", () => {
+  const assessment = assessMcpPrimaryRecovery({
+    primaryFunctionalState: "healthy",
+    catalogStatus: "SERVER_CURRENT_CLIENT_UNKNOWN",
+    primaryRegisteredToolNames: primaryTools,
+    clientObservedToolNames: primaryTools,
+    knownCallableToolNames: primaryTools,
+    requiredCapabilityRefs: ["workspace_mutation"],
+  });
+  assert.equal(assessment.primary.clientCatalogAttested, false);
+  assert.equal(assessment.state, "ATTEST_CLIENT_CATALOG");
+  assert.equal(assessment.workMayContinue, false);
+  assert.ok(
+    assessment.exactNextAction.includes("complete tools/list fingerprint"),
+  );
 });
 
 test("functional readiness distinguishes liveness from safe restart", () => {

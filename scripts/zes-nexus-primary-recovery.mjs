@@ -22,6 +22,16 @@ const DEFAULT_HOST_HEADER = "mcp.zesnexus.com";
 const DEFAULT_STATE_ROOT = "/run/devspace-zesnexus-primary-recovery";
 const DEFAULT_RECEIPT_ROOT =
   "/var/lib/devspace-zesnexus/incident-snapshots/primary-recovery";
+const DEFAULT_CONFLICTING_RESTART_UNITS = [
+  "devspace-zesnexus-health.timer",
+];
+const LEGACY_RECOVERY_REQUIRED_TOOLS = [
+  "open_workspace",
+  "read",
+  "apply_patch",
+  "exec_command",
+  "write_stdin",
+];
 const RECOVERY_STATE_SCHEMA = "zes.nexus-primary-recovery-state.v1";
 const RECOVERY_RECEIPT_SCHEMA = "zes.nexus-primary-recovery-receipt.v1";
 const RECOVERY_PLAN_SCHEMA = "zes.nexus-primary-recovery-plan.v1";
@@ -66,6 +76,24 @@ function safeHostHeader(value) {
     throw new Error("Primary readiness Host header is invalid.");
   }
   return selected;
+}
+
+function systemdUnitNames(value) {
+  const selected = value?.trim()
+    ? value.split(/[\s,]+/)
+    : DEFAULT_CONFLICTING_RESTART_UNITS;
+  const units = [...new Set(selected.filter(Boolean))];
+  for (const unit of units) {
+    if (!/^[A-Za-z0-9_.@:-]{1,256}\.(?:service|timer)$/.test(unit)) {
+      throw new Error(`Conflicting recovery unit name is invalid: ${unit}`);
+    }
+    if (unit === SERVICE_NAME) {
+      throw new Error(
+        "The primary service cannot be its own conflicting recovery owner.",
+      );
+    }
+  }
+  return units;
 }
 
 export function loadRecoveryPolicy(environment = process.env) {
@@ -135,6 +163,9 @@ export function loadRecoveryPolicy(environment = process.env) {
       5 * 60_000,
       30_000,
       60 * 60_000,
+    ),
+    conflictingRestartUnits: systemdUnitNames(
+      environment.ZES_NEXUS_PRIMARY_RECOVERY_CONFLICTING_RESTART_UNITS,
     ),
   };
 }
@@ -250,6 +281,24 @@ export function normalizeReadinessProbe({
     ...(typeof record.surfaceEpoch === "string"
       ? { surfaceEpoch: record.surfaceEpoch.slice(0, 256) }
       : {}),
+    ...(safeDigest(record.toolSurfaceFingerprintSha256)
+      ? {
+          toolSurfaceFingerprintSha256:
+            record.toolSurfaceFingerprintSha256,
+        }
+      : {}),
+    serverSurfaceCurrent:
+      record.serverSurfaceCurrent === true
+        ? true
+        : record.serverSurfaceCurrent === false
+          ? false
+          : null,
+    ...(typeof record.toolSurfaceFreshnessStatus === "string"
+      ? {
+          toolSurfaceFreshnessStatus:
+            record.toolSurfaceFreshnessStatus.slice(0, 128),
+        }
+      : {}),
     reasonCodes: safeStrings(record.reasonCodes),
     database: {
       state: database.state === "ready" ? "ready" : "failed",
@@ -289,7 +338,57 @@ function defaultState() {
   };
 }
 
-export function planPrimaryRecovery({ probe, serviceState, state, policy }) {
+function hostMediatedRecoveryEscalation(reasonCodes = []) {
+  return {
+    schemaVersion: "devspace.host-mediated-primary-recovery.v1",
+    state: "required",
+    dispatchState: "external_host_action_required",
+    routeClass: "recovery_only",
+    routeKind: "legacy_or_independent_continuity",
+    operationClass: "inspect_repair_verify_primary",
+    requiredTools: [...LEGACY_RECOVERY_REQUIRED_TOOLS],
+    requiredCapabilities: [
+      "continuity.primary.inspect",
+      "continuity.primary.repair",
+      "continuity.primary.verify",
+    ],
+    nexusBootstrapToolRequired: false,
+    hostMediatedDispatchRequired: true,
+    primaryCanInvokeSiblingConnector: false,
+    selectionRequired: true,
+    routeSelectionAuthorizesRepairEffect: false,
+    recoveryEffectRequiresSeparateAuthorityAndEffectGate: true,
+    callerEvidenceVerifiedByController: false,
+    executableRepairOwnerClass:
+      "host_or_executor_bound_to_independently_attested_recovery_route",
+    missionAuthorityGranted: false,
+    effectReplayAuthorized: false,
+    qualityReductionAuthorized: false,
+    failbackPostconditions: [
+      "primary_readyz_ready",
+      "primary_exact_tool_surface_verified",
+      "primary_required_capabilities_verified",
+      "host_catalog_refreshed_or_currently_attested_when_host_supports_it",
+      "primary_route_reselected_before_mission_work",
+    ],
+    externalBoundary:
+      "This controller cannot invoke a sibling MCP connector owned by the host. A host or executor must dispatch the independently attested recovery-only route and return bounded repair evidence.",
+    remainingExternalLimitations: [
+      "sibling_host_connector_invocation_unavailable_to_controller",
+      "host_catalog_refresh_actuator_not_owned_by_controller",
+      "independent_route_evidence_requires_host_or_executor_verification",
+    ],
+    reasonCodes: safeStrings(reasonCodes),
+  };
+}
+
+export function planPrimaryRecovery({
+  probe,
+  serviceState,
+  state,
+  policy,
+  competingRestartOwners = [],
+}) {
   const current = {
     ...defaultState(),
     ...(state && typeof state === "object" ? state : {}),
@@ -306,7 +405,10 @@ export function planPrimaryRecovery({ probe, serviceState, state, policy }) {
     0,
     1_000_000,
   );
-  if (probe.healthy) {
+  const controlFailureReasonCodes = primaryRecoveryControlFailureReasonCodes(
+    probe,
+  );
+  if (controlFailureReasonCodes.length === 0) {
     return {
       schemaVersion: RECOVERY_PLAN_SCHEMA,
       state: "HEALTHY",
@@ -315,7 +417,11 @@ export function planPrimaryRecovery({ probe, serviceState, state, policy }) {
       repairAttempts: 0,
       effectAllowed: false,
       diagnosticAgentRequired: false,
-      reasonCodes: ["primary_functional_readiness_verified"],
+      reasonCodes: [
+        "primary_functional_readiness_verified",
+        "primary_exact_surface_identity_verified",
+        "primary_server_surface_current",
+      ],
     };
   }
 
@@ -329,7 +435,10 @@ export function planPrimaryRecovery({ probe, serviceState, state, policy }) {
       repairAttempts: previousRepairAttempts,
       effectAllowed: false,
       diagnosticAgentRequired: false,
-      reasonCodes: ["primary_readiness_failure_below_threshold"],
+      reasonCodes: [
+        "primary_readiness_failure_below_threshold",
+        ...controlFailureReasonCodes,
+      ],
     };
   }
 
@@ -344,6 +453,7 @@ export function planPrimaryRecovery({ probe, serviceState, state, policy }) {
       diagnosticAgentRequired: false,
       reasonCodes: [
         "restart_safety_deferred",
+        ...controlFailureReasonCodes,
         ...probe.restartSafety.reasonCodes,
       ],
     };
@@ -358,7 +468,14 @@ export function planPrimaryRecovery({ probe, serviceState, state, policy }) {
       repairAttempts: previousRepairAttempts,
       effectAllowed: false,
       diagnosticAgentRequired: true,
-      reasonCodes: ["automatic_repair_budget_exhausted"],
+      reasonCodes: [
+        "automatic_repair_budget_exhausted",
+        ...controlFailureReasonCodes,
+      ],
+      recoveryEscalation: hostMediatedRecoveryEscalation([
+        "automatic_repair_budget_exhausted",
+        ...controlFailureReasonCodes,
+      ]),
     };
   }
 
@@ -373,7 +490,14 @@ export function planPrimaryRecovery({ probe, serviceState, state, policy }) {
       repairAttempts: previousRepairAttempts,
       effectAllowed: false,
       diagnosticAgentRequired: true,
-      reasonCodes: ["restart_safety_unverified"],
+      reasonCodes: [
+        "restart_safety_unverified",
+        ...controlFailureReasonCodes,
+      ],
+      recoveryEscalation: hostMediatedRecoveryEscalation([
+        "restart_safety_unverified",
+        ...controlFailureReasonCodes,
+      ]),
     };
   }
 
@@ -386,7 +510,31 @@ export function planPrimaryRecovery({ probe, serviceState, state, policy }) {
       repairAttempts: previousRepairAttempts,
       effectAllowed: false,
       diagnosticAgentRequired: false,
-      reasonCodes: ["primary_recovery_effects_disabled"],
+      reasonCodes: [
+        "primary_recovery_effects_disabled",
+        ...controlFailureReasonCodes,
+      ],
+    };
+  }
+
+  if (competingRestartOwners.length > 0) {
+    return {
+      schemaVersion: RECOVERY_PLAN_SCHEMA,
+      state: "COMPETING_RECOVERY_OWNER",
+      action:
+        "disable_or_supersede_competing_restart_owner_then_reassess_before_effects",
+      consecutiveFailures,
+      repairAttempts: previousRepairAttempts,
+      effectAllowed: false,
+      diagnosticAgentRequired: false,
+      competingRestartOwners: safeStrings(competingRestartOwners),
+      reasonCodes: [
+        "competing_recovery_owner_active",
+        ...controlFailureReasonCodes,
+        ...safeStrings(competingRestartOwners).map(
+          (unit) => `competing_unit:${unit}`,
+        ),
+      ],
     };
   }
 
@@ -399,8 +547,15 @@ export function planPrimaryRecovery({ probe, serviceState, state, policy }) {
     effectAllowed: true,
     diagnosticAgentRequired: false,
     reasonCodes: serviceStopped
-      ? ["primary_service_not_running", "restart_safety_verified"]
-      : ["primary_functional_readiness_failed", "restart_safety_verified"],
+      ? [
+          "primary_service_not_running",
+          ...controlFailureReasonCodes,
+          "restart_safety_verified",
+        ]
+      : [
+          ...controlFailureReasonCodes,
+          "restart_safety_verified",
+        ],
   };
 }
 
@@ -532,27 +687,142 @@ async function serviceState() {
   }
 }
 
+async function activeSystemdUnits(units) {
+  const active = [];
+  for (const unit of units) {
+    try {
+      const result = await execFileAsync(
+        "/usr/bin/systemctl",
+        ["is-active", unit],
+        { timeout: 5_000, maxBuffer: 16_384 },
+      );
+      if (result.stdout.trim() === "active") active.push(unit);
+    } catch (error) {
+      const stdout = typeof error?.stdout === "string"
+        ? error.stdout.trim()
+        : "";
+      if (stdout === "active") active.push(unit);
+    }
+  }
+  return active;
+}
+
 function delay(milliseconds) {
   return new Promise((resolveDelay) => setTimeout(resolveDelay, milliseconds));
 }
 
 async function verifyStablePrimary(policy, previousInstanceRef) {
   const probes = [];
-  let consecutive = 0;
   for (let index = 0; index < policy.stableProbeMaximum; index += 1) {
     await delay(policy.stableProbeDelayMs);
     const probe = await probePrimary(policy);
     probes.push(probe);
-    const instanceChanged = previousInstanceRef === undefined
-      || (probe.backendInstanceRef !== undefined
-        && probe.backendInstanceRef !== previousInstanceRef);
-    if (probe.healthy && instanceChanged) consecutive += 1;
-    else consecutive = 0;
-    if (consecutive >= policy.stableProbeCount) {
-      return { verified: true, probes };
+    const assessment = evaluateStablePrimaryProbes(
+      probes,
+      previousInstanceRef,
+      policy.stableProbeCount,
+    );
+    if (assessment.verified) {
+      return { ...assessment, probes };
     }
   }
-  return { verified: false, probes };
+  return {
+    ...evaluateStablePrimaryProbes(
+      probes,
+      previousInstanceRef,
+      policy.stableProbeCount,
+    ),
+    probes,
+  };
+}
+
+function stablePrimaryIdentity(probe, previousInstanceRef) {
+  if (!probe?.healthy) return undefined;
+  if (
+    typeof probe.backendInstanceRef !== "string"
+    || probe.backendInstanceRef.length === 0
+    || probe.backendInstanceRef === previousInstanceRef
+  ) return undefined;
+  if (
+    typeof probe.surfaceEpoch !== "string"
+    || probe.surfaceEpoch.length === 0
+    || !safeDigest(probe.toolSurfaceFingerprintSha256)
+    || probe.serverSurfaceCurrent !== true
+  ) return undefined;
+  return {
+    backendInstanceRef: probe.backendInstanceRef,
+    surfaceEpoch: probe.surfaceEpoch,
+    toolSurfaceFingerprintSha256: probe.toolSurfaceFingerprintSha256,
+  };
+}
+
+function primaryRecoveryControlFailureReasonCodes(probe) {
+  if (!probe?.healthy) return ["primary_functional_readiness_failed"];
+  const reasons = [];
+  if (
+    typeof probe.backendInstanceRef !== "string"
+    || probe.backendInstanceRef.length === 0
+  ) reasons.push("primary_backend_instance_unattested");
+  if (
+    typeof probe.surfaceEpoch !== "string"
+    || probe.surfaceEpoch.length === 0
+  ) reasons.push("primary_surface_epoch_unattested");
+  if (!safeDigest(probe.toolSurfaceFingerprintSha256)) {
+    reasons.push("primary_tool_surface_fingerprint_unattested");
+  }
+  if (probe.serverSurfaceCurrent !== true) {
+    reasons.push(
+      probe.serverSurfaceCurrent === false
+        ? "primary_server_surface_stale"
+        : "primary_server_surface_currentness_unattested",
+    );
+  }
+  return safeStrings(reasons);
+}
+
+export function isPrimaryRecoveryControlHealthy(probe) {
+  return primaryRecoveryControlFailureReasonCodes(probe).length === 0;
+}
+
+export function evaluateStablePrimaryProbes(
+  probes,
+  previousInstanceRef,
+  requiredConsecutive,
+) {
+  const required = integer(requiredConsecutive, 1, 1, 20);
+  let consecutive = 0;
+  let currentIdentity;
+  for (const probe of probes ?? []) {
+    const identity = stablePrimaryIdentity(probe, previousInstanceRef);
+    const identityKey = identity
+      ? `${identity.backendInstanceRef}\u0000${identity.surfaceEpoch}\u0000${identity.toolSurfaceFingerprintSha256}`
+      : undefined;
+    const currentKey = currentIdentity
+      ? `${currentIdentity.backendInstanceRef}\u0000${currentIdentity.surfaceEpoch}\u0000${currentIdentity.toolSurfaceFingerprintSha256}`
+      : undefined;
+    if (!identity) {
+      consecutive = 0;
+      currentIdentity = undefined;
+      continue;
+    }
+    if (identityKey === currentKey) consecutive += 1;
+    else {
+      currentIdentity = identity;
+      consecutive = 1;
+    }
+    if (consecutive >= required) {
+      return {
+        verified: true,
+        consecutiveStableProbeCount: consecutive,
+        verifiedIdentity: currentIdentity,
+      };
+    }
+  }
+  return {
+    verified: false,
+    consecutiveStableProbeCount: consecutive,
+    ...(currentIdentity ? { lastCandidateIdentity: currentIdentity } : {}),
+  };
 }
 
 function incidentState(previous, plan, probe, observedServiceState, incidentId) {
@@ -578,6 +848,40 @@ async function writeReceipt(policy, incidentId, receipt) {
   return path;
 }
 
+export function primaryRecoveredResult({
+  incidentId,
+  receiptPath,
+  recoveryOwnerObservation,
+  verification,
+}) {
+  if (!verification?.verified || !verification.verifiedIdentity) {
+    throw new Error(
+      "Primary recovery result requires verified runtime and exact surface identity.",
+    );
+  }
+  return {
+    schemaVersion: RECOVERY_PLAN_SCHEMA,
+    state: "PRIMARY_RECOVERED",
+    action: "attest_host_catalog_then_request_failback_primary",
+    effectAllowed: false,
+    diagnosticAgentRequired: false,
+    runtimeRecovered: true,
+    hostCatalogAttestationRequired: true,
+    missionFailbackAuthorized: false,
+    incidentId,
+    receiptPath,
+    recoveryOwnerObservation,
+    verifiedIdentity: verification.verifiedIdentity,
+    exactNextAction:
+      "Refresh or reconnect the host MCP catalog where supported, attest the canonical complete client tools/list fingerprint, and require the stable primary-recovery projection to return FAILBACK_PRIMARY before normal mission work resumes.",
+    reasonCodes: [
+      "stable_post_restart_readiness_verified",
+      "stable_post_restart_exact_surface_identity_verified",
+      "host_catalog_and_mission_failback_not_yet_attested",
+    ],
+  };
+}
+
 async function main() {
   const policy = loadRecoveryPolicy();
   const owner = await acquireLease(policy);
@@ -595,20 +899,32 @@ async function main() {
 
   try {
     const previous = await readJson(policy.statePath, defaultState());
-    const [probe, observedServiceState] = await Promise.all([
+    const [probe, observedServiceState, competingRestartOwners] =
+      await Promise.all([
       probePrimary(policy),
       serviceState(),
+      activeSystemdUnits(policy.conflictingRestartUnits),
     ]);
     const plan = planPrimaryRecovery({
       probe,
       serviceState: observedServiceState,
       state: previous,
       policy,
+      competingRestartOwners,
     });
+    const recoveryOwnerObservation = {
+      configuredCompetingUnits: policy.conflictingRestartUnits,
+      activeCompetingUnits: competingRestartOwners,
+      effectsEnabled: policy.effectsEnabled,
+    };
 
     if (plan.state === "HEALTHY") {
       await rm(policy.statePath, { force: true });
-      console.log(JSON.stringify({ ...plan, probe }));
+      console.log(JSON.stringify({
+        ...plan,
+        probe,
+        recoveryOwnerObservation,
+      }));
       return;
     }
 
@@ -638,6 +954,7 @@ async function main() {
             ? { receiptPath: repeatedState.lastReceiptPath }
             : {}),
           receiptSuppressed: true,
+          recoveryOwnerObservation,
           reasonCodes: [
             ...plan.reasonCodes,
             "unchanged_recovery_state_receipt_suppressed",
@@ -654,6 +971,7 @@ async function main() {
         plan,
         probe,
         serviceState: observedServiceState,
+        recoveryOwnerObservation,
         effect: { state: "none" },
         diagnosticRequest: plan.diagnosticAgentRequired
           ? {
@@ -672,6 +990,8 @@ async function main() {
           fallbackEffectPerformed: false,
           rawErrorsCaptured: false,
           legacyMutated: false,
+          hostCatalogAttestationPerformed: false,
+          missionFailbackAuthorized: false,
         },
       };
       const receiptPath = await writeReceipt(
@@ -683,7 +1003,12 @@ async function main() {
         ...nextState,
         lastReceiptPath: receiptPath,
       });
-      console.log(JSON.stringify({ ...plan, incidentId, receiptPath }));
+      console.log(JSON.stringify({
+        ...plan,
+        incidentId,
+        receiptPath,
+        recoveryOwnerObservation,
+      }));
       return;
     }
 
@@ -696,6 +1021,7 @@ async function main() {
       plan,
       probe,
       serviceState: observedServiceState,
+      recoveryOwnerObservation,
       effect: {
         state: "prepared",
         serviceName: SERVICE_NAME,
@@ -706,6 +1032,8 @@ async function main() {
         fallbackEffectPerformed: false,
         rawErrorsCaptured: false,
         legacyMutated: false,
+        hostCatalogAttestationPerformed: false,
+        missionFailbackAuthorized: false,
       },
     };
     const receiptPath = await writeReceipt(
@@ -761,23 +1089,35 @@ async function main() {
       verification: {
         stableProbeCountRequired: policy.stableProbeCount,
         stable: verification.verified,
+        consecutiveStableProbeCount:
+          verification.consecutiveStableProbeCount ?? 0,
+        ...(verification.verifiedIdentity
+          ? { verifiedIdentity: verification.verifiedIdentity }
+          : {}),
+        ...(verification.lastCandidateIdentity
+          ? { lastCandidateIdentity: verification.lastCandidateIdentity }
+          : {}),
         probes: verification.probes,
       },
+      recoveryEscalation:
+        verification.verified && !restartError
+          ? undefined
+          : hostMediatedRecoveryEscalation(
+              restartError
+                ? ["primary_restart_failed"]
+                : ["primary_restart_postcondition_failed"],
+            ),
     };
     await atomicWriteJson(receiptPath, terminalReceipt);
 
     if (verification.verified && !restartError) {
       await rm(policy.statePath, { force: true });
-      console.log(JSON.stringify({
-        schemaVersion: RECOVERY_PLAN_SCHEMA,
-        state: "PRIMARY_RECOVERED",
-        action: "fail_back_to_verified_primary",
-        effectAllowed: false,
-        diagnosticAgentRequired: false,
+      console.log(JSON.stringify(primaryRecoveredResult({
         incidentId,
         receiptPath,
-        reasonCodes: ["stable_post_restart_readiness_verified"],
-      }));
+        recoveryOwnerObservation,
+        verification,
+      })));
       return;
     }
 
@@ -795,6 +1135,8 @@ async function main() {
       diagnosticAgentRequired: true,
       incidentId,
       receiptPath,
+      recoveryOwnerObservation,
+      recoveryEscalation: terminalReceipt.recoveryEscalation,
       reasonCodes: restartError
         ? ["primary_restart_failed"]
         : ["primary_restart_postcondition_failed"],

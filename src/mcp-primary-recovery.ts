@@ -195,7 +195,13 @@ export interface McpPrimaryRecoveryRoutes {
 }
 
 export interface McpFallbackObservation {
-  available: boolean;
+  /**
+   * Compatibility alias for routeReachable. This is one caller observation for
+   * the current assessment, not a primary-server observation of sibling MCP
+   * connectors and not planner admission.
+   */
+  available?: boolean;
+  routeReachable?: boolean;
   observedToolNames?: readonly string[];
   observedFingerprintSha256?: string;
   stableCapabilityRefs?: readonly string[];
@@ -259,7 +265,31 @@ export interface McpPrimaryRecoveryAssessment {
     diagnosticAgent: McpRecoveryRouteAvailability;
   };
   fallback: {
+    /** Compatibility alias: true only when the caller observed this route reachable. */
     available: boolean;
+    routeReachability: {
+      state:
+        | "unobservable_by_primary"
+        | "caller_observed_reachable"
+        | "caller_observed_unreachable"
+        | "conflicting_caller_observation";
+      evidenceSource: "none" | "caller_status_input";
+      primaryCanObserveSiblingHostConnectors: false;
+      availableCompatibilityAliasMeaning:
+        "caller_observed_route_reachable_for_this_assessment";
+      doesNotEstablishGlobalConnectorState: true;
+      doesNotMeanHostConnectorUnavailable: boolean;
+    };
+    routeAttestationState:
+      | "missing"
+      | "incomplete"
+      | "surface_observed"
+      | "caller_attested";
+    attestationScope: "caller_supplied_for_this_assessment";
+    callerEvidenceVerifiedByServer: false;
+    plannerAdmissionState: "admitted" | "not_admitted";
+    operationScopedSelectionRequired: true;
+    invocationAuthorized: false;
     admitted: boolean;
     qualityEquivalentAttested: boolean;
     observedFingerprintSha256?: string;
@@ -267,12 +297,15 @@ export interface McpPrimaryRecoveryAssessment {
     policyRef?: string;
     missingRequiredTools: string[];
     blockingFactors: string[];
+    exactAttestationNextAction: string;
   };
   policy: {
     primaryRepairBeforeFallback: true;
     fallbackIsLastResort: true;
     fallbackRequiresTypedQualityEquivalence: true;
     fallbackRequiresSurfaceFingerprintAndEvidence: true;
+    callerEvidenceRefsVerifiedByServer: false;
+    fallbackAdmissionDoesNotAuthorizeInvocation: true;
     effectfulFallbackImplicitlyDenied: true;
     safeTurnLandingPreferredToQualityReduction: true;
     oneRecoveryOwnerRequired: true;
@@ -372,6 +405,97 @@ function stableProjectionSatisfied(
   );
 }
 
+interface FallbackRouteObservationView {
+  routeReachable?: boolean;
+  state: McpPrimaryRecoveryAssessment["fallback"]["routeReachability"]["state"];
+  evidenceSource: "none" | "caller_status_input";
+  conflicting: boolean;
+}
+
+function fallbackRouteObservation(
+  fallback: McpFallbackObservation | undefined,
+): FallbackRouteObservationView {
+  if (
+    fallback?.routeReachable !== undefined
+    && fallback.available !== undefined
+    && fallback.routeReachable !== fallback.available
+  ) {
+    return {
+      state: "conflicting_caller_observation",
+      evidenceSource: "caller_status_input",
+      conflicting: true,
+    };
+  }
+  const routeReachable = fallback?.routeReachable ?? fallback?.available;
+  if (routeReachable === undefined) {
+    return {
+      state: "unobservable_by_primary",
+      evidenceSource: "none",
+      conflicting: false,
+    };
+  }
+  return {
+    routeReachable,
+    state: routeReachable
+      ? "caller_observed_reachable"
+      : "caller_observed_unreachable",
+    evidenceSource: "caller_status_input",
+    conflicting: false,
+  };
+}
+
+function fallbackFingerprintValid(
+  fallback: McpFallbackObservation | undefined,
+): boolean {
+  return /^[a-f0-9]{64}$/.test(fallback?.observedFingerprintSha256 ?? "");
+}
+
+function fallbackRouteAttestationState(
+  fallback: McpFallbackObservation | undefined,
+  routeObservation: FallbackRouteObservationView,
+): McpPrimaryRecoveryAssessment["fallback"]["routeAttestationState"] {
+  if (routeObservation.evidenceSource === "none") return "missing";
+  if (
+    routeObservation.conflicting
+    || routeObservation.routeReachable !== true
+    || fallback?.observedToolNames === undefined
+    || !fallbackFingerprintValid(fallback)
+  ) return "incomplete";
+  if (
+    fallback.qualityEquivalentAttested === true
+    && fallback.qualityEvidenceRefs?.some((ref) => ref.trim().length > 0)
+    && Boolean(fallback.policyRef?.trim())
+  ) return "caller_attested";
+  return "surface_observed";
+}
+
+function fallbackAttestationNextAction(
+  fallback: McpFallbackObservation | undefined,
+  routeObservation: FallbackRouteObservationView,
+  attestationState: McpPrimaryRecoveryAssessment["fallback"]["routeAttestationState"],
+  admitted: boolean,
+): string {
+  if (admitted) {
+    return "The fallback is a planner-admitted candidate only. Bind one operation-scoped selection through the fallback-continuity plane before invocation, retain primary recovery as pending, and require verified failback; this assessment grants no invocation or effect authority.";
+  }
+  if (routeObservation.conflicting) {
+    return "Resolve the conflicting fallbackAvailable and fallbackRouteReachable caller observations; neither value is trusted while they disagree.";
+  }
+  if (routeObservation.evidenceSource === "none") {
+    return "Observe the host-visible fallback connector independently and submit fallbackRouteReachable plus the complete tools/list names and descriptor fingerprint; do not infer connector failure from this primary-server assessment.";
+  }
+  if (routeObservation.routeReachable === false) {
+    return "Repair or reconnect the independently observed fallback route before attempting route attestation; this observation is local to the current assessment and not a permanent connector-state claim.";
+  }
+  if (fallback?.observedToolNames === undefined || !fallbackFingerprintValid(fallback)) {
+    return "Capture one complete fallback tools/list response and bind its canonical descriptor fingerprint before assessing capability or quality parity.";
+  }
+  if (attestationState === "surface_observed") {
+    return "The fallback surface is observed but not qualified. Bind capability-specific quality evidence and a typed fallback policy before planner admission; caller-supplied evidence remains unverified by the primary server.";
+  }
+  return "Bind the exact capability-specific quality evidence and typed fallback policy, then reassess after primary recovery is exhausted; reachability alone is not admission.";
+}
+
 function fallbackDecision(
   input: McpPrimaryRecoveryAssessmentInput,
   capabilityViews: McpCapabilityRecoveryView[],
@@ -386,15 +510,28 @@ function fallbackDecision(
   missingRequiredTools: string[];
 } {
   const fallback = input.fallback;
+  const routeObservation = fallbackRouteObservation(fallback);
   const missingRequiredTools = uniqueSorted(
     capabilityViews.flatMap((view) => view.missingFallbackTools),
   );
   const blockingFactors: string[] = [];
-  if (!fallback?.available) blockingFactors.push("fallback_unavailable");
+  if (routeObservation.conflicting) {
+    blockingFactors.push(
+      "fallback_unavailable",
+      "fallback_route_observation_conflicting",
+    );
+  } else if (routeObservation.routeReachable !== true) {
+    blockingFactors.push("fallback_unavailable");
+    blockingFactors.push(
+      routeObservation.evidenceSource === "none"
+        ? "fallback_route_observation_missing"
+        : "fallback_route_observed_unreachable",
+    );
+  }
   if (!fallback?.qualityEquivalentAttested) {
     blockingFactors.push("fallback_quality_equivalence_unattested");
   }
-  if (!/^[a-f0-9]{64}$/.test(fallback?.observedFingerprintSha256 ?? "")) {
+  if (!fallbackFingerprintValid(fallback)) {
     blockingFactors.push("fallback_surface_fingerprint_missing_or_invalid");
   }
   if (!fallback?.qualityEvidenceRefs?.some((ref) => ref.trim().length > 0)) {
@@ -417,10 +554,14 @@ function fallbackDecision(
     return {
       state: "USE_QUALITY_EQUIVALENT_FALLBACK",
       route: "fallback",
-      workMayContinue: true,
+      workMayContinue: false,
       exactNextAction:
-        "Use the exact typed quality-equivalent fallback policy for this causal slice, keep primary recovery pending, and fail back after verified primary readiness.",
-      reasonCodes: ["primary_recovery_exhausted", "quality_equivalent_fallback_attested"],
+        "Bind one operation-scoped fallback-continuity selection to the exact policy, descriptor fingerprint, capability requirements, and safety/effect contract before invocation. Keep primary recovery pending and fail back only after verified primary readiness and current host-catalog attestation.",
+      reasonCodes: [
+        "primary_recovery_exhausted",
+        "quality_equivalent_fallback_caller_attested",
+        "operation_scoped_fallback_selection_required",
+      ],
       admitted: true,
       blockingFactors,
       missingRequiredTools,
@@ -458,7 +599,10 @@ export function assessMcpPrimaryRecovery(
   const requiredCapabilityRefs = capabilityRefs(input.requiredCapabilityRefs);
   const stableRefs = new Set(input.stableCapabilityRefs ?? []);
   const registeredTools = new Set(input.primaryRegisteredToolNames);
-  const clientCatalogAttested = input.clientObservedToolNames !== undefined;
+  // Observed names are useful for capability-gap diagnosis, but only the
+  // freshness assessor's CURRENT state establishes a complete descriptor
+  // attestation. Names alone must not release capability-critical work.
+  const clientCatalogAttested = input.catalogStatus === "CURRENT";
   const callableTools = new Set([
     ...(input.knownCallableToolNames ?? []),
     ...(input.clientObservedToolNames ?? []),
@@ -834,6 +978,11 @@ export function assessMcpPrimaryRecovery(
   }
 
   const fallback = input.fallback;
+  const fallbackRoute = fallbackRouteObservation(fallback);
+  const routeAttestationState = fallbackRouteAttestationState(
+    fallback,
+    fallbackRoute,
+  );
   const fallbackMissingRequiredTools = decision.missingRequiredTools.length > 0
     ? decision.missingRequiredTools
     : uniqueSorted(capabilities.flatMap((view) => view.missingFallbackTools));
@@ -878,11 +1027,27 @@ export function assessMcpPrimaryRecovery(
       diagnosticAgent,
     },
     fallback: {
-      available: fallback?.available ?? false,
+      available: fallbackRoute.routeReachable === true,
+      routeReachability: {
+        state: fallbackRoute.state,
+        evidenceSource: fallbackRoute.evidenceSource,
+        primaryCanObserveSiblingHostConnectors: false,
+        availableCompatibilityAliasMeaning:
+          "caller_observed_route_reachable_for_this_assessment",
+        doesNotEstablishGlobalConnectorState: true,
+        doesNotMeanHostConnectorUnavailable:
+          fallbackRoute.state === "unobservable_by_primary",
+      },
+      routeAttestationState,
+      attestationScope: "caller_supplied_for_this_assessment",
+      callerEvidenceVerifiedByServer: false,
+      plannerAdmissionState: decision.admitted ? "admitted" : "not_admitted",
+      operationScopedSelectionRequired: true,
+      invocationAuthorized: false,
       admitted: decision.admitted,
       qualityEquivalentAttested:
         fallback?.qualityEquivalentAttested ?? false,
-      ...(/^[a-f0-9]{64}$/.test(fallback?.observedFingerprintSha256 ?? "")
+      ...(fallbackFingerprintValid(fallback)
         ? { observedFingerprintSha256: fallback?.observedFingerprintSha256 }
         : {}),
       qualityEvidenceRefs: uniqueSorted(
@@ -893,12 +1058,20 @@ export function assessMcpPrimaryRecovery(
       ...(fallback?.policyRef ? { policyRef: fallback.policyRef } : {}),
       missingRequiredTools: fallbackMissingRequiredTools,
       blockingFactors: decision.blockingFactors,
+      exactAttestationNextAction: fallbackAttestationNextAction(
+        fallback,
+        fallbackRoute,
+        routeAttestationState,
+        decision.admitted,
+      ),
     },
     policy: {
       primaryRepairBeforeFallback: true,
       fallbackIsLastResort: true,
       fallbackRequiresTypedQualityEquivalence: true,
       fallbackRequiresSurfaceFingerprintAndEvidence: true,
+      callerEvidenceRefsVerifiedByServer: false,
+      fallbackAdmissionDoesNotAuthorizeInvocation: true,
       effectfulFallbackImplicitlyDenied: true,
       safeTurnLandingPreferredToQualityReduction: true,
       oneRecoveryOwnerRequired: true,

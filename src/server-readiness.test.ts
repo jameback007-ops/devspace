@@ -76,6 +76,8 @@ test("readyz exercises functional database and tool-surface readiness", async (t
   assert.ok(Number(body.database.latestMigrationVersion) >= 1);
   assert.equal(body.toolSurface.initialized, true);
   assert.ok(Number(body.toolSurface.toolCount) > 0);
+  assert.equal(body.serverSurfaceCurrent, null);
+  assert.equal(body.toolSurfaceFreshnessStatus, "INDETERMINATE");
   assert.equal(body.restartSafety.state, "safe");
   assert.equal(body.serviceProcessObservation.state, "observed");
   assert.equal(body.serviceProcessObservation.childProcessCount, 0);

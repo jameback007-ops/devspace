@@ -5,10 +5,12 @@ what may happen after the primary Nexus route is degraded or unavailable. It is
 not a second Nexus, a hidden router, or a new source of task, writer, release,
 memory, publication, or effect authority.
 
-The initial implementation is source-only. It does not start, restart, deploy,
-or mutate the Legacy service. It does not automatically invoke a fallback. It
-turns current primary-recovery evidence and independently verified route
-attestations into a bounded decision that a caller may enforce.
+The implementation remains source-only with respect to production effects. It
+does not start, restart, deploy, or mutate the Legacy service and does not
+automatically invoke a sibling connector. It now projects recovery-only Legacy
+qualification through the stable `execution_scope_status` route, turning
+current primary-recovery evidence and independently supplied route attestations
+into a bounded decision that a host or executor may enforce.
 
 The external contracts are versioned as
 `zes.fallback-route-attestation.v1`, `zes.fallback-selection.v1`,
@@ -55,6 +57,11 @@ functional repair, or bounded diagnosis, the continuity plane returns
 `WAIT_FOR_RECOVERY_OWNER` assessment likewise preserves the single active
 owner. Richer fallback evaluation begins only after the authoritative primary
 recovery path is exhausted or blocked.
+
+The primary server cannot observe whether the host configured or can reach a
+sibling MCP connector. Route reachability is therefore a caller observation,
+not a Nexus inference. "No route observation" is not equivalent to "Legacy is
+unreachable."
 
 ## Route quality classes
 
@@ -124,7 +131,32 @@ This explicit-selection rule applies to **mission fallback**. A verified
 recovery-only route may be identified as the bounded primary-repair path, and a
 verified survival route may be identified for checkpoint/safe-landing, because
 neither path is admitted to perform the original mission. The planner still
-does not invoke either route and grants no effect authority.
+does not invoke either route and grants no effect authority. The current
+DevSpace adapter also requires an operation-scoped selection receipt before it
+reports the recovery-only route as selected.
+
+Recovery-only qualification does not require the full Nexus tool ABI. The
+minimum Legacy repair subset is:
+
+```text
+open_workspace
+read
+apply_patch
+exec_command
+write_stdin
+```
+
+`apply_patch` is required for a source-capable repair path so source mutation
+does not move into an opaque shell command. `download_artifact` is optional.
+`execution_scope_status` is a Nexus bootstrap/control-plane tool and is not
+required on Legacy merely to inspect, repair, and verify Nexus.
+
+The current stable projection performs only route assessment and
+operation-scoped route selection. A selected recovery route still reports
+`repairInvocationAuthorized: false`; source or runtime mutation requires a
+separate effect gate bound to an exact repair plan and effect identity. Evidence
+refs supplied by the caller are not independently verified by that read-only
+projection.
 
 ## Quality-critical operations
 
@@ -200,11 +232,16 @@ The initial source slice provides:
 - `assessFallbackContinuity` for a normalized provider-neutral request;
 - `assessFallbackContinuityFromPrimaryRecovery` for the published primary MCP
   recovery assessment;
+- `projectMcpFallbackRecovery` for an intent-specific Legacy/continuity repair
+  route projected through `execution_scope_status`;
 - deterministic decision and route assessment output;
 - strict input/reference validation and credential-bearing URI rejection;
 - behavioral tests for primary preference, repair-first routing, explicit
   selection, fingerprint drift, quality classes, research/validation evidence,
-  failure-domain isolation, effect terminality, safe landing, and failback.
+  failure-domain isolation, effect terminality, safe landing, and failback;
+- deterministic coverage showing that Legacy can qualify for recovery without
+  the Nexus bootstrap ABI, that a selected recovery route has no mission
+  authority, and that normal work fails back before continuing.
 
 It deliberately does not yet provide:
 
@@ -215,19 +252,43 @@ It deliberately does not yet provide:
 - runtime deployment or systemd ownership;
 - production SLO measurements.
 
-## Next integration slice
+## Stable runtime projection
 
-The next runtime-facing slice should remain additive and read-only first:
+The additive projection is available under:
 
-1. Observe the actual Legacy/continuity endpoint through an independent probe.
-2. Produce a bounded route descriptor with complete fingerprint, functional
+```text
+stableControlPlane.capabilities.mcpFallbackRecovery
+```
+
+Its route observation distinguishes:
+
+- `unobserved`;
+- `observed_unreachable`;
+- `observed_reachable_incomplete`;
+- `observed_recovery_ready`.
+
+The result reports the required and optional repair tools, whether the Nexus
+bootstrap tool is present, whether it is required, the derived primary-repair
+capabilities, route selection state, remaining external limitations, and the
+underlying fallback-continuity decision. The projection never invokes the route
+and always reports that sibling dispatch is host-mediated.
+
+## Next activation slice
+
+The next runtime-facing slice remains additive and read-only first:
+
+1. Deploy the source with the stronger primary controller in observation-only
+   mode while retaining the current health-only watchdog.
+2. Observe the actual Legacy/continuity endpoint through an independent probe.
+3. Produce a bounded route descriptor with complete fingerprint, functional
    readiness, capability, authority, isolation, and failure-domain evidence.
-3. Project the assessment through the existing stable
-   `execution_scope_status` control plane without requiring a new bootstrap
-   tool.
-4. Run observation-only canaries for each quality class and failback transition.
-5. Enable any invocation effect only under a separate single-owner runtime
-   effect with rollback and post-effect readback.
+4. Verify the stable projection with an operation-scoped recovery selection but
+   no repair effect.
+5. Disable the old health-only restart timer so only one recovery owner remains.
+6. Enable the stronger controller's repair effects under a separate governed
+   runtime effect.
+7. Run one bounded primary-fault, Legacy-repair, exact-readiness/surface, host
+   catalog, and failback canary with rollback and terminal receipts.
 
 Production activation must remain separate from source publication. A local
 build or passing policy test is not evidence that Legacy or Nexus failover is

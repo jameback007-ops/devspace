@@ -57,6 +57,13 @@ mandatory `AGENTS.md`; it does not replace it.
   state without first discovering a newer top-level tool. It does not refresh
   the host catalog or grant task, writer, effect, publication, or takeover
   authority.
+- **MCP capability orientation** — an intent-oriented directory derived from
+  registered runtime tools and safe configuration, optionally compared with a
+  complete host catalog attestation. It separates server registration,
+  directory metadata, and host visibility and turns unclassified registered
+  tools into bounded self-evolution candidates. It does not dispatch tools,
+  infer hidden intent, or grant task, writer, effect, publication, or memory
+  authority.
 - **Local-agent turn** — one queued provider prompt serialized by a worker
   lease. It is not canonical work or effect authority.
 - **Worker lease** — an executor-local single-worker claim. Expiry after
@@ -77,6 +84,20 @@ mandatory `AGENTS.md`; it does not replace it.
   degraded read-only, recovery-only, survival-only, or insufficient. It does
   not invoke a route, transfer canonical authority, share primary state, or
   authorize effect replay.
+- **Fallback route reachability** — one independent caller observation that a
+  host-visible sibling route responded. It is not observable by the primary
+  Nexus server and is not route attestation, selection, mission eligibility, or
+  effect authority.
+- **Recovery-only fallback** — an independently attested and operation-scoped
+  route that may be selected only as the plane for inspecting, repairing, and
+  verifying the primary. It need not implement the full Nexus ABI or prove
+  mission quality equivalence. Route selection is read-only classification,
+  not permission to invoke a repair effect: source-capable repair requires
+  `apply_patch`, and every source or runtime mutation still needs a separate
+  effect gate bound to the exact repair plan and effect identity. Caller-supplied
+  route evidence is not independently verified by the projection. The route
+  never acquires the original mission or effect-replay authority and must fail
+  back before normal work.
 - **Skill** — a lazy procedure selected by metadata and read only when relevant.
 - **Subagent** — a bounded model invocation coordinated by the host.
 - **Agent profile** — provider, model, tools, and instructions for a subagent.
@@ -101,6 +122,15 @@ Examples:
   is healthy, and a degraded thread does not establish DevSpace/VPS failure.
 - A successful shell command does not establish that a GUI opened or a host
   refreshed.
+- `fallback.available=false` without an independent host observation does not
+  establish that Legacy is unreachable; inspect route reachability,
+  attestation, and planner admission separately.
+- A selected recovery-only route does not establish that a repair effect was
+  authorized, dispatched, or completed; inspect the separate repair-effect gate
+  and exact terminal receipt.
+- A tool absent from model memory or a cached host catalog does not establish
+  that the current server lacks the capability; inspect MCP capability
+  orientation and registered server state first.
 - A process PID alone is not writer or effect authority.
 
 ## Trace affected contracts
@@ -117,6 +147,10 @@ Check the surfaces the change actually reaches:
 - process lifecycle and pure polling;
 - subagent provider availability, queues, leases, cancellation, and recovery;
 - execution-scope observability and messaging;
+- capability-directory classification, registered-surface coverage, host
+  catalog attestation, and stable-bootstrap orientation;
+- primary recovery, recovery-only route attestation/selection, one recovery
+  owner, exact post-repair verification, and failback;
 - advisory turn continuity and recovery-capsule persistence/freshness;
 - widgets, artifacts, and review checkpoints;
 - SQLite schema, migration, retention, and restart recovery;
@@ -145,6 +179,12 @@ observe client catalog freshness directly. For OpenAI's stateless request path,
 assume discovery and execution may be separated across backend restarts: avoid
 repeated deployment restarts, expose no-store/fingerprint/epoch evidence, and
 refresh or reconnect the host when required sentinel tools are missing.
+
+When a model does not know which DevSpace function to use, read
+`stableControlPlane.capabilities.mcpCapabilityOrientation` through
+`execution_scope_status`, match the current intent to the smallest sufficient
+group, and begin at the recommended entry tool. Do not add a generic arbitrary
+RPC escape hatch merely to make a large tool surface easier to remember.
 
 Critical read-only control state must not depend exclusively on discovery of a
 new top-level tool. Project it through the stable `execution_scope_status`

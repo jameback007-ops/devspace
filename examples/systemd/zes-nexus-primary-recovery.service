@@ -19,6 +19,7 @@ Environment=ZES_NEXUS_PRIMARY_HOST_HEADER=mcp.zesnexus.com
 Environment=ZES_NEXUS_PRIMARY_RECOVERY_RECEIPT_ROOT=/var/lib/devspace-zesnexus-primary-recovery/receipts
 Environment=ZES_NEXUS_PRIMARY_RECOVERY_FAILURE_THRESHOLD=3
 Environment=ZES_NEXUS_PRIMARY_RECOVERY_MAX_REPAIR_ATTEMPTS=1
+Environment=ZES_NEXUS_PRIMARY_RECOVERY_CONFLICTING_RESTART_UNITS=devspace-zesnexus-health.timer
 ExecStart=/usr/local/bin/node /usr/local/libexec/zes-nexus-primary-recovery.mjs
 TimeoutStartSec=180
 NoNewPrivileges=true

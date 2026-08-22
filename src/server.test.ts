@@ -70,6 +70,58 @@ test("runtime fingerprint exactly matches the SDK tools/list descriptors", async
     context.client.getServerVersion()?.version,
     context.config.mcpServerVersion,
   );
+  const orientation = snapshot.capabilityOrientation as Record<string, any>;
+  assert.equal(orientation.state, "SERVER_READY_CLIENT_UNOBSERVED");
+  assert.equal(orientation.directory.state, "current");
+  assert.deepEqual(orientation.directory.unclassifiedRegisteredTools, []);
+  assert.equal(
+    orientation.directory.classifiedRegisteredToolCount,
+    expected.toolCount,
+  );
+});
+
+test("always-registered Codex workspace inspection is capability-configured in full mode", async (t) => {
+  const context = await fixture(t, {
+    toolMode: "full",
+    runtimeCapabilities: true,
+  });
+  const listed = await context.client.listTools();
+  const names = new Set(listed.tools.map((tool) => tool.name));
+  for (const name of [
+    "codex_workspace_git_status",
+    "codex_workspace_tree",
+    "codex_workspace_read",
+    "codex_workspace_search",
+    "codex_workspace_diff",
+  ]) {
+    assert.ok(names.has(name), `${name} should remain registered in full mode`);
+  }
+  const snapshot = context.runtimeCapabilities!.snapshot();
+  const surface = snapshot.toolSurface as Record<string, any>;
+  const group = surface.criticalToolGroups.codexWorkspaceInspection;
+  assert.equal(group.configured, true);
+  assert.equal(group.registrationState, "complete");
+  assert.equal(group.available, true);
+  const orientation = snapshot.capabilityOrientation as Record<string, any>;
+  assert.equal(
+    orientation.groups.find(
+      (candidate: Record<string, unknown>) =>
+        candidate.name === "codexWorkspaceInspection",
+    )?.serverState,
+    "available",
+  );
+  const workspaceExecution = orientation.groups.find(
+    (candidate: Record<string, unknown>) =>
+      candidate.name === "workspaceExecution",
+  );
+  assert.equal(workspaceExecution?.serverState, "available");
+  assert.deepEqual(workspaceExecution?.expectedTools, [
+    "bash",
+    "edit",
+    "open_workspace",
+    "read",
+    "write",
+  ]);
 });
 
 test("conversation transport tools expose fixed aliases and direct-first status without raw targets", async (t) => {
@@ -1041,7 +1093,37 @@ test("execution-scope status carries the stable continuation control plane witho
       "repository_publication_fast_path_does_not_require_global_runtime_refresh",
   }, undefined]);
   assert.equal(scopePublicationCalls, 1);
-  const stable = structuredData(status).stableControlPlane as Record<string, any>;
+  const statusData = structuredData(status) as Record<string, any>;
+  const quickstart = statusData.capabilityQuickstart as Record<string, any>;
+  assert.equal(
+    quickstart.schemaVersion,
+    "devspace.mcp-capability-quickstart.v1",
+  );
+  assert.equal(
+    quickstart.policy.readBeforeInferringCapabilityAbsence,
+    true,
+  );
+  assert.equal(
+    quickstart.policy.observedNamesAloneAreNotCatalogAttestation,
+    true,
+  );
+  assert.ok(
+    quickstart.groups.some(
+      (group: Record<string, unknown>) => group.name === "workspaceExecution",
+    ),
+  );
+  const serializedStatus = JSON.stringify(statusData);
+  assert.ok(
+    serializedStatus.indexOf('"capabilityQuickstart"')
+      < serializedStatus.indexOf('"workspaces"'),
+    "capability quickstart should precede the heavy workspace payload",
+  );
+  assert.equal(
+    statusData.backendRuntime.capabilityOrientation,
+    undefined,
+    "status should not duplicate the full capability directory inside backendRuntime",
+  );
+  const stable = statusData.stableControlPlane as Record<string, any>;
   assert.equal(stable.route, "execution_scope_status");
   assert.equal(stable.policy.stableBootstrapTool, "execution_scope_status");
   assert.equal(stable.policy.frozenClientCatalogCompatible, true);
@@ -1100,6 +1182,20 @@ test("execution-scope status carries the stable continuation control plane witho
     stable.capabilities.primaryMcpRecovery.policy.qualityReductionAuthorized,
     false,
   );
+  assert.equal(
+    stable.capabilities.mcpCapabilityOrientation.capabilityRef,
+    "devspace.mcp-capability-orientation.v1",
+  );
+  assert.equal(
+    stable.capabilities.mcpCapabilityOrientation
+      .policy.useDirectoryBeforeInferringCapabilityAbsence,
+    true,
+  );
+  assert.ok(
+    stable.capabilities.mcpCapabilityOrientation.groups.some(
+      (group: Record<string, unknown>) => group.name === "codexIntegration",
+    ),
+  );
 });
 
 test("stable status repairs a partial catalog before admitting fallback or safe turn landing", async (t) => {
@@ -1115,6 +1211,10 @@ test("stable status repairs a partial catalog before admitting fallback or safe 
   const statusInput = JSON.stringify(statusTool?.inputSchema ?? {});
   assert.match(statusInput, /requiredCapabilityRefs/);
   assert.match(statusInput, /fallbackObservedToolNames/);
+  assert.match(statusInput, /fallbackRouteReachable/);
+  assert.match(statusInput, /fallbackRouteAttestationRef/);
+  assert.match(statusInput, /fallbackRecoveryAuthorityRef/);
+  assert.match(statusInput, /fallbackRecoverySelectionRef/);
   assert.match(statusInput, /fallbackObservedFingerprintSha256/);
   assert.match(statusInput, /catalogRefreshEvidenceRefs/);
 
@@ -1129,6 +1229,7 @@ test("stable status repairs a partial catalog before admitting fallback or safe 
     "apply_patch",
     "exec_command",
   ];
+  const completeClientTools = listed.tools.map((tool) => tool.name);
   const repairFirst = await context.client.callTool({
     name: "execution_scope_status",
     arguments: {
@@ -1145,9 +1246,15 @@ test("stable status repairs a partial catalog before admitting fallback or safe 
   } as Parameters<Client["callTool"]>[0]);
   const repairAssessment = structuredData(repairFirst).stableControlPlane
     .capabilities.primaryMcpRecovery;
+  const currentServerSurface = structuredData(repairFirst).backendRuntime
+    .toolSurface;
   assert.equal(repairAssessment.state, "REFRESH_CLIENT_CATALOG");
   assert.equal(repairAssessment.workMayContinue, false);
   assert.equal(repairAssessment.fallback.admitted, false);
+  assert.equal(
+    repairAssessment.fallback.routeReachability.state,
+    "caller_observed_reachable",
+  );
 
   const fallbackLast = await context.client.callTool({
     name: "execution_scope_status",
@@ -1171,8 +1278,110 @@ test("stable status repairs a partial catalog before admitting fallback or safe 
     fallbackAssessment.state,
     "USE_QUALITY_EQUIVALENT_FALLBACK",
   );
+  assert.equal(fallbackAssessment.workMayContinue, false);
   assert.equal(fallbackAssessment.fallback.admitted, true);
+  assert.equal(
+    fallbackAssessment.fallback.operationScopedSelectionRequired,
+    true,
+  );
+  assert.equal(fallbackAssessment.fallback.invocationAuthorized, false);
   assert.equal(fallbackAssessment.policy.fallbackIsLastResort, true);
+
+  const failbackHeldWithoutManifest = await context.client.callTool({
+    name: "execution_scope_status",
+    arguments: {
+      clientObservedToolNames: completeClientTools,
+      clientObservedSurfaceEpoch: currentServerSurface.surfaceEpoch,
+      clientObservedFingerprintSha256:
+        currentServerSurface.fingerprintSha256,
+      requiredCapabilityRefs: ["workspace_read"],
+      activeMcpRoute: "fallback",
+      fallbackRouteReachable: true,
+      fallbackRouteRef: "route:legacy:host",
+      fallbackRouteKind: "legacy",
+      fallbackRouteAttestationState: "verified",
+      fallbackRouteAttestationRef: "attestation:legacy:live:v1",
+      fallbackFingerprintBasis:
+        "canonical_complete_mcp_tools_list_descriptors",
+      fallbackObservedToolNames: [
+        "open_workspace",
+        "read",
+        "apply_patch",
+        "exec_command",
+        "write_stdin",
+        "download_artifact",
+      ],
+      fallbackObservedFingerprintSha256: "c".repeat(64),
+      fallbackPolicyRef: "policy:legacy:recovery-only:v1",
+      fallbackStateIsolationEvidenceRef:
+        "evidence:legacy:nexus-state-isolated:v1",
+      fallbackAuthorityIsolationEvidenceRef:
+        "evidence:legacy:no-mission-authority:v1",
+      fallbackFailureDomainEvidenceRef:
+        "evidence:legacy:independent-service:v1",
+      fallbackRecoveryAuthorityRef:
+        "authority:owner:primary-repair:v1",
+      fallbackFailbackProbeEvidenceRef:
+        "probe:nexus:ready-surface:v1",
+      fallbackRecoverySelectionRef:
+        "selection:legacy:primary-repair:v1",
+    },
+    _meta: { "openai/session": "primary-recovery-policy-session" },
+  } as Parameters<Client["callTool"]>[0]);
+  const fallbackRecoveryProjection = structuredData(failbackHeldWithoutManifest)
+    .stableControlPlane.capabilities.mcpFallbackRecovery;
+  assert.equal(
+    fallbackRecoveryProjection.capabilityRef,
+    "devspace.mcp-fallback-recovery-projection.v1",
+  );
+  assert.equal(
+    fallbackRecoveryProjection.state,
+    "PRIMARY_RECOVERY_OWNS_NEXT_STEP",
+  );
+  assert.equal(
+    fallbackRecoveryProjection.routeObservation.state,
+    "observed_recovery_ready",
+  );
+  assert.equal(
+    fallbackRecoveryProjection.routeObservation.nexusBootstrapToolPresent,
+    false,
+  );
+  assert.equal(
+    fallbackRecoveryProjection.routeObservation
+      .nexusBootstrapToolRequiredForRepair,
+    false,
+  );
+  assert.ok(
+    fallbackRecoveryProjection.routeObservation.requiredRepairTools.includes(
+      "apply_patch",
+    ),
+  );
+  assert.equal(
+    fallbackRecoveryProjection.routeObservation.callerEvidenceVerifiedByServer,
+    false,
+  );
+  assert.equal(
+    fallbackRecoveryProjection.selection.repairInvocationAuthorized,
+    false,
+  );
+  assert.equal(
+    fallbackRecoveryProjection.selection
+      .repairEffectGateRequiredBeforeMutation,
+    true,
+  );
+  assert.equal(
+    fallbackRecoveryProjection.decision.disposition,
+    "repair_primary",
+  );
+  assert.ok(
+    fallbackRecoveryProjection.decision.reasonCodes.includes(
+      "mcp.primary_recovery.attest_client_catalog",
+    ),
+  );
+  assert.equal(
+    fallbackRecoveryProjection.policy.recoveryOnlyRouteGrantsNoMissionAuthority,
+    true,
+  );
 
   const landInsteadOfDegrade = await context.client.callTool({
     name: "execution_scope_status",
@@ -1194,6 +1403,28 @@ test("stable status repairs a partial catalog before admitting fallback or safe 
   assert.equal(landingAssessment.state, "SAFE_TURN_LANDING");
   assert.equal(landingAssessment.workMayContinue, false);
   assert.equal(landingAssessment.policy.qualityReductionAuthorized, false);
+
+  const unobservedFallback = await context.client.callTool({
+    name: "execution_scope_status",
+    arguments: {
+      clientObservedToolNames: partialClientTools,
+      requiredCapabilityRefs: ["workspace_mutation"],
+      catalogRefreshEvidenceRefs: ["receipt:host-catalog-refresh-v1"],
+      diagnosticEvidenceRefs: ["incident:primary-diagnostic-v1"],
+    },
+    _meta: { "openai/session": "primary-recovery-policy-session" },
+  } as Parameters<Client["callTool"]>[0]);
+  const unobservedAssessment = structuredData(unobservedFallback)
+    .stableControlPlane.capabilities.primaryMcpRecovery;
+  assert.equal(
+    unobservedAssessment.fallback.routeReachability.state,
+    "unobservable_by_primary",
+  );
+  assert.equal(
+    unobservedAssessment.fallback.routeReachability
+      .doesNotMeanHostConnectorUnavailable,
+    true,
+  );
 });
 
 test("one host scope can inspect another through bounded execution-scope tools", async (t) => {

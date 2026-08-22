@@ -1,9 +1,11 @@
 # MCP Primary-First Self-Healing
 
 Status: source and test integration candidate. The stable control-plane policy,
+model-oriented capability directory, recovery-only Legacy projection,
 functional readiness endpoint, and out-of-band recovery controller are
-implemented. Production systemd activation, ChatGPT host-refresh automation,
-and diagnostic-agent dispatch remain separate governed effects.
+implemented. Production systemd activation, independently verified live Legacy
+route attestation, ChatGPT host-refresh automation, and diagnostic-agent
+dispatch remain separate governed effects.
 
 ## Purpose
 
@@ -72,6 +74,23 @@ These boundaries produce two distinct recovery planes:
 
 ## Components
 
+### 0. Capability orientation and failure-layer separation
+
+`src/mcp-capability-orientation.ts` projects an intent-oriented directory through
+the stable `execution_scope_status` route. It separates:
+
+- primary server registration;
+- capability-directory classification;
+- host catalog visibility;
+- sibling fallback-route reachability;
+- route attestation and planner admission.
+
+This prevents a new session from treating a partial host catalog or missing
+directory metadata as proof that DevSpace lacks a capability. Registered tools
+that are not classified become explicit self-evolution candidates rather than
+remaining invisible. See `docs/mcp-capability-orientation.md` for the full
+contract.
+
 ### 1. Capability-aware primary recovery policy
 
 `src/mcp-primary-recovery.ts` defines mission capability classes rather than
@@ -113,12 +132,16 @@ Its terminal dispositions are:
 | `REPAIR_PRIMARY` | One owner may execute an admitted deterministic repair. |
 | `DIAGNOSE_PRIMARY` | Deterministic repair is unavailable or unsafe; bounded model judgment is required. |
 | `WAIT_FOR_RECOVERY_OWNER` | Another owner holds the incident lease; competing repair is forbidden. |
-| `USE_QUALITY_EQUIVALENT_FALLBACK` | Repair is exhausted and exact fallback equivalence is proven. |
+| `USE_QUALITY_EQUIVALENT_FALLBACK` | Repair is exhausted and the fallback is caller-attested as a planner candidate; normal work remains held until an operation-scoped continuity selection is bound. |
 | `SAFE_TURN_LANDING` | End the turn before capability loss lowers quality or safety. |
 | `HARD_EXTERNAL_BLOCKER` | No safe repair, fallback, or landing route is available. |
 
 Effectful capabilities never move implicitly to fallback. A fallback policy ref
 and tool parity are necessary but not sufficient to transfer effect authority.
+Even a planner-admitted read-only or non-effect candidate reports
+`invocationAuthorized: false` until the fallback-continuity plane binds an
+operation-scoped selection to the exact policy, descriptor fingerprint,
+capability, quality, and safety contract.
 
 ### 2. Stable bootstrap projection
 
@@ -127,11 +150,23 @@ and tool parity are necessary but not sufficient to transfer effect authority.
 - `requiredCapabilityRefs`
 - `activeMcpRoute`
 - `fallbackAvailable`
+- `fallbackRouteReachable`
+- `fallbackRouteRef`
+- `fallbackRouteKind`
+- `fallbackRouteAttestationState`
+- `fallbackRouteAttestationRef`
+- `fallbackFingerprintBasis`
 - `fallbackObservedToolNames`
 - `fallbackObservedFingerprintSha256`
 - `fallbackQualityEquivalentAttested`
 - `fallbackQualityEvidenceRefs`
 - `fallbackPolicyRef`
+- `fallbackStateIsolationEvidenceRef`
+- `fallbackAuthorityIsolationEvidenceRef`
+- `fallbackFailureDomainEvidenceRef`
+- `fallbackRecoveryAuthorityRef`
+- `fallbackFailbackProbeEvidenceRef`
+- `fallbackRecoverySelectionRef`
 - `catalogRefreshEvidenceRefs`
 - `diagnosticEvidenceRefs`
 
@@ -139,14 +174,22 @@ The result appears under:
 
 ```text
 stableControlPlane.capabilities.primaryMcpRecovery
+stableControlPlane.capabilities.mcpCapabilityOrientation
+stableControlPlane.capabilities.mcpFallbackRecovery
 ```
 
 This is deliberately behind an existing stable ABI tool. A stale client does
 not need to discover a new top-level recovery tool before learning that its
 catalog is incomplete or that work must stop.
 
+`fallbackAvailable` is retained as a compatibility alias for one
+caller-observed route-reachability fact. Omission does not mean that Legacy is
+unreachable because Nexus cannot observe sibling host connectors. New clients
+must read route reachability, route attestation, and planner admission as
+separate states.
+
 The arguments are observations and task requirements only. They grant no
-writer, deployment, runtime, publication, or effect authority.
+writer, deployment, runtime, publication, memory, or effect authority.
 
 ### 3. Functional readiness
 
@@ -186,12 +229,19 @@ Its bounded lifecycle is:
 2. probe fixed loopback `/readyz` and fixed systemd service state;
 3. require a configurable consecutive-failure threshold;
 4. defer while active tools or processes exist;
-5. persist a before-effect incident receipt;
-6. restart only `devspace-zesnexus.service`, at most once per incident by
+5. verify that no competing recovery/watchdog owner is active before effects;
+6. persist a before-effect incident receipt;
+7. restart only `devspace-zesnexus.service`, at most once per incident by
    default;
-7. require multiple stable readiness probes and a changed backend instance;
-8. clear incident state and advertise failback on success;
-9. freeze further automatic repair and emit a bounded diagnostic request on
+8. require multiple consecutive readiness probes from the same changed backend
+   instance with one stable surface epoch and canonical complete tool-surface
+   fingerprint, and require the server-side freshness assessment to confirm
+   that this surface matches the digest-pinned deployment manifest;
+9. clear the runtime incident state but explicitly withhold mission failback
+   until the host catalog is refreshed or attested and the stable recovery
+   projection returns `FAILBACK_PRIMARY`;
+10. freeze further automatic repair and emit a bounded host-mediated
+    recovery/diagnostic contract on
    failure.
 
 Repeated probes in the same recovery state update the single incident state
@@ -202,6 +252,27 @@ timer from becoming unbounded storage growth.
 The controller cannot deploy a release, roll back code, delete or copy a
 database, mutate Legacy, or replay an MCP effect. Repair effects are disabled
 unless `ZES_NEXUS_PRIMARY_RECOVERY_EFFECTS=1` is explicitly configured.
+Even after runtime recovery succeeds, its receipt reports
+`missionFailbackAuthorized: false`; runtime readiness and exact server-surface
+identity do not prove that the host can call the complete current catalog.
+
+When effects are enabled, the controller returns
+`COMPETING_RECOVERY_OWNER` while the old
+`devspace-zesnexus-health.timer` is active. Observation-only mode may coexist
+temporarily, but restart ownership must be singular before the new controller
+can mutate the service.
+
+After automatic repair exhaustion, the controller now emits an actionable
+recovery-only host contract instead of a vague manual fallback. It names the
+minimum source-capable Legacy tool subset (`open_workspace`, `read`,
+`apply_patch`, `exec_command`, and `write_stdin`), states that the Nexus
+bootstrap ABI is not required, forbids mission/effect-replay authority, and
+requires exact readiness, surface, catalog, and failback postconditions. Route
+selection itself does not authorize a repair effect: source or runtime mutation
+still requires a separate effect gate bound to the exact repair plan and effect
+identity. Dispatch remains host-mediated because one MCP server cannot invoke a
+sibling connector configured by the host, and the controller does not verify
+caller-supplied sibling-route evidence on the host's behalf.
 
 ### 5. Diagnostic recovery agent
 
@@ -253,7 +324,20 @@ pre-state, approval, persistence, postcondition, and action-diff verification.
 
 ## Fallback admission
 
-Fallback is admitted only when all conditions hold:
+There are two different fallback classes:
+
+1. **recovery-only fallback**, which may inspect, repair, and verify Nexus after
+   explicit route attestation and operation-scoped selection; and
+2. **mission fallback**, which continues the original work and therefore needs
+   exact capability and quality equivalence.
+
+Legacy does not need the full Nexus ABI or mission quality equivalence merely
+to serve as a recovery-only primary-repair plane. It still needs independent
+reachability, surface fingerprint, failure-domain/state/authority isolation,
+bounded recovery authority, and a failback probe. That route never acquires the
+original mission or effect-replay authority.
+
+Fallback becomes a planner-admitted candidate only when all conditions hold:
 
 1. primary reconnect, repair, and diagnostic stages are exhausted or proven
    unavailable;
@@ -264,6 +348,11 @@ Fallback is admitted only when all conditions hold:
 5. a typed fallback policy ref and bounded quality-evidence refs are present;
 6. quality equivalence is explicitly attested for this causal slice;
 7. no effectful capability is being implicitly transferred.
+
+Planner admission is not invocation. The operation remains held until a
+separate fallback-continuity selection is recorded for the exact operation;
+material effects additionally require their own fresh effect authority and
+reconciliation gate.
 
 If any condition fails and a recoverable frontier can be recorded, the policy
 chooses `SAFE_TURN_LANDING`. Ending a turn is preferable to continuing with
@@ -282,11 +371,14 @@ Recommended activation sequence:
    uses dedicated systemd `RuntimeDirectory` and `StateDirectory` roots so the
    sandbox never depends on a pre-existing writable receipt directory;
 5. observe receipts under normal operation and one isolated failed probe;
-6. enable the effects drop-in and run a bounded non-production canary;
+6. attest the independent Legacy recovery-only route and rehearse the
+   host-mediated selection without invoking a repair effect;
 7. disable the old health-only restart timer so there is exactly one restart
    owner;
-8. verify one controlled primary restart, stable probes, and session failback;
-9. retain Legacy on its independent state/database and service path.
+8. enable the effects drop-in and run a bounded non-production fault canary;
+9. verify one controlled primary restart, stable probes, exact surface,
+   catalog repair where supported, and session failback;
+10. retain Legacy on its independent state/database and service path.
 
 Do not activate this controller concurrently with another Nexus deployment or
 runtime-repair owner.
@@ -320,10 +412,21 @@ Load-bearing tests cover:
 - fallback admission only after repair exhaustion;
 - safe turn landing for research and effect capability deficits;
 - verified failback to primary;
+- explicit separation of fallback reachability, route attestation, and planner
+  admission;
+- rejection of post-restart probes whose backend instance, surface epoch, or
+  complete tool-surface fingerprint is missing or drifts across the stability
+  window;
+- separation of runtime recovery from host catalog attestation and final
+  `FAILBACK_PRIMARY` mission authority;
+- recovery-only Legacy qualification without the Nexus bootstrap ABI;
+- operation-scoped recovery selection and failback-before-mission behavior;
+- capability-directory drift and host/server failure-layer classification;
 - same-connection database readiness and active-tool accounting;
 - functional HTTP `/readyz` response;
 - restart threshold, active-work deferral, effects-off behavior, one-attempt
-  budget, and diagnostic escalation;
+  budget, competing-watchdog rejection, and host-mediated diagnostic
+  escalation;
 - rejection of non-loopback readiness targets and exclusion of raw errors.
 
 ## Remaining work
@@ -331,11 +434,11 @@ Load-bearing tests cover:
 The following are intentionally not claimed complete by this source candidate:
 
 - production systemd installation and effect enablement;
+- disabling the old health-only watchdog after observation-only canary evidence;
+- live independent Legacy route attestation and host-mediated repair dispatch;
 - a ChatGPT-host-native catalog refresh API;
 - a verified semantic UI adapter for ChatGPT app action refresh;
 - out-of-band diagnostic-agent dispatch and its canary;
-- automatic propagation of the recovery disposition into every external host
-  reasoning loop;
 - production fault injection proving the exact historical SQLite/WAL incident
   is detected and repaired end to end.
 

@@ -25,6 +25,7 @@ import {
 } from "./tool-surface-freshness.js";
 import { DEVSPACE_PACKAGE_VERSION } from "./version.js";
 import { assessStableToolAbi } from "./stable-tool-abi.js";
+import { buildMcpCapabilityOrientation } from "./mcp-capability-orientation.js";
 
 interface RuntimeCapabilityRegistryOptions {
   now?: () => number;
@@ -44,6 +45,21 @@ interface CriticalToolGroupDefinition {
 const PACKAGE_VERSION = DEVSPACE_PACKAGE_VERSION;
 
 const CRITICAL_TOOL_GROUPS = {
+  workspaceExecution: [
+    "open_workspace",
+    "read",
+    "apply_patch",
+    "exec_command",
+    "write_stdin",
+  ],
+  workspaceExecutionStandard: [
+    "open_workspace",
+    "read",
+    "write",
+    "edit",
+    "bash",
+  ],
+  skillDiscovery: ["skill_search"],
   executionObservability: [
     "execution_scope_list",
     "execution_scope_status",
@@ -59,6 +75,7 @@ const CRITICAL_TOOL_GROUPS = {
     "turn_horizon_begin",
     "turn_horizon_status",
   ],
+  continuationControl: ["zes_continuation_preflight"],
   recoveryCapsules: [
     "recovery_capsule_record",
     "recovery_capsule_status",
@@ -128,6 +145,13 @@ const CRITICAL_TOOL_GROUPS = {
     "codex_session_control",
     "codex_approval_respond",
     "codex_effect_status",
+  ],
+  codexWorkspaceInspection: [
+    "codex_workspace_tree",
+    "codex_workspace_git_status",
+    "codex_workspace_read",
+    "codex_workspace_search",
+    "codex_workspace_diff",
   ],
   crossExecutorCoordination: [
     "cross_executor_coordination_assess",
@@ -208,6 +232,7 @@ export class RuntimeCapabilityRegistry {
       ?? `nexus:${identity.fingerprintSha256.slice(0, 16)}`;
     const initialized = toolNames.length > 0;
 
+    const criticalToolGroups = this.criticalToolGroups(new Set(toolNames));
     const backendRuntime: NexusBackendRuntimeObservation = {
       schemaVersion: 1,
       backend: {
@@ -229,7 +254,7 @@ export class RuntimeCapabilityRegistry {
         fingerprintBasis: "canonical_complete_mcp_tools_list_descriptors",
         stableToolAbi,
         configuration: safeConfiguration,
-        criticalToolGroups: this.criticalToolGroups(new Set(toolNames)),
+        criticalToolGroups,
       },
       deploymentManifestObservation: this.deploymentDiagnostics,
       policy: {
@@ -255,6 +280,12 @@ export class RuntimeCapabilityRegistry {
       clientInput: options.clientInput,
       clientAttestation: options.clientAttestation,
       assessedAt: new Date(this.now()).toISOString(),
+    });
+    backendRuntime.capabilityOrientation = buildMcpCapabilityOrientation({
+      criticalToolGroups,
+      registeredToolNames: toolNames,
+      clientObservedToolNames: options.clientInput?.clientObservedToolNames,
+      clientCatalogObservation: assessment.clientCatalogObservation,
     });
     const enriched = enrichNexusBackendRuntime(backendRuntime, assessment);
     enriched.clientCatalogObservation = {
@@ -349,6 +380,16 @@ export class RuntimeCapabilityRegistry {
     registered: Set<string>,
   ): Record<string, unknown> {
     const groups: Record<string, CriticalToolGroupDefinition> = {
+      workspaceExecution: {
+        configured: true,
+        expectedTools: this.config.toolMode === "codex"
+          ? CRITICAL_TOOL_GROUPS.workspaceExecution
+          : CRITICAL_TOOL_GROUPS.workspaceExecutionStandard,
+      },
+      skillDiscovery: {
+        configured: this.config.skillsEnabled,
+        expectedTools: CRITICAL_TOOL_GROUPS.skillDiscovery,
+      },
       executionObservability: {
         configured: this.config.executionObservability.enabled,
         expectedTools: CRITICAL_TOOL_GROUPS.executionObservability,
@@ -360,6 +401,10 @@ export class RuntimeCapabilityRegistry {
       turnContinuity: {
         configured: this.config.turnContinuity.enabled,
         expectedTools: CRITICAL_TOOL_GROUPS.turnContinuity,
+      },
+      continuationControl: {
+        configured: true,
+        expectedTools: CRITICAL_TOOL_GROUPS.continuationControl,
       },
       recoveryCapsules: {
         configured: this.config.turnContinuity.enabled,
@@ -396,6 +441,13 @@ export class RuntimeCapabilityRegistry {
       codexIntegration: {
         configured: this.config.codexIntegration.enabled,
         expectedTools: CRITICAL_TOOL_GROUPS.codexIntegration,
+      },
+      codexWorkspaceInspection: {
+        // These fixed read-only inspection tools are registered in every tool
+        // mode. Tool mode changes the generic workspace surface, not this
+        // bounded external-inspection group.
+        configured: true,
+        expectedTools: CRITICAL_TOOL_GROUPS.codexWorkspaceInspection,
       },
       crossExecutorCoordination: {
         configured: this.config.codexIntegration.enabled,

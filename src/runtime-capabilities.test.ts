@@ -106,6 +106,30 @@ const recoveryGroup = (
 assert.equal(recoveryGroup.configured, true);
 assert.equal(recoveryGroup.registrationState, "complete");
 assert.equal(recoveryGroup.available, true);
+const orientation = firstSnapshot.capabilityOrientation as Record<string, any>;
+assert.equal(orientation.capabilityRef, "devspace.mcp-capability-orientation.v1");
+assert.equal(orientation.state, "SERVER_CAPABILITY_DEGRADED");
+assert.equal(orientation.summary.clientCatalogAttested, false);
+assert.equal(
+  orientation.policy.clientCatalogUnknownDoesNotMeanToolUnavailable,
+  true,
+);
+assert.ok(
+  orientation.groups.some(
+    (group: Record<string, unknown>) => group.name === "workspaceExecution",
+  ),
+);
+assert.equal(orientation.directory.registeredSurfaceObserved, true);
+assert.deepEqual(orientation.directory.unclassifiedRegisteredTools, [
+  "alpha",
+  "beta",
+]);
+assert.ok(
+  orientation.selfEvolution.candidates.some(
+    (candidate: Record<string, unknown>) =>
+      candidate.kind === "update_capability_directory",
+  ),
+);
 
 const changed = new RuntimeCapabilityRegistry(config, {
   now: () => 1_000,
