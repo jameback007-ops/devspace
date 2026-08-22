@@ -62,3 +62,23 @@ def test_native_config_and_readiness_gate_do_not_claim_production() -> None:
     assert evidence["current_runtime"]["production_claimed"] is False
     assert evidence["runtime_mutated"] is False
     assert evidence["services_started"] is False
+
+
+def test_production_compose_override_is_only_a_thin_private_binding() -> None:
+    overlay = (
+        ROOT / "compose.agent-server.production.override.yaml"
+    ).read_text(encoding="utf-8")
+
+    assert "127.0.0.1:${LANGGRAPH_HOST_PORT:-2027}:8000" in overlay
+    assert "${LANGGRAPH_BRIDGE_ENV_FILE:?Set LANGGRAPH_BRIDGE_ENV_FILE}" in overlay
+    assert (
+        "${LANGGRAPH_PRODUCTION_ENV_FILE:?Set LANGGRAPH_PRODUCTION_ENV_FILE}"
+        in overlay
+    )
+    assert "langgraph-postgres:" in overlay
+    assert "ports: !override []" in overlay
+    assert "langgraph-redis:" not in overlay
+    assert "image:" not in overlay
+    assert "command:" not in overlay
+    assert "volumes:" not in overlay
+    assert "environment:" not in overlay
