@@ -7,7 +7,7 @@ from typing import Any, Literal
 from mcp.server.mcpserver import MCPServer
 from mcp.types import ToolAnnotations
 
-from .registry import BridgeConfig, WorkspaceRegistry
+from .registry import BridgeConfig, BridgeError, WorkspaceRegistry
 from .runtime import CapabilityRuntime
 from .state import CheckpointJournal, Journal
 
@@ -35,6 +35,23 @@ EXECUTION = ToolAnnotations(
     idempotentHint=False,
     openWorldHint=True,
 )
+
+
+def _require_native_success(operation: str, result: dict[str, Any]) -> dict[str, Any]:
+    """Promote native backend result errors to MCP tool errors.
+
+    Deep Agents backends intentionally return typed result objects with an
+    ``error`` field. That is useful inside an agent harness, but a WebChat MCP
+    host can otherwise mistake a transport-level success for a completed file
+    effect. Keep the native result shape on success and fail the MCP call when
+    the backend reports an error.
+    """
+
+    error = result.get("error")
+    if error is not None:
+        safe_error = str(error).replace("\n", " ")[:500]
+        raise BridgeError(f"native {operation} failed: {safe_error}")
+    return result
 
 
 def build_server(
@@ -116,7 +133,7 @@ def build_server(
     def ls(workspace_id: str, path: str = ".") -> dict[str, Any]:
         """List a workspace-relative directory through Deep Agents."""
 
-        return registry.ls(workspace_id, path)
+        return _require_native_success("ls", registry.ls(workspace_id, path))
 
     @server.tool(annotations=READ_ONLY, structured_output=True)
     @instrument("read_file")
@@ -125,14 +142,19 @@ def build_server(
     ) -> dict[str, Any]:
         """Read a workspace-relative text or supported file with line pagination."""
 
-        return registry.read(workspace_id, file_path, offset=offset, limit=limit)
+        return _require_native_success(
+            "read_file",
+            registry.read(workspace_id, file_path, offset=offset, limit=limit),
+        )
 
     @server.tool(annotations=MUTATION, structured_output=True)
     @instrument("write_file")
     def write_file(workspace_id: str, file_path: str, content: str) -> dict[str, Any]:
         """Create or overwrite one workspace-relative file through Deep Agents."""
 
-        return registry.write(workspace_id, file_path, content)
+        return _require_native_success(
+            "write_file", registry.write(workspace_id, file_path, content)
+        )
 
     @server.tool(annotations=MUTATION, structured_output=True)
     @instrument("edit_file")
@@ -145,12 +167,15 @@ def build_server(
     ) -> dict[str, Any]:
         """Apply an exact string replacement to one workspace-relative file."""
 
-        return registry.edit(
-            workspace_id,
-            file_path,
-            old_string,
-            new_string,
-            replace_all=replace_all,
+        return _require_native_success(
+            "edit_file",
+            registry.edit(
+                workspace_id,
+                file_path,
+                old_string,
+                new_string,
+                replace_all=replace_all,
+            ),
         )
 
     @server.tool(annotations=DESTRUCTIVE, structured_output=True)
@@ -158,7 +183,9 @@ def build_server(
     def delete_file(workspace_id: str, file_path: str) -> dict[str, Any]:
         """Delete one workspace-relative file."""
 
-        return registry.delete(workspace_id, file_path)
+        return _require_native_success(
+            "delete_file", registry.delete(workspace_id, file_path)
+        )
 
     @server.tool(annotations=READ_ONLY, structured_output=True)
     @instrument("glob")
@@ -167,7 +194,9 @@ def build_server(
     ) -> dict[str, Any]:
         """Find files using Deep Agents glob semantics."""
 
-        return registry.glob(workspace_id, pattern, path)
+        return _require_native_success(
+            "glob", registry.glob(workspace_id, pattern, path)
+        )
 
     @server.tool(annotations=READ_ONLY, structured_output=True)
     @instrument("grep")
@@ -181,13 +210,16 @@ def build_server(
     ) -> dict[str, Any]:
         """Search workspace text through Deep Agents grep."""
 
-        return registry.grep(
-            workspace_id,
-            pattern,
-            path,
-            glob_pattern,
-            max_count=max_count,
-            context_lines=context_lines,
+        return _require_native_success(
+            "grep",
+            registry.grep(
+                workspace_id,
+                pattern,
+                path,
+                glob_pattern,
+                max_count=max_count,
+                context_lines=context_lines,
+            ),
         )
 
     @server.tool(annotations=EXECUTION, structured_output=True)

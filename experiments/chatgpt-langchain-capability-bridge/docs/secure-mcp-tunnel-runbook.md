@@ -121,12 +121,15 @@ In the ChatGPT workspace associated with the tunnel:
 
 1. enable developer mode;
 2. create or edit the draft app;
-3. choose **Tunnel** connection;
-4. select the prepared tunnel;
-5. scan tools;
-6. verify 24 exact tool names;
-7. call `capability_manifest` and verify the v2 fingerprint;
-8. keep the app in draft during qualification.
+3. give the app a unique name that cannot collide with existing connector
+   namespaces; for this repository use `ZES LangChain Runtime`, not the generic
+   `ZES` name when `ZES_Nexus` or `ZES_Legacy` are also installed;
+4. choose **Tunnel** connection;
+5. select the prepared tunnel;
+6. scan tools;
+7. verify 24 exact tool names;
+8. call `capability_manifest` and verify the v2 fingerprint;
+9. keep the app in draft during qualification.
 
 The app scan is the authority for what ChatGPT currently sees. Backend health
 alone does not prove host catalog freshness.
@@ -153,6 +156,11 @@ workspace_open
 → checkpoint_record
 ```
 
+For every mutation, inspect the structured result and immediately read back the
+changed source or state. An empty result, a result containing a native backend
+error, or a resource disappearing before readback is non-terminal and fails the
+gate. Do not infer mutation success from HTTP 200 or tunnel readiness alone.
+
 `specialist_task` must not be used during Gate A. Sandbox/process tools are
 optional and currently blocked by live provider entitlement; they are not
 required for this disposable repair.
@@ -160,11 +168,13 @@ required for this disposable repair.
 ## Pass criteria
 
 - ChatGPT discovers the exact 24-tool v2 ABI.
+- The app uses a unique host namespace throughout the turn.
 - Calls travel through the new Secure MCP Tunnel, not Legacy/Nexus.
 - ChatGPT itself selects the inspection, patch, and validation sequence.
 - Initial tests fail and repaired tests pass.
 - Diff is minimal and `git diff --check` passes.
 - Checkpoint is readable after a connector reconnect or new chat.
+- Mutation tool results are terminal and source/state readback confirms them.
 - Tunnel remains ready and bridge remains private.
 - No credential, hidden reasoning, or source payload is emitted to logs/traces.
 
@@ -176,6 +186,8 @@ required for this disposable repair.
 | `healthz` passes but `readyz` fails | control-plane key/polling/tunnel binding |
 | MCP doctor target fails | bridge health, path, or private routing |
 | Tool scan count/fingerprint differs | ChatGPT app snapshot or live ABI drift |
+| Direct resource disappears while tunnel stays ready | ChatGPT host app catalog or namespace routing |
+| Mutation returns no terminal result and source is unchanged | Host confirmation/cancellation or typed backend error hidden as success |
 | Primitive file/shell call fails | Deep Agents backend/container boundary |
 | Skill/memory missing | source path or native middleware loading |
 | Checkpoint missing | LangGraph/Agent Server state boundary |

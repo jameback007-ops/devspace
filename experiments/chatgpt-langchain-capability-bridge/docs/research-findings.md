@@ -191,8 +191,18 @@ Nexus/DevSpace or a public reverse proxy**.
 The bridge is ready for direct ChatGPT-host qualification over Secure MCP
 Tunnel. Migration is not approved. Still open:
 
-- direct ChatGPT scan and write-capable invocation;
-- connector/catalog reconnect stability;
+- direct mutation persistence after read/execute discovery passed;
+- connector/catalog continuity after the direct `ZES` namespace disappeared
+  while tunnel and bridge remained healthy;
 - a live native persistent-process provider;
 - representative DevSpace versus bridge A/B workload;
 - long-horizon cross-chat continuity.
+
+The first direct-host run is recorded in
+`evidence/direct-webchat-host-boundary-20260822.json`. It narrowed the failure to
+the ChatGPT app/host boundary: read and execute reached the private bridge, an
+identical local MCP mutation succeeded, but the direct mutation did not persist
+and the direct resource subsequently vanished. The adapter now promotes native
+backend `result.error` values to MCP tool errors so a typed backend failure
+cannot be mistaken for a completed mutation; this hardening does not change the
+24-tool ABI.

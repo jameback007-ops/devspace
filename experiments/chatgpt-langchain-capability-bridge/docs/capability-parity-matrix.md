@@ -44,10 +44,29 @@ Pass criteria:
 - ChatGPT sees 24 tools and the exact v2 descriptor fingerprint.
 - ChatGPT opens the repository, discovers relevant instructions, diagnoses the
   failure, edits the source, validates tests and diff, and records a checkpoint.
+- Every mutation returns a terminal structured result and is immediately
+  confirmed by source readback or an equivalent authoritative state read.
+- The direct app namespace remains callable for the complete repair sequence;
+  a mid-turn resource disappearance is a Gate A failure even when tunnel
+  health remains ready.
 - The private bridge has no public listener.
 - The direct path does not use Legacy/Nexus as a relay.
 
-Status: **implementation and credentials ready; direct ChatGPT app scan open**.
+Current observation:
+
+- direct `capability_manifest`, `workspace_open`, bootstrap, `read_file`, and
+  failing-test execution passed over Secure MCP Tunnel;
+- one direct `edit_file` attempt did not persist and did not produce a usable
+  terminal result;
+- the host-visible `ZES` resource then disappeared while bridge and tunnel
+  health stayed ready;
+- an identical local MCP edit passed, so the evidence currently isolates the
+  failure above the bridge/backend boundary;
+- one controlled tunnel-client restart restored tunnel readiness but did not
+  restore the direct resource in the same WebChat turn.
+
+Status: **Gate A partially passed; write persistence and host catalog continuity
+failed.** See `evidence/direct-webchat-host-boundary-20260822.json`.
 
 ### Gate B — full native context/runtime qualification
 

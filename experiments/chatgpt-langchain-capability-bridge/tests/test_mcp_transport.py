@@ -128,6 +128,19 @@ async def test_streamable_http_tool_roundtrip(tmp_path: Path) -> None:
             )
             assert edited["error"] is None
 
+            failed_edit = await session.call_tool(
+                "edit_file",
+                {
+                    "workspace_id": workspace_id,
+                    "file_path": "hello.txt",
+                    "old_string": "not present",
+                    "new_string": "unreachable",
+                },
+            )
+            assert failed_edit.is_error is True
+            assert failed_edit.structured_content is None
+            assert "native edit_file failed" in failed_edit.content[0].text
+
             executed = _structured(
                 await session.call_tool(
                     "execute",

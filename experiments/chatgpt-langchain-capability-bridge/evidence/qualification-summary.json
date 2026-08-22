@@ -147,6 +147,18 @@
     "deep_agent_middleware_wraps_webchat_turns": false,
     "equivalent_explicit_context_projection_available": true
   },
+  "direct_webchat_gate_a": {
+    "status": "partial_failed_write_and_catalog_continuity",
+    "capability_manifest": "passed",
+    "workspace_open_and_native_bootstrap": "passed",
+    "read_and_execute": "passed",
+    "mutation_persisted": false,
+    "host_resource_continuity": "failed_same_turn",
+    "bridge_and_tunnel_remained_ready": true,
+    "local_identical_edit_roundtrip": "passed",
+    "controlled_tunnel_restart_restored_direct_resource": false,
+    "evidence_ref": "evidence/direct-webchat-host-boundary-20260822.json"
+  },
   "evidence_ceiling": {
     "proven": [
       "stable native-first 24-tool MCP capability plane",
