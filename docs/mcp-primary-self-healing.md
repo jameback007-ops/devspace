@@ -244,6 +244,13 @@ Its bounded lifecycle is:
     recovery/diagnostic contract on
    failure.
 
+The production unit keeps the single-owner lease under its volatile
+`RuntimeDirectory`, while consecutive-failure counters, repair budget, and the
+latest incident transition are stored under a persistent `StateDirectory`.
+This split is required for a oneshot timer: systemd may remove the runtime
+directory after each invocation, but the next invocation must still observe the
+previous failure before the configured threshold can authorize repair.
+
 Repeated probes in the same recovery state update the single incident state
 file but do not create another durable receipt. A new durable receipt is emitted
 only on a state transition or material repair attempt, preventing a degraded

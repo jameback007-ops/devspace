@@ -79,7 +79,8 @@ default.
 | `ZES_NEXUS_PRIMARY_RECOVERY_EFFECTS` | `0` | Enables the fixed Nexus service restart effect only after an observation-only canary. |
 | `ZES_NEXUS_PRIMARY_READY_URL` | `http://127.0.0.1:7677/readyz` | Fixed loopback functional-readiness route. Non-loopback and non-HTTP targets are rejected. |
 | `ZES_NEXUS_PRIMARY_HOST_HEADER` | `mcp.zesnexus.com` | Host header for the local readiness request. |
-| `ZES_NEXUS_PRIMARY_RECOVERY_STATE_ROOT` | `/run/devspace-zesnexus-primary-recovery` | Volatile lease and incident-state directory. |
+| `ZES_NEXUS_PRIMARY_RECOVERY_STATE_ROOT` | `/run/devspace-zesnexus-primary-recovery` | Incident-state directory. The production systemd example overrides this to its persistent `StateDirectory` so failure thresholds and repair budgets survive separate timer invocations. |
+| `ZES_NEXUS_PRIMARY_RECOVERY_LEASE_ROOT` | `/run/devspace-zesnexus-primary-recovery` | Volatile single-owner lease directory. Keep this separate from persistent incident state so a host reboot cannot preserve a stale PID lease. |
 | `ZES_NEXUS_PRIMARY_RECOVERY_RECEIPT_ROOT` | `/var/lib/devspace-zesnexus/incident-snapshots/primary-recovery` | Durable sanitized recovery receipts. |
 | `ZES_NEXUS_PRIMARY_RECOVERY_FAILURE_THRESHOLD` | `3` | Consecutive failed readiness probes required before a repair is considered. |
 | `ZES_NEXUS_PRIMARY_RECOVERY_MAX_REPAIR_ATTEMPTS` | `1` | Maximum automatic service repairs per incident before diagnostic escalation. |

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
   evaluateStablePrimaryProbes,
@@ -462,4 +463,42 @@ test("policy defaults to the currently deployed legacy watchdog as a conflict", 
   assert.deepEqual(loaded.conflictingRestartUnits, [
     "devspace-zesnexus-health.timer",
   ]);
+});
+
+test("policy separates durable incident state from the volatile recovery lease", () => {
+  const loaded = loadRecoveryPolicy({
+    ZES_NEXUS_PRIMARY_RECOVERY_STATE_ROOT:
+      "/var/lib/devspace-zesnexus-primary-recovery/state",
+    ZES_NEXUS_PRIMARY_RECOVERY_LEASE_ROOT:
+      "/run/devspace-zesnexus-primary-recovery",
+  });
+  assert.equal(
+    loaded.statePath,
+    "/var/lib/devspace-zesnexus-primary-recovery/state/state.json",
+  );
+  assert.equal(
+    loaded.leasePath,
+    "/run/devspace-zesnexus-primary-recovery/owner.lock",
+  );
+  assert.notEqual(loaded.stateRoot, loaded.leaseRoot);
+});
+
+test("systemd timer example persists threshold state across oneshot invocations", () => {
+  const unit = readFileSync(
+    new URL(
+      "../examples/systemd/zes-nexus-primary-recovery.service",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  assert.match(unit, /StateDirectory=devspace-zesnexus-primary-recovery/);
+  assert.match(unit, /RuntimeDirectory=devspace-zesnexus-primary-recovery/);
+  assert.match(
+    unit,
+    /ZES_NEXUS_PRIMARY_RECOVERY_STATE_ROOT=\/var\/lib\/devspace-zesnexus-primary-recovery\/state/,
+  );
+  assert.match(
+    unit,
+    /ZES_NEXUS_PRIMARY_RECOVERY_LEASE_ROOT=\/run\/devspace-zesnexus-primary-recovery/,
+  );
 });

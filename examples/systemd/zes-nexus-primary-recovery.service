@@ -16,6 +16,8 @@ StateDirectoryMode=0700
 Environment=ZES_NEXUS_PRIMARY_RECOVERY_EFFECTS=0
 Environment=ZES_NEXUS_PRIMARY_READY_URL=http://127.0.0.1:7677/readyz
 Environment=ZES_NEXUS_PRIMARY_HOST_HEADER=mcp.zesnexus.com
+Environment=ZES_NEXUS_PRIMARY_RECOVERY_STATE_ROOT=/var/lib/devspace-zesnexus-primary-recovery/state
+Environment=ZES_NEXUS_PRIMARY_RECOVERY_LEASE_ROOT=/run/devspace-zesnexus-primary-recovery
 Environment=ZES_NEXUS_PRIMARY_RECOVERY_RECEIPT_ROOT=/var/lib/devspace-zesnexus-primary-recovery/receipts
 Environment=ZES_NEXUS_PRIMARY_RECOVERY_FAILURE_THRESHOLD=3
 Environment=ZES_NEXUS_PRIMARY_RECOVERY_MAX_REPAIR_ATTEMPTS=1

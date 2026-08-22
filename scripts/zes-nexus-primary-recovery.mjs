@@ -20,6 +20,7 @@ const SERVICE_NAME = "devspace-zesnexus.service";
 const DEFAULT_READY_URL = "http://127.0.0.1:7677/readyz";
 const DEFAULT_HOST_HEADER = "mcp.zesnexus.com";
 const DEFAULT_STATE_ROOT = "/run/devspace-zesnexus-primary-recovery";
+const DEFAULT_LEASE_ROOT = "/run/devspace-zesnexus-primary-recovery";
 const DEFAULT_RECEIPT_ROOT =
   "/var/lib/devspace-zesnexus/incident-snapshots/primary-recovery";
 const DEFAULT_CONFLICTING_RESTART_UNITS = [
@@ -101,6 +102,10 @@ export function loadRecoveryPolicy(environment = process.env) {
     environment.ZES_NEXUS_PRIMARY_RECOVERY_STATE_ROOT,
     DEFAULT_STATE_ROOT,
   );
+  const leaseRoot = absolutePath(
+    environment.ZES_NEXUS_PRIMARY_RECOVERY_LEASE_ROOT,
+    DEFAULT_LEASE_ROOT,
+  );
   const stableProbeCount = integer(
     environment.ZES_NEXUS_PRIMARY_RECOVERY_STABLE_PROBE_COUNT,
     3,
@@ -122,7 +127,8 @@ export function loadRecoveryPolicy(environment = process.env) {
     ),
     stateRoot,
     statePath: join(stateRoot, "state.json"),
-    leasePath: join(stateRoot, "owner.lock"),
+    leaseRoot,
+    leasePath: join(leaseRoot, "owner.lock"),
     receiptRoot: absolutePath(
       environment.ZES_NEXUS_PRIMARY_RECOVERY_RECEIPT_ROOT,
       DEFAULT_RECEIPT_ROOT,
@@ -592,7 +598,7 @@ function processAlive(pid) {
 }
 
 async function acquireLease(policy) {
-  await mkdir(policy.stateRoot, { recursive: true, mode: 0o700 });
+  await mkdir(policy.leaseRoot, { recursive: true, mode: 0o700 });
   const attempt = async () => {
     const handle = await open(policy.leasePath, "wx", 0o600);
     const lease = {
