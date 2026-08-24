@@ -85,4 +85,24 @@ test("readyz exercises functional database and tool-surface readiness", async (t
   assert.equal(body.policy.sameProcessDatabaseSentinel, true);
   assert.equal(body.policy.deploymentOrEffectAuthorityGranted, false);
   assert.equal("rawError" in body.database, false);
+
+  const authorizationMetadataResponse = await fetch(
+    `http://127.0.0.1:${address.port}/.well-known/oauth-authorization-server`,
+    { headers: { Host: "127.0.0.1" } },
+  );
+  assert.equal(authorizationMetadataResponse.status, 200);
+  const authorizationMetadata = await authorizationMetadataResponse.json() as Record<string, any>;
+  assert.deepEqual(
+    authorizationMetadata.scopes_supported,
+    ["devspace", "offline_access"],
+  );
+
+  const resourceMetadataResponse = await fetch(
+    `http://127.0.0.1:${address.port}/.well-known/oauth-protected-resource/mcp`,
+    { headers: { Host: "127.0.0.1" } },
+  );
+  assert.equal(resourceMetadataResponse.status, 200);
+  const resourceMetadata = await resourceMetadataResponse.json() as Record<string, any>;
+  assert.equal(resourceMetadata.resource, "http://127.0.0.1:1/mcp");
+  assert.deepEqual(resourceMetadata.scopes_supported, ["devspace", "offline_access"]);
 });

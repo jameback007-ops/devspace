@@ -25,6 +25,15 @@ export interface PersistedTokenPair {
   refreshToken: PersistedRefreshTokenRecord;
 }
 
+export interface PersistedAuthorizationCodeRecord {
+  clientId: string;
+  redirectUri: string;
+  codeChallenge: string;
+  scopes: string[];
+  expiresAtMs: number;
+  resource?: string;
+}
+
 function redirectHostAllowed(redirectUri: string, allowedHosts: string[]): boolean {
   let parsed: URL;
   try {
@@ -43,6 +52,7 @@ export class SqliteOAuthStore {
   constructor(stateDir: string) {
     this.database = openDatabase(stateDir);
     this.deleteExpiredTokens(Math.floor(Date.now() / 1000));
+    this.deleteExpiredAuthorizationCodes(Date.now());
   }
 
   getClient(clientId: string): OAuthClientInformationFull | undefined {
@@ -177,6 +187,59 @@ export class SqliteOAuthStore {
     this.database.sqlite.prepare("delete from oauth_refresh_tokens where token_hash = ?").run(tokenHash);
   }
 
+  saveAuthorizationCode(
+    codeHash: string,
+    record: PersistedAuthorizationCodeRecord,
+  ): void {
+    this.database.sqlite.prepare(`
+      insert into oauth_authorization_codes (
+        code_hash, client_id, redirect_uri, code_challenge, scopes_json,
+        resource, expires_at_ms
+      ) values (?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      codeHash,
+      record.clientId,
+      record.redirectUri,
+      record.codeChallenge,
+      JSON.stringify(record.scopes),
+      record.resource ?? null,
+      record.expiresAtMs,
+    );
+  }
+
+  getAuthorizationCode(codeHash: string): PersistedAuthorizationCodeRecord | undefined {
+    const row = this.database.sqlite.prepare(`
+      select client_id, redirect_uri, code_challenge, scopes_json, resource, expires_at_ms
+      from oauth_authorization_codes
+      where code_hash = ?
+    `).get(codeHash) as PersistedAuthorizationCodeRow | undefined;
+
+    return row ? rowToAuthorizationCodeRecord(row) : undefined;
+  }
+
+  consumeAuthorizationCode(
+    codeHash: string,
+    clientId: string,
+  ): PersistedAuthorizationCodeRecord | undefined {
+    const consume = this.database.sqlite.transaction(() => {
+      const row = this.database.sqlite.prepare(`
+        select client_id, redirect_uri, code_challenge, scopes_json, resource, expires_at_ms
+        from oauth_authorization_codes
+        where code_hash = ? and client_id = ?
+      `).get(codeHash, clientId) as PersistedAuthorizationCodeRow | undefined;
+      if (!row) return undefined;
+
+      const deleted = this.database.sqlite.prepare(`
+        delete from oauth_authorization_codes
+        where code_hash = ? and client_id = ?
+      `).run(codeHash, clientId);
+      if (deleted.changes !== 1) return undefined;
+      return rowToAuthorizationCodeRecord(row);
+    });
+
+    return consume.immediate();
+  }
+
   close(): void {
     this.database.close();
   }
@@ -185,6 +248,21 @@ export class SqliteOAuthStore {
     this.database.sqlite.prepare("delete from oauth_access_tokens where expires_at < ?").run(nowSeconds);
     this.database.sqlite.prepare("delete from oauth_refresh_tokens where expires_at < ?").run(nowSeconds);
   }
+
+  private deleteExpiredAuthorizationCodes(nowMs: number): void {
+    this.database.sqlite
+      .prepare("delete from oauth_authorization_codes where expires_at_ms < ?")
+      .run(nowMs);
+  }
+}
+
+interface PersistedAuthorizationCodeRow {
+  client_id: string;
+  redirect_uri: string;
+  code_challenge: string;
+  scopes_json: string;
+  resource: string | null;
+  expires_at_ms: number;
 }
 
 export class SqliteOAuthClientsStore implements OAuthRegisteredClientsStore {
@@ -228,6 +306,19 @@ function rowToRefreshTokenRecord(row: {
     clientId: row.client_id,
     scopes: JSON.parse(row.scopes_json) as string[],
     expiresAt: row.expires_at,
+    resource: row.resource ?? undefined,
+  };
+}
+
+function rowToAuthorizationCodeRecord(
+  row: PersistedAuthorizationCodeRow,
+): PersistedAuthorizationCodeRecord {
+  return {
+    clientId: row.client_id,
+    redirectUri: row.redirect_uri,
+    codeChallenge: row.code_challenge,
+    scopes: JSON.parse(row.scopes_json) as string[],
+    expiresAtMs: row.expires_at_ms,
     resource: row.resource ?? undefined,
   };
 }

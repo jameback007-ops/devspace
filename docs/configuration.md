@@ -366,7 +366,7 @@ DevSpace uses a single-user OAuth approval flow.
 | --- | --- |
 | `DEVSPACE_OAUTH_ACCESS_TOKEN_TTL_SECONDS` | `3600` |
 | `DEVSPACE_OAUTH_REFRESH_TOKEN_TTL_SECONDS` | `2592000` |
-| `DEVSPACE_OAUTH_SCOPES` | `devspace` |
+| `DEVSPACE_OAUTH_SCOPES` | `devspace,offline_access` |
 | `DEVSPACE_OAUTH_ALLOWED_REDIRECT_HOSTS` | `chatgpt.com,localhost,127.0.0.1` |
 
 MCP clients discover metadata from:
@@ -375,6 +375,12 @@ MCP clients discover metadata from:
 /.well-known/oauth-protected-resource/mcp
 /.well-known/oauth-authorization-server
 ```
+
+`offline_access` is always advertised in the supported OAuth scopes so clients
+such as ChatGPT can request and retain refresh-token access. Refresh tokens are
+hash-only at rest and remain reusable until their fixed expiry or explicit
+revocation; access-token refresh therefore tolerates client retry and concurrent
+refresh attempts without forcing a new interactive authorization.
 
 ## Tool Modes
 

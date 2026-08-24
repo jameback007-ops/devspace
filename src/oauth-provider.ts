@@ -10,7 +10,11 @@ import type {
   OAuthTokens,
 } from "@modelcontextprotocol/sdk/shared/auth.js";
 import { checkResourceAllowed, resourceUrlFromServerUrl } from "@modelcontextprotocol/sdk/shared/auth-utils.js";
-import { SqliteOAuthClientsStore, SqliteOAuthStore } from "./oauth-store.js";
+import {
+  SqliteOAuthClientsStore,
+  SqliteOAuthStore,
+  type PersistedAuthorizationCodeRecord,
+} from "./oauth-store.js";
 
 export interface OAuthConfig {
   ownerToken: string;
@@ -113,7 +117,6 @@ function requestedScopesAllowed(requested: string[], supported: string[]): boole
 
 export class SingleUserOAuthProvider implements OAuthServerProvider {
   readonly clientsStore: OAuthRegisteredClientsStore;
-  private readonly codes = new Map<string, AuthorizationCodeRecord>();
   private readonly oauthStore: SqliteOAuthStore;
   private readonly resourceServerUrl: URL;
 
@@ -168,9 +171,12 @@ export class SingleUserOAuthProvider implements OAuthServerProvider {
     }
 
     const code = `code-${randomUUID()}`;
-    this.codes.set(code, {
+    this.oauthStore.saveAuthorizationCode(hashToken(code), {
       clientId: client.client_id,
-      params,
+      redirectUri: params.redirectUri,
+      codeChallenge: params.codeChallenge,
+      scopes: params.scopes ?? this.config.scopes,
+      resource: params.resource?.href,
       expiresAtMs: Date.now() + CODE_TTL_MS,
     });
 
@@ -195,7 +201,7 @@ export class SingleUserOAuthProvider implements OAuthServerProvider {
     redirectUri?: string,
     resource?: URL,
   ): Promise<OAuthTokens> {
-    const record = this.validCodeRecord(client, authorizationCode);
+    const record = this.consumeCodeRecord(client, authorizationCode);
     if (redirectUri && redirectUri !== record.params.redirectUri) {
       throw new InvalidGrantError("redirect_uri does not match the authorization request");
     }
@@ -203,7 +209,6 @@ export class SingleUserOAuthProvider implements OAuthServerProvider {
       throw new InvalidGrantError("Invalid resource");
     }
 
-    this.codes.delete(authorizationCode);
     return this.issueTokens(client.client_id, record.params.scopes ?? this.config.scopes, record.params.resource);
   }
 
@@ -227,11 +232,11 @@ export class SingleUserOAuthProvider implements OAuthServerProvider {
       throw new AccessDeniedError("Refresh token cannot grant requested scopes");
     }
 
-    return this.issueTokens(
+    return this.issueAccessToken(
       client.client_id,
       requestedScopes,
       resource ?? (record.resource ? new URL(record.resource) : undefined),
-      refreshTokenHash,
+      refreshToken,
     );
   }
 
@@ -264,8 +269,24 @@ export class SingleUserOAuthProvider implements OAuthServerProvider {
     client: OAuthClientInformationFull,
     authorizationCode: string,
   ): AuthorizationCodeRecord {
-    const record = this.codes.get(authorizationCode);
+    const persisted = this.oauthStore.getAuthorizationCode(hashToken(authorizationCode));
+    const record = persisted ? authorizationCodeRecord(persisted) : undefined;
     if (!record || record.clientId !== client.client_id || record.expiresAtMs < Date.now()) {
+      throw new InvalidGrantError("Invalid authorization code");
+    }
+    return record;
+  }
+
+  private consumeCodeRecord(
+    client: OAuthClientInformationFull,
+    authorizationCode: string,
+  ): AuthorizationCodeRecord {
+    const persisted = this.oauthStore.consumeAuthorizationCode(
+      hashToken(authorizationCode),
+      client.client_id,
+    );
+    const record = persisted ? authorizationCodeRecord(persisted) : undefined;
+    if (!record || record.expiresAtMs < Date.now()) {
       throw new InvalidGrantError("Invalid authorization code");
     }
     return record;
@@ -275,7 +296,6 @@ export class SingleUserOAuthProvider implements OAuthServerProvider {
     clientId: string,
     scopes: string[],
     resource?: URL,
-    consumedRefreshTokenHash?: string,
   ): OAuthTokens {
     const now = Math.floor(Date.now() / 1000);
     const accessToken = randomToken();
@@ -300,12 +320,40 @@ export class SingleUserOAuthProvider implements OAuthServerProvider {
           resource: resource?.href,
         },
       },
-      consumedRefreshTokenHash,
     );
     if (!saved) {
       throw new InvalidGrantError("Invalid refresh token");
     }
 
+    return {
+      access_token: accessToken,
+      token_type: "bearer",
+      expires_in: this.config.accessTokenTtlSeconds,
+      refresh_token: refreshToken,
+      scope: scopes.join(" "),
+    };
+  }
+
+  private issueAccessToken(
+    clientId: string,
+    scopes: string[],
+    resource: URL | undefined,
+    refreshToken: string,
+  ): OAuthTokens {
+    const now = Math.floor(Date.now() / 1000);
+    const accessToken = randomToken();
+    this.oauthStore.saveAccessToken(hashToken(accessToken), {
+      clientId,
+      scopes,
+      expiresAt: now + this.config.accessTokenTtlSeconds,
+      resource: resource?.href,
+    });
+
+    // Keep the already-issued refresh token reusable until its fixed expiry.
+    // ChatGPT and other OAuth clients can retry or refresh concurrently without
+    // one successful request invalidating the credential still held by another
+    // request. The raw refresh token remains client-held only; DevSpace stores
+    // only its hash.
     return {
       access_token: accessToken,
       token_type: "bearer",
@@ -334,4 +382,19 @@ function authorizationFormFields(
 
 function hashToken(token: string): string {
   return createHash("sha256").update(token).digest("base64url");
+}
+
+function authorizationCodeRecord(
+  record: PersistedAuthorizationCodeRecord,
+): AuthorizationCodeRecord {
+  return {
+    clientId: record.clientId,
+    params: {
+      redirectUri: record.redirectUri,
+      codeChallenge: record.codeChallenge,
+      scopes: record.scopes,
+      resource: record.resource ? new URL(record.resource) : undefined,
+    },
+    expiresAtMs: record.expiresAtMs,
+  };
 }

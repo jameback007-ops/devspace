@@ -741,6 +741,14 @@ function parseRequiredSecret(value: string | undefined, name: string): string {
 }
 
 function parseOAuthConfig(env: NodeJS.ProcessEnv, ownerToken: string | undefined): OAuthConfig {
+  const configuredScopes = parseStringList(
+    env.DEVSPACE_OAUTH_SCOPES,
+    ["devspace", "offline_access"],
+  );
+  const scopes = configuredScopes.includes("offline_access")
+    ? configuredScopes
+    : [...configuredScopes, "offline_access"];
+
   return {
     ownerToken: parseRequiredSecret(env.DEVSPACE_OAUTH_OWNER_TOKEN ?? ownerToken, "DEVSPACE_OAUTH_OWNER_TOKEN"),
     accessTokenTtlSeconds: parsePositiveInteger(
@@ -753,7 +761,7 @@ function parseOAuthConfig(env: NodeJS.ProcessEnv, ownerToken: string | undefined
       DEFAULT_OAUTH_REFRESH_TOKEN_TTL_SECONDS,
       "DEVSPACE_OAUTH_REFRESH_TOKEN_TTL_SECONDS",
     ),
-    scopes: parseStringList(env.DEVSPACE_OAUTH_SCOPES, ["devspace"]),
+    scopes,
     allowedRedirectHosts: parseStringList(env.DEVSPACE_OAUTH_ALLOWED_REDIRECT_HOSTS, [
       "chatgpt.com",
       "localhost",

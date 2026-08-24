@@ -562,7 +562,7 @@ assert.throws(
 );
 
 assert.equal(loadConfig(baseEnv).oauth.ownerToken, "test-owner-token-that-is-long-enough");
-assert.deepEqual(loadConfig(baseEnv).oauth.scopes, ["devspace"]);
+assert.deepEqual(loadConfig(baseEnv).oauth.scopes, ["devspace", "offline_access"]);
 assert.deepEqual(loadConfig(baseEnv).oauth.allowedRedirectHosts, [
   "chatgpt.com",
   "localhost",
@@ -573,7 +573,11 @@ assert.equal(loadConfig(baseEnv).oauth.refreshTokenTtlSeconds, 2592000);
 
 assert.deepEqual(
   loadConfig({ ...baseEnv, DEVSPACE_OAUTH_SCOPES: "devspace,admin" }).oauth.scopes,
-  ["devspace", "admin"],
+  ["devspace", "admin", "offline_access"],
+);
+assert.deepEqual(
+  loadConfig({ ...baseEnv, DEVSPACE_OAUTH_SCOPES: "devspace,offline_access" }).oauth.scopes,
+  ["devspace", "offline_access"],
 );
 assert.deepEqual(
   loadConfig({ ...baseEnv, DEVSPACE_OAUTH_ALLOWED_REDIRECT_HOSTS: "chatgpt.com,example.com" }).oauth

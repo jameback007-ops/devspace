@@ -1,0 +1,24 @@
+[Unit]
+Description=DevSpace ZES Nexus blue/green slot %i
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/srv/devspace/workspaces
+Environment=HOME=/root
+Environment=PATH=/root/.local/bin:/root/.cargo/bin:/home/devspace-support/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin
+EnvironmentFile=/etc/devspace/devspace-zesnexus.env
+EnvironmentFile=/etc/devspace/devspace-zesnexus-runtime.env
+EnvironmentFile=/etc/devspace/devspace-zesnexus-slot-%i.env
+LoadCredentialEncrypted=exa-api-key:/etc/credstore.encrypted/devspace-exa-api-key
+ExecStart=/bin/bash -lc 'export DEVSPACE_OAUTH_OWNER_TOKEN="$(</etc/devspace/owner.token)"; export EXA_API_KEY="$(<"$CREDENTIALS_DIRECTORY/exa-api-key")"; exec /usr/local/bin/node "$DEVSPACE_RELEASE_ROOT/app/node_modules/@waishnav/devspace/dist/cli.js" serve'
+Restart=always
+RestartSec=2s
+TimeoutStopSec=60s
+KillMode=mixed
+
+[Install]
+WantedBy=multi-user.target

@@ -4,6 +4,7 @@ import { mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { InvalidGrantError, InvalidTokenError } from "@modelcontextprotocol/sdk/server/auth/errors.js";
+import type { Response } from "express";
 import { databasePath, openDatabase } from "./db/client.js";
 import {
   EXECUTION_WAKE_COORDINATION_AUTHORITY,
@@ -18,7 +19,7 @@ const oauthConfig = {
   ownerToken: "test-owner-token-that-is-long-enough",
   accessTokenTtlSeconds: 3600,
   refreshTokenTtlSeconds: 2592000,
-  scopes: ["devspace"],
+  scopes: ["devspace", "offline_access"],
   allowedRedirectHosts: ["chatgpt.com"],
 };
 const mcpUrl = new URL("https://agent.example.com/mcp");
@@ -29,6 +30,7 @@ try {
   testLegacyWakeContinuationSanitization(join(root, "legacy-wake-sanitization"));
   testPersistenceAndTokenHashing(join(root, "persistence"));
   testExpiredTokenCleanup(join(root, "expiration"));
+  testDurableAuthorizationCodes(join(root, "authorization-codes"));
   testTransactionalTokenRotation(join(root, "rotation"));
   await testProviderRestartRotationAndRevocation(join(root, "provider"));
 } finally {
@@ -63,6 +65,7 @@ async function testDatabaseConfiguration(stateDir: string): Promise<void> {
       { version: 14, name: "host-turn-lifecycle-observability" },
       { version: 15, name: "durable-interaction-broker" },
       { version: 16, name: "sanitize-wake-continuation-envelopes" },
+      { version: 17, name: "durable-oauth-authorization-codes" },
     ]);
     assert.deepEqual(
       database.sqlite
@@ -309,6 +312,41 @@ function testExpiredTokenCleanup(stateDir: string): void {
   }
 }
 
+function testDurableAuthorizationCodes(stateDir: string): void {
+  const codeHash = hashToken("authorization-code-example");
+  const firstStore = new SqliteOAuthStore(stateDir);
+  const client = new SqliteOAuthClientsStore(firstStore, oauthConfig.allowedRedirectHosts).registerClient({
+    redirect_uris: [redirectUri],
+  });
+  firstStore.saveAuthorizationCode(codeHash, {
+    clientId: client.client_id,
+    redirectUri,
+    codeChallenge: "challenge",
+    scopes: ["devspace", "offline_access"],
+    resource: mcpUrl.href,
+    expiresAtMs: Date.now() + 60_000,
+  });
+  firstStore.close();
+
+  const secondStore = new SqliteOAuthStore(stateDir);
+  try {
+    const restored = secondStore.getAuthorizationCode(codeHash);
+    assert.equal(restored?.clientId, client.client_id);
+    assert.equal(restored?.resource, mcpUrl.href);
+    assert.equal(
+      secondStore.consumeAuthorizationCode(codeHash, "wrong-client"),
+      undefined,
+    );
+    assert.equal(
+      secondStore.consumeAuthorizationCode(codeHash, client.client_id)?.codeChallenge,
+      "challenge",
+    );
+    assert.equal(secondStore.getAuthorizationCode(codeHash), undefined);
+  } finally {
+    secondStore.close();
+  }
+}
+
 function testTransactionalTokenRotation(stateDir: string): void {
   const store = new SqliteOAuthStore(stateDir);
   try {
@@ -365,18 +403,38 @@ async function testProviderRestartRotationAndRevocation(stateDir: string): Promi
   });
   assert.ok(client);
 
-  const code = "code-test-123";
-  firstProvider["codes"].set(code, {
-    clientId: client.client_id,
-    params: {
+  let redirectLocation = "";
+  const authorizationResponse = {
+    req: {
+      method: "POST",
+      body: { owner_token: oauthConfig.ownerToken },
+    },
+    redirect(status: number, location: string) {
+      assert.equal(status, 302);
+      redirectLocation = location;
+    },
+  } as unknown as Response;
+  await firstProvider.authorize(
+    client,
+    {
       redirectUri,
       codeChallenge: "challenge",
-      scopes: ["devspace"],
+      scopes: ["devspace", "offline_access"],
       resource: mcpUrl,
+      state: "restart-safe-state",
     },
-    expiresAtMs: Date.now() + 60_000,
-  });
-  const issued = await firstProvider.exchangeAuthorizationCode(
+    authorizationResponse,
+  );
+  const code = new URL(redirectLocation).searchParams.get("code");
+  assert.ok(code);
+  firstProvider.close();
+
+  const secondProvider = new SingleUserOAuthProvider(oauthConfig, mcpUrl, stateDir);
+  assert.equal(
+    await secondProvider.challengeForAuthorizationCode(client, code),
+    "challenge",
+  );
+  const issued = await secondProvider.exchangeAuthorizationCode(
     client,
     code,
     undefined,
@@ -384,33 +442,40 @@ async function testProviderRestartRotationAndRevocation(stateDir: string): Promi
     mcpUrl,
   );
   assert.ok(issued.refresh_token);
-  firstProvider.close();
-
-  const secondProvider = new SingleUserOAuthProvider(oauthConfig, mcpUrl, stateDir);
   try {
     const verified = await secondProvider.verifyAccessToken(issued.access_token);
     assert.equal(verified.clientId, client.client_id);
 
-    const refreshed = await secondProvider.exchangeRefreshToken(
-      client,
-      issued.refresh_token,
-      ["devspace"],
-      mcpUrl,
-    );
-    assert.ok(refreshed.refresh_token);
+    const [refreshed, concurrentRefresh] = await Promise.all([
+      secondProvider.exchangeRefreshToken(
+        client,
+        issued.refresh_token,
+        ["devspace", "offline_access"],
+        mcpUrl,
+      ),
+      secondProvider.exchangeRefreshToken(
+        client,
+        issued.refresh_token,
+        ["devspace", "offline_access"],
+        mcpUrl,
+      ),
+    ]);
+    assert.equal(refreshed.refresh_token, issued.refresh_token);
+    assert.equal(concurrentRefresh.refresh_token, issued.refresh_token);
     assert.notEqual(refreshed.access_token, issued.access_token);
-
-    await assert.rejects(
-      secondProvider.exchangeRefreshToken(client, issued.refresh_token, ["devspace"], mcpUrl),
-      InvalidGrantError,
-    );
+    assert.notEqual(concurrentRefresh.access_token, refreshed.access_token);
 
     await secondProvider.revokeToken(client, { token: refreshed.access_token });
     await assert.rejects(secondProvider.verifyAccessToken(refreshed.access_token), InvalidTokenError);
 
     await secondProvider.revokeToken(client, { token: refreshed.refresh_token });
     await assert.rejects(
-      secondProvider.exchangeRefreshToken(client, refreshed.refresh_token, ["devspace"], mcpUrl),
+      secondProvider.exchangeRefreshToken(
+        client,
+        refreshed.refresh_token,
+        ["devspace", "offline_access"],
+        mcpUrl,
+      ),
       InvalidGrantError,
     );
   } finally {
