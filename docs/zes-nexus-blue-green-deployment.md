@@ -5,7 +5,9 @@ disconnect. The production endpoint therefore uses two loopback slots behind
 Caddy. Only one slot receives new traffic; the other may be staged and probed
 before an atomic proxy switch.
 
-The fixed production ports are conventionally `7677` and `7678`. Both slots
+The fixed production ports are conventionally `7677` and `7679`. Port `7678`
+is reserved by the independent Legacy/continuity MCP and must not be reused by
+the primary blue/green pair. Both primary slots
 share the durable DevSpace state directory. OAuth clients, access/refresh token
 hashes, authorization codes, workspaces, and other SQLite-backed executor state
 therefore survive a slot replacement. Process-local sessions are deliberately

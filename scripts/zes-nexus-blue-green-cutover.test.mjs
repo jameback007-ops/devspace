@@ -59,7 +59,7 @@ test("OAuth cutover gate requires offline access on both metadata documents", ()
 });
 
 test("upstream rendering is loopback-only and validates ports", () => {
-  assert.equal(renderUpstream(7678), "reverse_proxy 127.0.0.1:7678\n");
+  assert.equal(renderUpstream(7679), "reverse_proxy 127.0.0.1:7679\n");
   assert.throws(() => renderUpstream(0), /Invalid upstream port/);
   assert.throws(() => renderUpstream(65536), /Invalid upstream port/);
 });

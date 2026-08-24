@@ -8,7 +8,7 @@ const execFileAsync = promisify(execFile);
 
 const DEFAULTS = Object.freeze({
   activePort: 7677,
-  candidatePort: 7678,
+  candidatePort: 7679,
   upstreamFile: "/etc/caddy/zes-nexus-upstream.caddy",
   caddyfile: "/etc/caddy/Caddyfile",
   caddyBin: "/usr/bin/caddy",
