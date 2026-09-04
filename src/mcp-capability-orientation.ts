@@ -73,6 +73,19 @@ export const MCP_CAPABILITY_GROUP_METADATA = {
     recommendedEntryTools: ["zes_continuation_preflight"],
     effectClass: "read_only_external_authority_readback",
   },
+  nativeResearch: {
+    title: "Native external research",
+    purpose:
+      "Query current upstream documentation, discover open-world candidates, and fetch known sources through fixed server-owned Context7 and Exa provider routes.",
+    intentRefs: [
+      "research_external_patterns",
+      "check_upstream_currentness",
+      "discover_open_world_sources",
+      "fetch_known_source",
+    ],
+    recommendedEntryTools: ["research"],
+    effectClass: "read_only_external_evidence",
+  },
   recoveryCapsules: {
     title: "Semantic recovery capsules",
     purpose:

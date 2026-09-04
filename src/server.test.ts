@@ -804,6 +804,7 @@ test("turn continuity is advisory-only and recovery capsules detect later worksp
   const tools = await context.client.listTools();
 
   for (const name of [
+    "research",
     "turn_horizon_begin",
     "turn_horizon_status",
     "recovery_capsule_record",
@@ -817,6 +818,20 @@ test("turn continuity is advisory-only and recovery capsules detect later worksp
   );
   assert.match(recoveryCapsuleSchema, /missionFinalization/);
   assert.match(recoveryCapsuleSchema, /COMPLETE_VERIFIED/);
+  const researchTool = tools.tools.find((tool) => tool.name === "research");
+  assert.deepEqual(
+    (researchTool?.inputSchema as Record<string, any>).properties.action.enum,
+    [
+      "manifest",
+      "probe",
+      "upstream_docs_resolve",
+      "upstream_docs_query",
+      "open_world_search",
+      "known_source_fetch",
+    ],
+  );
+  assert.equal(researchTool?.annotations?.readOnlyHint, true);
+  assert.equal(researchTool?.annotations?.openWorldHint, true);
   assert.equal(
     tools.tools.some((tool) => tool.name.startsWith("executor_window_")),
     false,

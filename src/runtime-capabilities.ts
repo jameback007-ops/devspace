@@ -76,6 +76,7 @@ const CRITICAL_TOOL_GROUPS = {
     "turn_horizon_status",
   ],
   continuationControl: ["zes_continuation_preflight"],
+  nativeResearch: ["research"],
   recoveryCapsules: [
     "recovery_capsule_record",
     "recovery_capsule_status",
@@ -527,6 +528,10 @@ export class RuntimeCapabilityRegistry {
       continuationControl: {
         configured: true,
         expectedTools: CRITICAL_TOOL_GROUPS.continuationControl,
+      },
+      nativeResearch: {
+        configured: true,
+        expectedTools: CRITICAL_TOOL_GROUPS.nativeResearch,
       },
       recoveryCapsules: {
         configured: this.config.turnContinuity.enabled,
