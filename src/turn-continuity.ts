@@ -3,6 +3,10 @@ import { realpath } from "node:fs/promises";
 import { resolve } from "node:path";
 import { openDatabase, type DatabaseHandle } from "./db/client.js";
 import { getGitEligibility, git } from "./git.js";
+import {
+  normalizeMissionFinalizationDeclaration,
+  type MissionFinalizationDeclaration,
+} from "./mission-finalization.js";
 import type {
   ExecutionScopeIdentity,
   ExecutorTurnMetadata,
@@ -89,6 +93,7 @@ export interface RecoveryCapsuleInput {
   unresolved?: string[];
   checkpointRefs?: string[];
   notes?: string;
+  missionFinalization?: MissionFinalizationDeclaration;
 }
 
 export interface TurnContinuityManagerOptions {
@@ -258,6 +263,7 @@ interface RecoverySemanticState {
   unresolved: string[];
   checkpointRefs: string[];
   notes?: string;
+  missionFinalization?: MissionFinalizationDeclaration;
 }
 
 interface WorkspaceFingerprint {
@@ -1305,6 +1311,9 @@ export class TurnContinuityManager {
       doNotRepeat: semantic.doNotRepeat,
       unresolved: semantic.unresolved,
       checkpointRefs: semantic.checkpointRefs,
+      ...(semantic.missionFinalization === undefined
+        ? {}
+        : { missionFinalizationDeclaration: semantic.missionFinalization }),
       activitySinceCapsule: {
         observedActivityAfterCapsule: activityAfterCapsule,
         latestObservedActivityAt: iso(observedActivityAtMs),
@@ -2524,6 +2533,9 @@ export class TurnContinuityManager {
       unresolved: boundedList(input.unresolved, "unresolved"),
       checkpointRefs: boundedList(input.checkpointRefs, "checkpointRefs"),
       notes: boundedText(input.notes, "notes"),
+      missionFinalization: normalizeMissionFinalizationDeclaration(
+        input.missionFinalization,
+      ),
     };
   }
 

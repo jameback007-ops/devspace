@@ -42,6 +42,18 @@ effects, release state, canonical memory, or writer ownership.
 Prefer clean ownership and explicit integration over weakening the executor for
 architectural purity.
 
+Turn landing and mission completion are separate. Before reporting a mission,
+release, publication, repair, or other governed outcome as complete, read the
+additive `missionFinalization` projection from `execution_scope_status`. The
+default posture is `PARTIAL_CONTINUE`; only `COMPLETE_VERIFIED` with
+`completionClaimAllowed=true` permits unqualified completion language at the
+returned claim ceiling. A clean worktree, passing test, commit, planned gate,
+turn boundary, elapsed time, or output count is insufficient. Missing, stale,
+planned, candidate-mismatched, unknown-effect, or unacted owner-correction
+evidence fails closed. This barrier is executor construction scaffolding and
+does not grant DevSpace canonical task, decision, writer, effect, publication,
+or product authority.
+
 ## Security and failure boundaries
 
 - Filesystem tools enforce approved-root containment. Shell commands run with

@@ -811,6 +811,12 @@ test("turn continuity is advisory-only and recovery capsules detect later worksp
   ]) {
     assert.ok(tools.tools.find((tool) => tool.name === name), `${name} should be registered`);
   }
+  const recoveryCapsuleSchema = JSON.stringify(
+    tools.tools.find((tool) => tool.name === "recovery_capsule_record")
+      ?.inputSchema,
+  );
+  assert.match(recoveryCapsuleSchema, /missionFinalization/);
+  assert.match(recoveryCapsuleSchema, /COMPLETE_VERIFIED/);
   assert.equal(
     tools.tools.some((tool) => tool.name.startsWith("executor_window_")),
     false,
@@ -989,7 +995,8 @@ test("turn continuity is advisory-only and recovery capsules detect later worksp
     arguments: {},
     _meta: { "openai/session": session },
   } as Parameters<Client["callTool"]>[0]);
-  const scopeTurnLanding = structuredData(scopeStatus).turnLanding as Record<string, unknown>;
+  const scopeData = structuredData(scopeStatus);
+  const scopeTurnLanding = scopeData.turnLanding as Record<string, unknown>;
   assert.equal(scopeTurnLanding.sameMissionContinuationExpected, true);
   assert.equal(
     scopeTurnLanding.classification,
@@ -998,6 +1005,82 @@ test("turn continuity is advisory-only and recovery capsules detect later worksp
   assert.equal(
     (scopeTurnLanding.policy as Record<string, unknown>)
       .writerEffectOrPublicationAuthorityGranted,
+    false,
+  );
+  const missionFinalization = scopeData.missionFinalization as Record<
+    string,
+    unknown
+  >;
+  assert.equal(missionFinalization.disposition, "PARTIAL_CONTINUE");
+  assert.equal(missionFinalization.completionClaimAllowed, false);
+  assert.ok(
+    (missionFinalization.blockingFactors as string[]).includes(
+      "explicit_closure_contract_missing",
+    ),
+  );
+  assert.deepEqual(
+    (scopeData.stableControlPlane as Record<string, any>).capabilities
+      .missionFinalization,
+    missionFinalization,
+  );
+
+  const senderSession = "turn-continuity-owner-correction-sender";
+  await context.client.callTool({
+    name: "execution_scope_status",
+    arguments: {},
+    _meta: { "openai/session": senderSession },
+  } as Parameters<Client["callTool"]>[0]);
+  const targetScopeRef = String(
+    (scopeData.scope as Record<string, unknown>).scopeRef,
+  );
+  const correction = await context.client.callTool({
+    name: "execution_scope_message_send",
+    arguments: {
+      targetScopeRef,
+      idempotencyKey: "completion-barrier-correction",
+      kind: "correction",
+      priority: "high",
+      body: "Private correction body must not leak into mission finalization.",
+    },
+    _meta: { "openai/session": senderSession },
+  } as Parameters<Client["callTool"]>[0]);
+  const correctionId = String(
+    ((structuredData(correction).message as Record<string, unknown>)).messageId,
+  );
+  const correctionBlocked = await context.client.callTool({
+    name: "execution_scope_status",
+    arguments: {},
+    _meta: { "openai/session": session },
+  } as Parameters<Client["callTool"]>[0]);
+  const correctionFinalization = structuredData(correctionBlocked)
+    .missionFinalization as Record<string, unknown>;
+  assert.ok(
+    (correctionFinalization.blockingFactors as string[]).includes(
+      "unacted_owner_correction_or_instruction:1",
+    ),
+  );
+  assert.equal(
+    JSON.stringify(correctionFinalization).includes("Private correction body"),
+    false,
+  );
+
+  await context.client.callTool({
+    name: "execution_scope_message_receipt",
+    arguments: {
+      messageId: correctionId,
+      state: "acted",
+      note: "Correction integrated into the current causal frontier.",
+    },
+    _meta: { "openai/session": session },
+  } as Parameters<Client["callTool"]>[0]);
+  const afterCorrection = await context.client.callTool({
+    name: "execution_scope_status",
+    arguments: {},
+    _meta: { "openai/session": session },
+  } as Parameters<Client["callTool"]>[0]);
+  assert.equal(
+    (structuredData(afterCorrection).missionFinalization.blockingFactors as string[])
+      .some((factor) => factor.startsWith("unacted_owner_correction")),
     false,
   );
 });

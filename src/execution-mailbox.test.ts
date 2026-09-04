@@ -222,6 +222,90 @@ test("send is idempotent and target-bound receipts advance monotonically", async
   }
 });
 
+test("mission finalization sees unacted instructions and corrections without exposing message bodies", async (t) => {
+  const context = await fixture(t);
+  const instruction = context.mailbox.send(context.supervisor, {
+    targetScopeRef: context.worker.scopeRef,
+    idempotencyKey: "finalization-instruction",
+    kind: "instruction",
+    priority: "high",
+    body: "Preserve this private instruction body while finalization is pending.",
+  }).message;
+  const correction = context.mailbox.send(context.outsider, {
+    targetScopeRef: context.worker.scopeRef,
+    idempotencyKey: "finalization-correction",
+    kind: "correction",
+    priority: "urgent",
+    body: "This private correction body must not appear in the projection.",
+  }).message;
+  context.mailbox.send(context.supervisor, {
+    targetScopeRef: context.worker.scopeRef,
+    idempotencyKey: "finalization-notice",
+    kind: "notice",
+    priority: "urgent",
+    body: "Notices do not carry closure-blocking directive standing.",
+  });
+
+  const initial = context.mailbox.finalizationSummaryForScope(
+    context.worker.scopeRef,
+  );
+  assert.equal(initial.unactedDirectiveCount, 2);
+  assert.equal(initial.unactedInstructionCount, 1);
+  assert.equal(initial.unactedCorrectionCount, 1);
+  assert.equal(initial.highestPriority, "urgent");
+  assert.deepEqual(
+    new Set(initial.evidenceRefs),
+    new Set([
+      `execution-message:${instruction.messageId}:instruction:unacted`,
+      `execution-message:${correction.messageId}:correction:unacted`,
+    ]),
+  );
+  assert.equal(
+    initial.evidenceRefs.some((ref) => ref.includes("private")),
+    false,
+  );
+
+  context.mailbox.receipt(context.worker, {
+    messageId: correction.messageId,
+    state: "acknowledged",
+    note: "Acknowledged is not yet acted.",
+  });
+  assert.equal(
+    context.mailbox.finalizationSummaryForScope(context.worker.scopeRef)
+      .unactedDirectiveCount,
+    2,
+  );
+
+  context.mailbox.receipt(context.worker, {
+    messageId: correction.messageId,
+    state: "acted",
+    note: "Correction applied.",
+  });
+  const afterCorrection = context.mailbox.finalizationSummaryForScope(
+    context.worker.scopeRef,
+  );
+  assert.equal(afterCorrection.unactedDirectiveCount, 1);
+  assert.equal(afterCorrection.unactedInstructionCount, 1);
+  assert.equal(afterCorrection.unactedCorrectionCount, 0);
+  assert.equal(afterCorrection.highestPriority, "high");
+
+  context.mailbox.receipt(context.worker, {
+    messageId: instruction.messageId,
+    state: "acted",
+    note: "Instruction applied.",
+  });
+  assert.deepEqual(
+    context.mailbox.finalizationSummaryForScope(context.worker.scopeRef),
+    {
+      unactedDirectiveCount: 0,
+      unactedInstructionCount: 0,
+      unactedCorrectionCount: 0,
+      highestPriority: undefined,
+      evidenceRefs: [],
+    },
+  );
+});
+
 test("inbox orders by priority, paginates, and cannot be read cross-scope", async (t) => {
   const context = await fixture(t);
   const messages = [
@@ -366,6 +450,7 @@ test("an implicit-TTL idempotent retry survives a later default-TTL change", asy
   const restarted = new ExecutionMailboxManager(
     { ...mailboxConfig, defaultTtlMs: 24 * 60 * 60 * 1_000 },
     context.stateDir,
+    { now: () => Date.parse("2026-08-17T04:00:00Z") },
   );
   t.after(() => restarted.close());
   const replay = restarted.send(context.supervisor, {

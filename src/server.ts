@@ -36,6 +36,12 @@ import {
   type ExecutionMessageReceiptState,
 } from "./execution-mailbox.js";
 import {
+  MISSION_FINALIZATION_FACTORS,
+  projectMissionFinalization,
+  type MissionFinalizationDeclaration,
+  type MissionFinalizationProjection,
+} from "./mission-finalization.js";
+import {
   createOpenAIIncomingArtifactAdapter,
   type IncomingArtifactAdapter,
 } from "./incoming-artifacts.js";
@@ -582,6 +588,8 @@ function serverInstructions(config: ServerConfig): string {
     : "";
   const workspaceLifecycleInstruction =
     " Use workspace_list and workspace_status to inspect persisted workspace lifecycle. Use workspace_candidate_inventory to classify managed worktrees and retained executor-owned preservation refs as active, dirty-recoverable, awaiting validation, ready for repository-specific publication preflight, needing reconciliation, integrated, baseline-only, or unknown. The inventory is executor-local Git/recovery observation, not canonical task or publication authority. Use workspace_close for one explicit workspace. For bulk cleanup, always call workspace_gc_preview first, inspect candidate lifecycle finalizers and protected reasons, and pass the exact returned plan digest with identical options to workspace_gc_execute. Never force-remove dirty, process-bound, unvalidated, unreconciled, or unpublished worktree state merely to reclaim space.";
+  const missionFinalizationInstruction =
+    " Before reporting a mission, release, publication, repair, or governed outcome as complete, read missionFinalization from execution_scope_status. Turn end, landing, clean Git state, tests, commits, planned gates, and output counts are not semantic closure. The default is PARTIAL_CONTINUE; only COMPLETE_VERIFIED with completionClaimAllowed=true permits unqualified completion language at the returned claim ceiling. BLOCKED requires exact authority/effect reconciliation without blind retry. Evidence marked planned or unknown, stale or mismatched candidate evidence, missing terminal receipts/readback, and unacted owner instructions or corrections fail closed. The projection denies or bounds a completion claim but grants no task, decision, writer, effect, or publication authority.";
   const showChangesInstruction =
     config.widgets === "changes"
       ? " If the turn successfully modifies files by creating, editing, overwriting, deleting, moving, or applying patches, call show_changes exactly once for that workspace after the final related file change and before your final response so the user can inspect the aggregate diff for that turn. Do not call it after every individual file change; do not skip it because individual file-change tools already returned diffs."
@@ -595,7 +603,7 @@ function serverInstructions(config: ServerConfig): string {
     const continuityInstruction = config.toolMode === "continuity"
       ? " This server is the independently stateful degraded operational continuity profile, not the primary Nexus route. Use it only after bounded primary recovery is exhausted or for explicit continuity qualification. It may inspect and mutate isolated local workspaces, run and continue processes, preserve a Git-bound recovery capsule, and coordinate with scopes connected to this continuity service. It must not claim fresh-research equivalence, canonical task or decision authority, repository publication, runtime deployment, conversation effects, effect replay, or automatic takeover. Keep the primary repair pending, use operation-scoped fallback selection when a control plane is available, and fail back only after exact primary readiness and tool-surface verification."
       : "";
-    return `Use DevSpace for coding work. Call ${toolNames.openWorkspace} once for each project folder or isolated worktree, then keep using its workspaceId. During continued work in the same project or worktree, do not call ${toolNames.openWorkspace} again. Open another workspace only when changing projects, switching checkout/worktree mode, creating another isolated worktree, or when the current workspaceId is rejected.${continuityInstruction}${codexInspectionInstruction} Use apply_patch for all file modifications and write_stdin to poll or interact with running processes. Follow instructions returned by ${toolNames.openWorkspace}; read applicable instruction and skill files before working in their scope.${workspaceLifecycleInstruction}${artifactInstruction}${showChangesInstruction}${codexIntegrationInstruction}${codexWorkspaceInstruction}${zesContinuationInstruction}${zesResearchCycleInstruction}${executionScopeInstruction}${executionMailboxInstruction}${turnContinuityInstruction}${localAgentInstruction}`;
+    return `Use DevSpace for coding work. Call ${toolNames.openWorkspace} once for each project folder or isolated worktree, then keep using its workspaceId. During continued work in the same project or worktree, do not call ${toolNames.openWorkspace} again. Open another workspace only when changing projects, switching checkout/worktree mode, creating another isolated worktree, or when the current workspaceId is rejected.${continuityInstruction}${codexInspectionInstruction} Use apply_patch for all file modifications and write_stdin to poll or interact with running processes. Follow instructions returned by ${toolNames.openWorkspace}; read applicable instruction and skill files before working in their scope.${workspaceLifecycleInstruction}${artifactInstruction}${showChangesInstruction}${codexIntegrationInstruction}${codexWorkspaceInstruction}${zesContinuationInstruction}${zesResearchCycleInstruction}${executionScopeInstruction}${executionMailboxInstruction}${turnContinuityInstruction}${missionFinalizationInstruction}${localAgentInstruction}`;
   }
 
   const inspection = config.toolMode !== "full"
@@ -608,7 +616,7 @@ function serverInstructions(config: ServerConfig): string {
 
   const agentsMd = `Follow instructions returned by ${toolNames.openWorkspace}. Consume any returned systemIndexes as mandatory stack and capability orientation, while resolving current state and authority through the exact refs they name. Before working under a path listed in availableAgentsFiles, use ${toolNames.read} to inspect that instruction file and follow it. `;
 
-  return `Use DevSpace for coding work. Call ${toolNames.openWorkspace} once for each project folder or isolated worktree, then keep using its workspaceId. During continued work in the same project or worktree, do not call ${toolNames.openWorkspace} again. Open another workspace only when changing projects, switching checkout/worktree mode, creating another isolated worktree, or when the current workspaceId is rejected. ${agentsMd}${skills}${inspection}Prefer ${toolNames.edit} for targeted modifications, ${toolNames.write} only for new files or complete rewrites, and ${toolNames.shell} for tests, builds, git inspection, package scripts, and commands that are better executed by the shell. Do not create or modify files with ${toolNames.shell}; avoid shell redirection, heredocs, tee, sed -i, perl -i, node/python/ruby scripts, or any command whose purpose is to write project files.${workspaceLifecycleInstruction}${artifactInstruction}${showChangesInstruction}${codexIntegrationInstruction}${codexWorkspaceInstruction}${zesContinuationInstruction}${zesResearchCycleInstruction}${executionScopeInstruction}${executionMailboxInstruction}${turnContinuityInstruction}${localAgentInstruction}`;
+  return `Use DevSpace for coding work. Call ${toolNames.openWorkspace} once for each project folder or isolated worktree, then keep using its workspaceId. During continued work in the same project or worktree, do not call ${toolNames.openWorkspace} again. Open another workspace only when changing projects, switching checkout/worktree mode, creating another isolated worktree, or when the current workspaceId is rejected. ${agentsMd}${skills}${inspection}Prefer ${toolNames.edit} for targeted modifications, ${toolNames.write} only for new files or complete rewrites, and ${toolNames.shell} for tests, builds, git inspection, package scripts, and commands that are better executed by the shell. Do not create or modify files with ${toolNames.shell}; avoid shell redirection, heredocs, tee, sed -i, perl -i, node/python/ruby scripts, or any command whose purpose is to write project files.${workspaceLifecycleInstruction}${artifactInstruction}${showChangesInstruction}${codexIntegrationInstruction}${codexWorkspaceInstruction}${zesContinuationInstruction}${zesResearchCycleInstruction}${executionScopeInstruction}${executionMailboxInstruction}${turnContinuityInstruction}${missionFinalizationInstruction}${localAgentInstruction}`;
 }
 
 function formatVisibleAgent(agent: {
@@ -1138,6 +1146,7 @@ function stableControlPlaneProjection(
     continuationPreflight?: ZesContinuationPreflightProjection;
     scopePublicationPreflight?: ScopePublicationPreflight;
     selfRepositoryPublicationPreflight?: SelfRepositoryScopePublicationProjection;
+    missionFinalization?: MissionFinalizationProjection;
   },
 ) {
   const capabilities = {
@@ -1162,6 +1171,9 @@ function stableControlPlaneProjection(
           selfRepositoryPublicationPreflight:
             input.selfRepositoryPublicationPreflight,
         }),
+    ...(input.missionFinalization === undefined
+      ? {}
+      : { missionFinalization: input.missionFinalization }),
   };
   return {
     schemaVersion: 1,
@@ -1307,6 +1319,7 @@ function registerExecutionScopeTools(
   server: McpServer,
   config: ServerConfig,
   executionScopes: ExecutionScopeManager,
+  executionMailbox: ExecutionMailboxManager,
   turnContinuity: TurnContinuityManager,
   runtimeCapabilities: RuntimeCapabilityRegistry,
   continuationPreflightProjector?: ZesContinuationPreflightProjectionSource,
@@ -1592,7 +1605,7 @@ function registerExecutionScopeTools(
     {
       title: "Inspect DevSpace execution scope",
       description:
-        "Read one DevSpace execution scope by opaque scopeRef. The response places a compact intent-oriented capabilityQuickstart near the front before linked workspaces and heavier runtime state, then includes live process sessions, the observation gap since the last MCP/tool event, the current backend runtime/tool-surface fingerprint, the full model-oriented capability directory, the persisted turnLanding machine-envelope/resume projection, and—when the target explicitly recorded one—the latest bounded semantic recovery capsule joined with local workspace freshness and later activity. Omit scopeRef for the current host scope. turnLanding distinguishes clean turn boundaries, fresh versus stale/missing semantic capsules, and running process/effect reconciliation without inferring mission from operational events. This stable bootstrap route can also carry additive read-only server-owned control-plane capability projections, so a frozen client catalog does not have to discover a newer top-level tool before learning what DevSpace can do or reading a fixed continuation preflight. When configured, a publication projection may perform bounded fresh observation of its fixed remote authority but never imports a missing Git object through this status route. The server reports which critical tools are currently registered but cannot observe the host's cached tools/list result or sibling MCP connector reachability. Model progress and provider generation are not observable between MCP calls, so status never claims that a silent interval is normal reasoning or a hang. Semantic state is never inferred from filenames or tool events. Raw host session IDs, prompts, private reasoning, credentials, tool outputs, patches, raw commands, and arbitrary paths are never returned; capability, capsule, landing, and control-plane projections remain executor-local observation rather than task, decision, writer, effect, publication, or memory authority.",
+        "Read one DevSpace execution scope by opaque scopeRef. The response places a compact intent-oriented capabilityQuickstart near the front before linked workspaces and heavier runtime state, then includes live process sessions, the observation gap since the last MCP/tool event, the current backend runtime/tool-surface fingerprint, the full model-oriented capability directory, the persisted turnLanding machine-envelope/resume projection, and—when the target explicitly recorded one—the latest bounded semantic recovery capsule joined with local workspace freshness and later activity. Omit scopeRef for the current host scope. turnLanding distinguishes clean turn boundaries, fresh versus stale/missing semantic capsules, and running process/effect reconciliation without inferring mission from operational events. The additive missionFinalization projection is a fail-closed completion-claim barrier: absent an explicit closure contract and semantic decision plus fresh exact candidate, validation, terminal effect/publication and authoritative readback evidence where required, its default is PARTIAL_CONTINUE and completionClaimAllowed is false. It never treats turn end, planned deliverables, files, tests, counts, tool events or a clean workspace as semantic mission completion. This stable bootstrap route can also carry additive read-only server-owned control-plane capability projections, so a frozen client catalog does not have to discover a newer top-level tool before learning what DevSpace can do or reading a fixed continuation preflight. When configured, a publication projection may perform bounded fresh observation of its fixed remote authority but never imports a missing Git object through this status route. The server reports which critical tools are currently registered but cannot observe the host's cached tools/list result or sibling MCP connector reachability. Model progress and provider generation are not observable between MCP calls, so status never claims that a silent interval is normal reasoning or a hang. Semantic state is never inferred from filenames or tool events. Raw host session IDs, prompts, private reasoning, credentials, tool outputs, patches, raw commands, and arbitrary paths are never returned; capability, capsule, landing, finalization, and control-plane projections remain executor-local observation rather than task, decision, writer, effect, publication, or memory authority.",
       inputSchema: {
         scopeRef: scopeRefSchema.optional(),
         ...clientCatalogInputSchema,
@@ -1655,6 +1668,9 @@ function registerExecutionScopeTools(
         : undefined;
       const turnLanding = targetScopeRef
         ? turnContinuity.landingProjectionForScope(targetScopeRef)
+        : undefined;
+      const missionFinalizationDirectiveSummary = targetScopeRef
+        ? executionMailbox.finalizationSummaryForScope(targetScopeRef)
         : undefined;
       const backendRuntime = runtimeCapabilities.snapshot({
         clientInput: {
@@ -1834,20 +1850,33 @@ function registerExecutionScopeTools(
           }`,
         fallback: fallbackRecoveryObservation,
       });
-      const stableControlPlane = primaryMcpRecovery
-        || mcpCapabilityOrientation
-        || mcpFallbackRecovery
-        || continuationPreflight
-        || selfRepositoryPublicationPreflight
-          ? stableControlPlaneProjection({
-            mcpCapabilityOrientation,
-            primaryMcpRecovery,
-            mcpFallbackRecovery,
-            continuationPreflight,
-            scopePublicationPreflight: scopePublication,
-            selfRepositoryPublicationPreflight,
-          })
-        : undefined;
+      let missionFinalizationDeclaration:
+        | MissionFinalizationDeclaration
+        | undefined;
+      if (
+        isRecord(semanticRecovery)
+        && isRecord(semanticRecovery.missionFinalizationDeclaration)
+      ) {
+        missionFinalizationDeclaration = (
+          semanticRecovery.missionFinalizationDeclaration as unknown
+        ) as MissionFinalizationDeclaration;
+      }
+      const missionFinalization = projectMissionFinalization({
+        declaration: missionFinalizationDeclaration,
+        semanticRecovery,
+        turnLanding,
+        scopePublicationPreflight: scopePublication,
+        directiveSummary: missionFinalizationDirectiveSummary,
+      });
+      const stableControlPlane = stableControlPlaneProjection({
+        mcpCapabilityOrientation,
+        primaryMcpRecovery,
+        mcpFallbackRecovery,
+        continuationPreflight,
+        scopePublicationPreflight: scopePublication,
+        selfRepositoryPublicationPreflight,
+        missionFinalization,
+      });
       const capabilityQuickstart = mcpCapabilityOrientation
         ? capabilityQuickstartProjection(mcpCapabilityOrientation)
         : undefined;
@@ -1871,6 +1900,7 @@ function registerExecutionScopeTools(
           : { runtimeRelation: scopeRuntimeRelation(scope, backendRuntime) }),
         ...(semanticRecovery === undefined ? {} : { semanticRecovery }),
         ...(turnLanding === undefined ? {} : { turnLanding }),
+        missionFinalization,
         ...(stableControlPlane === undefined ? {} : { stableControlPlane }),
       });
     },
@@ -2087,6 +2117,66 @@ function registerTurnContinuityTools(
     .array(z.string().min(1).max(2_000))
     .max(50)
     .optional();
+  const missionFinalizationFactorSchema = z.enum(
+    MISSION_FINALIZATION_FACTORS,
+  );
+  const missionFinalizationSchema = z
+    .object({
+      contract: z
+        .object({
+          contractRef: z.string().min(1).max(4_000),
+          candidateRef: z.string().min(1).max(4_000),
+          requiredFactors: z
+            .array(missionFinalizationFactorSchema)
+            .max(MISSION_FINALIZATION_FACTORS.length),
+          claimCeiling: z.string().min(1).max(4_000),
+        })
+        .strict(),
+      decision: z
+        .object({
+          disposition: z.enum([
+            "PARTIAL_CONTINUE",
+            "BLOCKED",
+            "COMPLETE_VERIFIED",
+          ]),
+          decisionRef: z.string().min(1).max(4_000),
+          authorityRef: z.string().min(1).max(4_000),
+          candidateRef: z.string().min(1).max(4_000),
+          factorEvidence: z
+            .array(
+              z
+                .object({
+                  factor: missionFinalizationFactorSchema,
+                  evidenceState: z.enum([
+                    "observed",
+                    "terminal",
+                    "planned",
+                    "unknown",
+                  ]),
+                  evidenceRefs: z
+                    .array(z.string().min(1).max(2_000))
+                    .min(1)
+                    .max(50),
+                  candidateRef: z.string().min(1).max(4_000).optional(),
+                  authorityRef: z.string().min(1).max(4_000).optional(),
+                  effectKeys: z
+                    .array(z.string().min(1).max(2_000))
+                    .max(50)
+                    .optional(),
+                })
+                .strict(),
+            )
+            .max(50),
+          blockingFactors: z
+            .array(z.string().min(1).max(2_000))
+            .max(50)
+            .optional(),
+        })
+        .strict()
+        .optional(),
+    })
+    .strict()
+    .optional();
 
   registerAppTool(
     server,
@@ -2184,6 +2274,9 @@ function registerTurnContinuityTools(
         unresolved: listSchema,
         checkpointRefs: listSchema,
         notes: z.string().min(1).max(4_000).optional(),
+        missionFinalization: missionFinalizationSchema.describe(
+          "Optional explicit mission-closure contract and semantic decision. Planned text, a clean workspace, validation alone, or turn-boundary landing cannot satisfy completion. COMPLETE_VERIFIED remains fail-closed until every declared and always-required factor has fresh native evidence.",
+        ),
       },
       outputSchema: resultOutputSchema({ data: z.unknown() }),
       ...toolWidgetDescriptorMeta(config, "read"),
@@ -2215,6 +2308,7 @@ function registerTurnContinuityTools(
         unresolved,
         checkpointRefs,
         notes,
+        missionFinalization,
       },
       { _meta },
     ) => jsonToolResponse(
@@ -2245,6 +2339,8 @@ function registerTurnContinuityTools(
           unresolved,
           checkpointRefs,
           notes,
+          missionFinalization:
+            missionFinalization as MissionFinalizationDeclaration | undefined,
         } satisfies RecoveryCapsuleInput,
       ),
     ),
@@ -2931,6 +3027,7 @@ export function createMcpServer(
     server,
     config,
     activeExecutionScopes,
+    activeExecutionMailbox,
     activeTurnContinuity,
     activeRuntimeCapabilities,
     continuationPreflightProjector,

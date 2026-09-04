@@ -1105,6 +1105,29 @@ test("recovery capsule is Git-bound, detects stale tracked and untracked state, 
     exactNextAction: "stage the source projection",
     doNotRepeat: ["do not retry effect:one"],
     unresolved: ["publication not performed"],
+    missionFinalization: {
+      contract: {
+        contractRef: "gate:test-mission-finalization",
+        candidateRef: "git:test-candidate-A",
+        requiredFactors: ["authoritative_post_effect_readback"],
+        claimCeiling: "Exact test mission only.",
+      },
+      decision: {
+        disposition: "PARTIAL_CONTINUE",
+        decisionRef: "decision:test-mission-partial",
+        authorityRef: "authority:test-owner",
+        candidateRef: "git:test-candidate-A",
+        factorEvidence: [
+          {
+            factor: "declared_obligations",
+            evidenceState: "observed",
+            candidateRef: "git:test-candidate-A",
+            authorityRef: "authority:test-owner",
+            evidenceRefs: ["receipt:test-obligations"],
+          },
+        ],
+      },
+    },
   };
 
   t.after(async () => {
@@ -1127,6 +1150,21 @@ test("recovery capsule is Git-bound, detects stale tracked and untracked state, 
   assert.equal(
     ((recorded.capsule as Record<string, unknown>).fingerprint as Record<string, unknown>).kind,
     "git",
+  );
+  const semanticProjection = await manager.semanticProjectionForScope(
+    firstIdentity.scopeRef,
+  );
+  const missionFinalizationDeclaration =
+    semanticProjection.missionFinalizationDeclaration as Record<string, unknown>;
+  assert.equal(
+    (missionFinalizationDeclaration.contract as Record<string, unknown>)
+      .contractRef,
+    "gate:test-mission-finalization",
+  );
+  assert.equal(
+    (missionFinalizationDeclaration.decision as Record<string, unknown>)
+      .disposition,
+    "PARTIAL_CONTINUE",
   );
   const localOnly = await manager.capsuleStatus(firstIdentity, workspace);
   assert.equal(localOnly.workspaceFreshness, "fresh");

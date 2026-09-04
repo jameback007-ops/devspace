@@ -57,6 +57,14 @@ mandatory `AGENTS.md`; it does not replace it.
   state without first discovering a newer top-level tool. It does not refresh
   the host catalog or grant task, writer, effect, publication, or takeover
   authority.
+- **Mission-finalization projection** — the fail-closed completion-claim
+  barrier exposed by `execution_scope_status` at both
+  `data.missionFinalization` and
+  `data.stableControlPlane.capabilities.missionFinalization`. It joins an
+  explicit closure contract and semantic decision with current capsule,
+  landing, validation, effect/publication, authoritative-readback, and unacted
+  owner-correction evidence. Its default is `PARTIAL_CONTINUE`; it is not task,
+  decision, writer, effect, or publication authority.
 - **MCP capability orientation** — an intent-oriented directory derived from
   registered runtime tools and safe configuration, optionally compared with a
   complete host catalog attestation. It separates server registration,
@@ -152,6 +160,9 @@ Check the surfaces the change actually reaches:
 - primary recovery, recovery-only route attestation/selection, one recovery
   owner, exact post-repair verification, and failback;
 - advisory turn continuity and recovery-capsule persistence/freshness;
+- explicit mission-closure contracts, completion-claim posture, exact
+  candidate/effect binding, owner-correction receipts, and post-effect
+  authoritative readback;
 - widgets, artifacts, and review checkpoints;
 - SQLite schema, migration, retention, and restart recovery;
 - package entry points, documentation, examples, and generated assets;
@@ -198,6 +209,30 @@ deduplicate concurrent refreshes, and keep any cache short and advisory. A
 missing or stale client catalog is a transport/discovery condition; it must not
 be converted into evidence that a writer exists, that publication controls are
 absent, or that any governed action is authorized.
+
+Turn end, a natural landing point, a clean worktree, a validation pass, a
+planned gate, a commit, or publication text is not mission completion. Before
+using unqualified completion, closure, sealing, terminality, publication, or
+next-frontier language, read the mission-finalization projection. Only
+`COMPLETE_VERIFIED` with `completionClaimAllowed=true` permits that posture,
+and only at the returned claim ceiling. `BLOCKED` means an exact effect,
+authority, or semantic blocker must be reconciled without blind retry.
+Everything else is `PARTIAL_CONTINUE`: report what was completed in the current
+slice, what remains uncompleted or unverified, the exact current frontier, and
+the next continuation action.
+
+The barrier requires an explicit closure contract and a semantic closure
+decision bound to the same candidate. Required evidence is declared per
+mission, while the base contract always retains the obligations, accepted
+landing, absence of unknown effects, absence of unacted owner instructions or
+corrections, and a recovery frontier refreshed after the last material change.
+When applicable, exact candidate-bound validation, a terminal
+publication/effect receipt, and a fresh authoritative post-effect readback are
+also mandatory. Evidence marked `planned` or `unknown` never satisfies a
+factor. Missing, stale, contradictory, or candidate-mismatched evidence fails
+closed. DevSpace may verify native observations and deny a claim, but
+caller-supplied authority references remain declared provenance rather than
+authority newly granted by DevSpace.
 
 Repository publication uses one mandatory repository-local fast gate plus
 optional consequence-specific gates. The mandatory gate reads the fixed remote

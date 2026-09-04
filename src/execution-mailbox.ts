@@ -80,6 +80,14 @@ export interface ExecutionMailboxPendingSummary {
   highestPriority?: ExecutionMessagePriority;
 }
 
+export interface ExecutionMailboxFinalizationSummary {
+  unactedDirectiveCount: number;
+  unactedInstructionCount: number;
+  unactedCorrectionCount: number;
+  highestPriority?: ExecutionMessagePriority;
+  evidenceRefs: string[];
+}
+
 export interface ExecutionMailboxWaiter {
   promise: Promise<void>;
   cancel(): void;
@@ -668,6 +676,54 @@ export class ExecutionMailboxManager {
       pendingCount: row.pending_count,
       unobservedCount: row.unobserved_count ?? 0,
       highestPriority,
+    };
+  }
+
+  finalizationSummaryForScope(
+    scopeRef: string,
+  ): ExecutionMailboxFinalizationSummary {
+    if (!this.config.enabled) {
+      return {
+        unactedDirectiveCount: 0,
+        unactedInstructionCount: 0,
+        unactedCorrectionCount: 0,
+        evidenceRefs: [],
+      };
+    }
+    const targetScopeRef = requireScopeRef(scopeRef);
+    const nowMs = this.now();
+    this.maybeCleanup(nowMs);
+    const rows = this.database.sqlite
+      .prepare(`
+        select id, kind, priority
+          from execution_scope_messages
+         where target_scope_ref = ?
+           and kind in ('instruction', 'correction')
+           and acted_at_ms is null
+           and expires_at_ms > ?
+         order by ${priorityCaseSql()} asc, created_at_ms asc, id asc
+      `)
+      .all(targetScopeRef, nowMs) as Array<{
+        id: string;
+        kind: string;
+        priority: string;
+      }>;
+    const instructionCount = rows.filter(
+      (row) => row.kind === "instruction",
+    ).length;
+    const correctionCount = rows.filter(
+      (row) => row.kind === "correction",
+    ).length;
+    return {
+      unactedDirectiveCount: rows.length,
+      unactedInstructionCount: instructionCount,
+      unactedCorrectionCount: correctionCount,
+      highestPriority: rows.length > 0
+        ? messagePriority(rows[0]?.priority)
+        : undefined,
+      evidenceRefs: rows
+        .slice(0, MAX_INBOX_LIMIT)
+        .map((row) => `execution-message:${row.id}:${row.kind}:unacted`),
     };
   }
 
