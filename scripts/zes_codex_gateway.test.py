@@ -1473,6 +1473,57 @@ class CodexGatewayTests(unittest.TestCase):
         self.assertNotIn(self.thread_id, serialized)
         self.assertNotIn("printf fixture", serialized)
 
+    def test_0153_write_stdin_approval_is_visible_but_cannot_be_accepted(self) -> None:
+        server = next(iter(self.gateway.servers.values()))
+        projection = self.gateway._project_server_request(
+            server,
+            "item/commandExecution/requestApproval",
+            {
+                "threadId": self.thread_id,
+                "turnId": "turn-private",
+                "itemId": "item-private",
+                "approvalId": "approval-private",
+                "kind": "writeStdin",
+                "startedAtMs": 1,
+            },
+            1,
+        )
+        self.assertEqual(projection["commandApprovalKind"], "writeStdin")
+        self.assertFalse(projection["acceptThroughGatewayAllowed"])
+        self.assertEqual(projection["allowedDecisions"], ["decline", "cancel"])
+
+        raw = {
+            "approvalRef": "cdx_apr_" + "1" * 32,
+            "method": "item/commandExecution/requestApproval",
+            "rawParams": {
+                "threadId": self.thread_id,
+                "turnId": "turn-private",
+                "itemId": "item-private",
+                "approvalId": "approval-private",
+                "kind": "writeStdin",
+                "startedAtMs": 1,
+            },
+            "projection": {
+                "requestDigestSha256": "2" * 64,
+                "sessionRef": "cdx_ses_" + "3" * 32,
+                "turnRef": "cdx_turn_" + "4" * 32,
+            },
+        }
+        with self.assertRaisesRegex(
+            gateway_module.GatewayError,
+            "terminal-input approvals cannot be accepted",
+        ):
+            self.gateway._approval_response_payload(
+                {"decision": "accept"},
+                raw,
+            )
+        result, error, _intent = self.gateway._approval_response_payload(
+            {"decision": "decline"},
+            raw,
+        )
+        self.assertIsNone(error)
+        self.assertEqual(result, {"decision": "decline"})
+
     def test_secret_user_input_and_sensitive_elicitation_are_rejected(self) -> None:
         server = next(iter(self.gateway.servers.values()))
         session_ref = gateway_module.opaque_ref(
@@ -1719,6 +1770,7 @@ class CodexGatewayTests(unittest.TestCase):
             "0.147.0",
             "0.147.0-alpha.6.6",
             "0.149.0",
+            "0.153.4",
         ):
             profile = gateway_module._protocol_profile(
                 {"userAgent": f"codex_core_rs/{version}"}
@@ -1732,14 +1784,35 @@ class CodexGatewayTests(unittest.TestCase):
                 profile["validatedInteractiveServerRequests"],
             )
 
+        current_profile = gateway_module._protocol_profile(
+            {"userAgent": "codex_core_rs/0.153.4"}
+        )
+        self.assertEqual(current_profile["schemaReferenceRelation"], "exact_reference")
+        self.assertEqual(current_profile["clientMethodCount"], 99)
+        self.assertEqual(current_profile["serverRequestMethodCount"], 10)
+        self.assertEqual(current_profile["serverNotificationMethodCount"], 81)
+        self.assertEqual(
+            current_profile["schemaFingerprints"],
+            {
+                "clientRequestSha256": "c97c23877dd18a9fbc43a3bb87c72676acfbebdc14a2244342ee05dd95cfa38c",
+                "serverRequestSha256": "32f5e9fe877ff8d30a0255f7e68d63d6fcb616777a9fd0b0cf43f7b866c0627f",
+                "serverNotificationSha256": "4035ecb68922741c577bb6570208c144916d919a023316f7194c5d5d30d92039",
+            },
+        )
+        self.assertTrue(current_profile["threadScopedAccountUsage"])
+        self.assertIn(
+            "thread/realtime/item/completed",
+            current_profile["additionalNotificationsComparedTo0147"],
+        )
+
         unknown_profile = gateway_module._protocol_profile(
-            {"userAgent": "codex_core_rs/0.150.0"}
+            {"userAgent": "codex_core_rs/0.154.0"}
         )
         self.assertFalse(unknown_profile["effectsValidated"])
         self.assertEqual(unknown_profile["effectCompatibility"], "blocked")
 
         session = self.discover()
-        channel = FakePersistentChannel(user_agent="codex_core_rs/0.150.0")
+        channel = FakePersistentChannel(user_agent="codex_core_rs/0.154.0")
         gateway = PersistentTestGateway(self.config, self.fake_state, channel)
         with self.assertRaisesRegex(
             gateway_module.GatewayError,

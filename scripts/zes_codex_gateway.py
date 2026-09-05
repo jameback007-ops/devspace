@@ -71,7 +71,7 @@ APPROVAL_POLICIES = {"untrusted", "on-request", "never"}
 SANDBOX_MODES = {"read-only", "workspace-write", "danger-full-access"}
 ACTIVITY_VIEWS = {"messages", "combined", "audit"}
 
-GATEWAY_SCHEMA_REFERENCE_VERSION = "0.149.0"
+GATEWAY_SCHEMA_REFERENCE_VERSION = "0.153.4"
 VALIDATED_CLIENT_METHODS = frozenset(
     {
         "account/rateLimits/read",
@@ -166,6 +166,33 @@ PROTOCOL_SCHEMA_PROFILES: dict[str, dict[str, Any]] = {
             "project/changed",
             "thread/project/updated",
             "thread/queue/changed",
+            "thread/reverted",
+        ],
+    },
+    "0.153.4": {
+        "profileId": "codex-app-server-schema-0.153.4",
+        "clientMethodCount": 99,
+        "serverRequestMethodCount": 10,
+        "serverNotificationMethodCount": 81,
+        "clientRequestSchemaSha256":
+            "c97c23877dd18a9fbc43a3bb87c72676acfbebdc14a2244342ee05dd95cfa38c",
+        "serverRequestSchemaSha256":
+            "32f5e9fe877ff8d30a0255f7e68d63d6fcb616777a9fd0b0cf43f7b866c0627f",
+        "serverNotificationSchemaSha256":
+            "4035ecb68922741c577bb6570208c144916d919a023316f7194c5d5d30d92039",
+        "threadScopedAccountUsage": True,
+        "legacyMcpPolicyAmendmentDecision": True,
+        "additionalNotificationsComparedTo0147": [
+            "autoApprovalReview/strictReviewRequired",
+            "mcpServer/event/stream/notification",
+            "modelProvider/authRecoveryCompleted",
+            "modelProvider/authRecoveryStarted",
+            "project/changed",
+            "thread/project/updated",
+            "thread/queue/changed",
+            "thread/realtime/item/completed",
+            "thread/realtime/item/started",
+            "thread/realtime/item/transcript/delta",
             "thread/reverted",
         ],
     },
@@ -1998,6 +2025,11 @@ class CodexGateway:
             }
         )
         if kind in {"command_approval", "legacy_command_approval"}:
+            command_approval_kind = (
+                str(params.get("kind") or "command")
+                if kind == "command_approval"
+                else "command"
+            )
             command = params.get("command")
             if isinstance(command, list):
                 command = " ".join(str(value) for value in command)
@@ -2020,21 +2052,22 @@ class CodexGateway:
                             {"host": redact(host)[:1_000], "action": action}
                         )
             allowed_decisions = [
-                "accept",
-                "acceptForSession",
                 "decline",
                 "cancel",
             ]
-            if execpolicy_proposal:
-                allowed_decisions.append("acceptWithExecpolicyAmendment")
-            if network_proposals:
-                allowed_decisions.append("applyNetworkPolicyAmendment")
+            if command_approval_kind == "command":
+                allowed_decisions[0:0] = ["accept", "acceptForSession"]
+                if execpolicy_proposal:
+                    allowed_decisions.append("acceptWithExecpolicyAmendment")
+                if network_proposals:
+                    allowed_decisions.append("applyNetworkPolicyAmendment")
             network_context, network_context_truncated = bounded_observable(
                 params.get("networkApprovalContext"),
                 4_000,
             )
             projection.update(
                 {
+                    "commandApprovalKind": command_approval_kind,
                     "command": command_text or None,
                     "commandTruncated": command_truncated,
                     "cwd": self._safe_path_observation(
@@ -2052,6 +2085,7 @@ class CodexGateway:
                     ) > 100,
                     "networkApprovalContext": network_context,
                     "networkApprovalContextTruncated": network_context_truncated,
+                    "acceptThroughGatewayAllowed": command_approval_kind == "command",
                     "allowedDecisions": allowed_decisions,
                 }
             )
@@ -6244,6 +6278,16 @@ class CodexGateway:
             "item/commandExecution/requestApproval",
             "item/fileChange/requestApproval",
         }:
+            if (
+                method == "item/commandExecution/requestApproval"
+                and params.get("kind") == "writeStdin"
+                and decision not in {"decline", "cancel"}
+            ):
+                raise GatewayError(
+                    "CODEX_WRITE_STDIN_APPROVAL_ACCEPT_UNSUPPORTED",
+                    "Codex terminal-input approvals cannot be accepted through this gateway because the 0.153 protocol does not expose the input bytes in the approval request",
+                    "forbidden",
+                )
             if decision in common:
                 if decision == "acceptForSession" and not acknowledge_session:
                     raise GatewayError(
