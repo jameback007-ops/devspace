@@ -40,6 +40,20 @@ test("a reused checkout keeps its bounded instruction snapshot", async (t) => {
   assert.deepEqual(second.instructionDiscovery, first.instructionDiscovery);
 });
 
+test("a reused checkout refreshes native skill metadata without replacing its identity", async (t) => {
+  const { project, registry } = await fixture(t);
+  const first = await registry.openWorkspace(project, { conversationScopeId: "skill-refresh" });
+  const skillDir = join(project, ".agents", "skills", "checkout-fresh-skill");
+  await mkdir(skillDir, { recursive: true });
+  await writeFile(join(skillDir, "SKILL.md"), "---\nname: checkout-fresh-skill\ndescription: Newly available checkout procedure.\n---\nRead before use.\n");
+
+  const second = await registry.openWorkspace(project, { conversationScopeId: "skill-refresh" });
+  assert.equal(second.workspace.id, first.workspace.id);
+  assert.equal(second.workspaceReused, true);
+  assert.equal(second.workspace.skills.some((skill) => skill.name === "checkout-fresh-skill"), true);
+  assert.equal(second.workspace.activatedSkillDirs.has(skillDir), false);
+});
+
 test("different conversations receive separate checkout workspaces", async (t) => {
   const { project, registry } = await fixture(t);
 

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve, sep } from "node:path";
@@ -17,6 +18,8 @@ export interface WorkspaceSkill extends Skill {
   exposure: SkillExposure;
   workspaceMarkers: string[];
   autoAdvertised: boolean;
+  /** Observed SKILL.md bytes, not a package signature or a loaded-model claim. */
+  contentDigestSha256?: string;
 }
 
 export interface LoadedSkills {
@@ -57,6 +60,7 @@ const SEARCH_STOP_WORDS = new Set([
 interface DevspaceSkillMetadata {
   exposure?: SkillExposure;
   workspaceMarkers: string[];
+  contentDigestSha256?: string;
 }
 
 function bundledSkillsDir(): string {
@@ -155,6 +159,7 @@ function workspaceSkill(
     exposure,
     workspaceMarkers,
     autoAdvertised,
+    contentDigestSha256: metadata.contentDigestSha256,
   };
 }
 
@@ -181,13 +186,16 @@ function defaultSkillExposure(
 
 function readDevspaceSkillMetadata(filePath: string): DevspaceSkillMetadata {
   try {
-    const raw = readFileSync(filePath, "utf8");
+    const content = readFileSync(filePath);
+    const raw = content.toString("utf8");
+    const contentDigestSha256 = createHash("sha256").update(content).digest("hex");
+    const observed = { workspaceMarkers: [], contentDigestSha256 };
     const match = raw.match(FRONTMATTER);
-    if (!match?.[1]) return { workspaceMarkers: [] };
+    if (!match?.[1]) return observed;
     const frontmatter = parseYaml(match[1]) as unknown;
-    if (!isRecord(frontmatter)) return { workspaceMarkers: [] };
+    if (!isRecord(frontmatter)) return observed;
     const extension = frontmatter[DEVSPACE_METADATA_KEY];
-    if (!isRecord(extension)) return { workspaceMarkers: [] };
+    if (!isRecord(extension)) return observed;
 
     const rawExposure = extension.exposure;
     const exposure = rawExposure === "auto" ||
@@ -206,6 +214,7 @@ function readDevspaceSkillMetadata(filePath: string): DevspaceSkillMetadata {
     return {
       exposure: exposure ?? (workspaceMarkers.length > 0 ? "contextual" : undefined),
       workspaceMarkers,
+      contentDigestSha256,
     };
   } catch {
     return { workspaceMarkers: [] };

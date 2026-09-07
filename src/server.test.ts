@@ -1159,6 +1159,36 @@ test("workspace skills are contextual by default and host skills stay searchable
   assert.match(responseText(loaded), /Host Specialist/);
 });
 
+test("skill search observes added and revised source on the same MCP connection", async (t) => {
+  const context = await fixture(t, { toolMode: "codex" });
+  const opened = await callOpen(context.client, context.project, "skill-source-refresh");
+  const workspaceId = String(structuredContent(opened).workspaceId);
+  const skillDir = join(context.project, ".agents", "skills", "mcp-fresh-skill");
+  await mkdir(skillDir, { recursive: true });
+  await writeFile(join(skillDir, "SKILL.md"), "---\nname: mcp-fresh-skill\ndescription: Originalquokka procedure.\n---\nFirst body.\n");
+  const search = (query: string) => context.client.callTool({
+    name: "skill_search",
+    arguments: { workspaceId, query },
+    _meta: { "openai/session": "skill-source-refresh" },
+  } as Parameters<Client["callTool"]>[0]);
+
+  const first = await search("mcp-fresh-skill");
+  assert.equal(first.isError, undefined);
+  const firstSkills = structuredContent(first).skills as Array<Record<string, unknown>>;
+  assert.deepEqual(firstSkills.map((skill) => skill.name), ["mcp-fresh-skill"]);
+  await writeFile(join(skillDir, "SKILL.md"), "---\nname: mcp-fresh-skill\ndescription: Revisedwombat procedure.\n---\nUpdated body.\n");
+  assert.deepEqual(structuredContent(await search("originalquokka")).skills, []);
+  const revised = structuredContent(await search("revisedwombat")).skills as Array<Record<string, unknown>>;
+  assert.deepEqual(revised.map((skill) => skill.name), ["mcp-fresh-skill"]);
+  const loaded = await context.client.callTool({
+    name: "read",
+    arguments: { workspaceId, path: String(revised[0].path) },
+    _meta: { "openai/session": "skill-source-refresh" },
+  } as Parameters<Client["callTool"]>[0]);
+  assert.equal(loaded.isError, undefined);
+  assert.match(responseText(loaded), /Updated body/);
+});
+
 test("skill search is absent when skills are disabled", async (t) => {
   const context = await fixture(t, {
     toolMode: "codex",

@@ -116,6 +116,17 @@ mandatory `AGENTS.md`; it does not replace it.
 Use these terms precisely. In particular, do not use workspace, allowed root,
 checkout, and worktree interchangeably.
 
+Skill search refreshes the queried workspace's catalog through the existing
+native loader. A legitimately reused checkout bootstrap also refreshes metadata;
+normal reads and commands do not rescan the library. Added or revised source can
+therefore become discoverable without replacing the workspace or MCP connection.
+Native precedence and diagnostics remain with the loader, not a second registry.
+Previously selected on-demand skills remain exposed when still valid. At a
+refresh, removed or disabled entries lose external skill-read grants, and a
+changed SKILL.md digest clears that skill's reference activation until its body
+is read again. This does not reload model context, attest signatures, cover every
+referenced resource's generation, or provide continuous filesystem revocation.
+
 ## Diagnose the correct layer
 
 A failure can belong to the host UI, OAuth, MCP transport, DevSpace server, a

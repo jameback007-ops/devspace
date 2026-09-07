@@ -159,6 +159,99 @@ test("worktree opens require Git and create an isolated managed workspace", asyn
   assert.equal(resolvedReadme.startsWith(opened.workspace.root), true);
 });
 
+test("skill search discovers source added after opening the same workspace", async (t) => {
+  const context = await fixture(t);
+  const opened = await context.registry.openWorkspace(context.root);
+  const skillRoot = join(context.root, ".agents", "skills", "fresh-discovery-probe");
+  await writeSearchSkill(skillRoot, "fresh-discovery-probe", "Find the late-added discovery procedure.");
+
+  const found = context.registry.searchSkills(opened.workspace.id, "fresh-discovery-probe");
+  assert.deepEqual(found.map((skill) => skill.name), ["fresh-discovery-probe"]);
+  assert.equal(context.registry.getWorkspace(opened.workspace.id), opened.workspace);
+  assert.equal(opened.workspace.activatedSkillDirs.has(skillRoot), false);
+});
+
+test("skill search refreshes descriptions and retains native invalid-source diagnostics", async (t) => {
+  const context = await fixture(t);
+  const skillRoot = join(context.root, ".agents", "skills", "fresh-description-probe");
+  await writeSearchSkill(skillRoot, "fresh-description-probe", "Obsoletezebra procedure.");
+  const opened = await context.registry.openWorkspace(context.root);
+  assert.equal(context.registry.searchSkills(opened.workspace.id, "obsoletezebra").length, 1);
+
+  await writeSearchSkill(skillRoot, "fresh-description-probe", "Currentotter procedure.");
+  assert.equal(context.registry.searchSkills(opened.workspace.id, "obsoletezebra").length, 0);
+  assert.equal(context.registry.searchSkills(opened.workspace.id, "currentotter").length, 1);
+
+  await writeFile(join(skillRoot, "SKILL.md"), "---\nname: fresh-description-probe\n---\nMissing description.\n");
+  assert.equal(context.registry.searchSkills(opened.workspace.id, "currentotter").length, 0);
+  assert.equal(opened.workspace.skillDiagnostics.some((item) => item.path === join(skillRoot, "SKILL.md")), true);
+});
+
+test("skill refresh preserves an unchanged external activation and revokes a changed body", async (t) => {
+  const context = await fixture(t);
+  const hostRoot = join(context.outsideRoot, "skills");
+  const skillRoot = join(hostRoot, "fresh-external-probe");
+  await writeSearchSkill(skillRoot, "fresh-external-probe", "Externally selected procedure.");
+  await writeFile(join(skillRoot, "reference.md"), "Local test reference.\n");
+  const registry = new WorkspaceRegistry({ ...context.config, devspaceSkillsDir: hostRoot });
+  const opened = await registry.openWorkspace(context.root);
+  assert.equal(opened.workspace.skills.some((skill) => skill.name === "fresh-external-probe"), false);
+  registry.searchSkills(opened.workspace.id, "fresh-external-probe");
+  const skillRead = registry.resolveReadPath(opened.workspace, join(skillRoot, "SKILL.md"));
+  registry.markReadPathLoaded(opened.workspace, skillRead);
+  registry.searchSkills(opened.workspace.id, "unrelatednomatch");
+  assert.equal(registry.resolveReadPath(opened.workspace, join(skillRoot, "reference.md")).skillRead?.isSkillFile, false);
+
+  await writeSearchSkill(skillRoot, "fresh-external-probe", "Externally selected procedure.", "Revised body only.");
+  registry.searchSkills(opened.workspace.id, "fresh-external-probe");
+  assert.equal(opened.workspace.activatedSkillDirs.has(skillRoot), false);
+  assert.throws(() => registry.resolveReadPath(opened.workspace, join(skillRoot, "reference.md")), /outside/);
+  registry.markReadPathLoaded(opened.workspace, registry.resolveReadPath(opened.workspace, join(skillRoot, "SKILL.md")));
+  assert.equal(registry.resolveReadPath(opened.workspace, join(skillRoot, "reference.md")).skillRead?.isSkillFile, false);
+});
+
+test("skill refresh removes disabled and deleted external skill read grants", async (t) => {
+  const context = await fixture(t);
+  const hostRoot = join(context.outsideRoot, "skills");
+  const skillRoot = join(hostRoot, "fresh-removal-probe");
+  await writeSearchSkill(skillRoot, "fresh-removal-probe", "Removal probe procedure.");
+  await writeFile(join(skillRoot, "reference.md"), "Local test reference.\n");
+  const registry = new WorkspaceRegistry({ ...context.config, devspaceSkillsDir: hostRoot });
+  const opened = await registry.openWorkspace(context.root);
+  registry.searchSkills(opened.workspace.id, "fresh-removal-probe");
+  registry.markReadPathLoaded(opened.workspace, registry.resolveReadPath(opened.workspace, join(skillRoot, "SKILL.md")));
+
+  await writeFile(join(skillRoot, "SKILL.md"), "---\nname: fresh-removal-probe\ndescription: Removal probe procedure.\ndisable-model-invocation: true\n---\nDisabled.\n");
+  assert.equal(registry.searchSkills(opened.workspace.id, "fresh-removal-probe").length, 0);
+  assert.equal(opened.workspace.activatedSkillDirs.has(skillRoot), false);
+  assert.throws(() => registry.resolveReadPath(opened.workspace, join(skillRoot, "SKILL.md")), /outside/);
+  assert.throws(() => registry.resolveReadPath(opened.workspace, join(skillRoot, "reference.md")), /outside/);
+
+  await writeSearchSkill(skillRoot, "fresh-removal-probe", "Removal probe procedure.");
+  registry.searchSkills(opened.workspace.id, "fresh-removal-probe");
+  registry.markReadPathLoaded(opened.workspace, registry.resolveReadPath(opened.workspace, join(skillRoot, "SKILL.md")));
+  await rm(join(skillRoot, "SKILL.md"));
+  assert.equal(registry.searchSkills(opened.workspace.id, "fresh-removal-probe").length, 0);
+  assert.throws(() => registry.resolveReadPath(opened.workspace, join(skillRoot, "reference.md")), /outside/);
+});
+
+test("skill refresh remains scoped to the queried workspace", async (t) => {
+  const context = await fixture(t);
+  const secondRoot = join(context.root, "second-project");
+  await mkdir(secondRoot);
+  const first = await context.registry.openWorkspace(context.root);
+  const second = await context.registry.openWorkspace(secondRoot);
+  await writeSearchSkill(join(secondRoot, ".agents", "skills", "fresh-scope-probe"), "fresh-scope-probe", "Second workspace only.");
+  assert.equal(context.registry.searchSkills(second.workspace.id, "fresh-scope-probe").length, 1);
+  assert.equal(context.registry.searchSkills(first.workspace.id, "fresh-scope-probe").length, 0);
+  assert.equal(first.workspace.activatedSkillDirs.size, 0);
+});
+
+async function writeSearchSkill(baseDir: string, name: string, description: string, body = "Initial body."): Promise<void> {
+  await mkdir(baseDir, { recursive: true });
+  await writeFile(join(baseDir, "SKILL.md"), `---\nname: ${name}\ndescription: ${description}\n---\n${body}\n`);
+}
+
 test("persisted checkout and worktree sessions restore after recreating the registry", async (t) => {
   const context = await fixture(t);
   const gitRoot = await createGitProject(context.root);

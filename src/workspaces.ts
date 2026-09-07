@@ -300,6 +300,7 @@ export class WorkspaceRegistry {
   }
 
   private async reusedWorkspaceContext(workspace: Workspace): Promise<WorkspaceContext> {
+    this.refreshSkillsForWorkspace(workspace);
     workspace.agentProfiles = await loadLocalAgentProfiles(this.config, workspace.root);
     const agentsFiles = await this.loadInitialAgentsFiles(workspace.root);
     const snapshot = workspace.instructionSnapshot
@@ -425,6 +426,7 @@ export class WorkspaceRegistry {
     limit = 10,
   ): WorkspaceSkill[] {
     const workspace = this.getWorkspace(workspaceId);
+    this.refreshSkillsForWorkspace(workspace);
     const matches = searchWorkspaceSkills(workspace.skillCatalog, query, limit);
     const visiblePaths = new Set(workspace.skills.map((skill) => skill.filePath));
     for (const skill of matches) {
@@ -525,6 +527,44 @@ export class WorkspaceRegistry {
       skillCatalog: result.catalog,
       skillDiagnostics: result.diagnostics,
     };
+  }
+
+  private refreshSkillsForWorkspace(workspace: Workspace): void {
+    // Refresh only at discovery/bootstrap boundaries, not before every read or
+    // command. The native loader still owns paths, validation and precedence.
+    const loaded = this.loadSkillsForWorkspace(workspace.root);
+    const previous = new Map(
+      workspace.skills.map((skill) => [resolve(skill.filePath), skill]),
+    );
+    const visible = loaded.skillCatalog.filter((skill) =>
+      !skill.disableModelInvocation &&
+      (skill.autoAdvertised || previous.has(resolve(skill.filePath)))
+    );
+    const unchangedActivatedDirs = new Set<string>();
+    for (const skill of visible) {
+      const before = previous.get(resolve(skill.filePath));
+      const baseDir = resolve(skill.baseDir);
+      if (
+        before && before.name === skill.name &&
+        resolve(before.baseDir) === baseDir &&
+        skill.contentDigestSha256 !== undefined &&
+        before.contentDigestSha256 === skill.contentDigestSha256 &&
+        workspace.activatedSkillDirs.has(baseDir)
+      ) {
+        unchangedActivatedDirs.add(baseDir);
+      }
+    }
+    // A metadata refresh never loads a revised body on the model's behalf.
+    // Unchanged on-demand selections survive; changed/deleted/disabled entries
+    // lose their external reference-read grants until a valid body is read.
+    for (const baseDir of workspace.activatedSkillDirs) {
+      if (!unchangedActivatedDirs.has(baseDir)) {
+        workspace.activatedSkillDirs.delete(baseDir);
+      }
+    }
+    workspace.skills = visible;
+    workspace.skillCatalog = loaded.skillCatalog;
+    workspace.skillDiagnostics = loaded.skillDiagnostics;
   }
 
   private assertWorkspaceRootAllowed(root: string, mode: WorkspaceMode, sourceRoot: string | undefined): string {
