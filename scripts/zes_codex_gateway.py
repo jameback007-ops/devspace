@@ -928,6 +928,16 @@ def _duration_seconds(start: Any, end: Any) -> float | None:
     return max(0.0, (end_value - start_value).total_seconds())
 
 
+def _metric_timestamp(native: Any, fallback: Any = None) -> str | None:
+    # Raw rollout task timestamps are epoch seconds, not serialization timestamps.
+    unix_time = iso_from_unix(native)
+    if unix_time is not None:
+        return unix_time
+    if isinstance(native, str) and _parse_iso(native) is not None:
+        return native
+    return fallback if isinstance(fallback, str) else None
+
+
 def _sorted_counts(value: Any) -> list[tuple[str, int]]:
     if not isinstance(value, dict):
         return []
@@ -3712,7 +3722,7 @@ class CodexGateway:
     @staticmethod
     def _new_metrics_aggregate() -> dict[str, Any]:
         return {
-            "schemaVersion": 2,
+            "schemaVersion": 3,
             "firstTimestamp": None,
             "lastTimestamp": None,
             "recordCounts": {},
@@ -3728,6 +3738,7 @@ class CodexGateway:
             "reasoningEvents": 0,
             "tokenSamples": 0,
             "latestTotalUsage": {},
+            "usageSource": None,
             "latestRateLimits": None,
             "modelContextWindow": None,
             "toolCalls": 0,
@@ -3739,6 +3750,19 @@ class CodexGateway:
             "webSearches": 0,
             "fileChangeEvents": 0,
             "changedPathDigests": {},
+            "nativeActivities": {},
+            "activityStatuses": {},
+            "completionSources": {},
+            "seenActivityDigests": {},
+            "duplicateActivities": 0,
+            "activitiesWithoutIdentity": 0,
+            "deduplicationLimited": False,
+            "unsupportedItemRecords": 0,
+            "invalidRecords": 0,
+            "unattributedToolRequests": 0,
+            "turnIndexLimited": False,
+            "priorHistoryReferenced": False,
+            "rolloutVersion": None,
             "turns": {},
             "activeTurnRef": None,
         }
@@ -3750,17 +3774,13 @@ class CodexGateway:
     ) -> dict[str, Any]:
         turns = aggregate["turns"]
         if turn_ref not in turns:
-            if len(turns) >= 5_000:
-                return {
-                    "status": "notIndexedDueToBound",
-                    "tokenUsage": {},
-                    "toolCallCounts": {},
-                }
-            turns[turn_ref] = {
+            new_turn = {
                 "startedAt": None,
                 "completedAt": None,
                 "status": "unknown",
                 "tokenUsage": {},
+                "tokenUsageSource": None,
+                "durationSeconds": None,
                 "toolCalls": 0,
                 "toolResults": 0,
                 "toolCallCounts": {},
@@ -3770,6 +3790,10 @@ class CodexGateway:
                 "messageCount": 0,
                 "tokenSamples": 0,
             }
+            if len(turns) >= 5_000:
+                aggregate["turnIndexLimited"] = True
+                return new_turn
+            turns[turn_ref] = new_turn
         return turns[turn_ref]
 
     def _metric_turn_ref(
@@ -3803,6 +3827,57 @@ class CodexGateway:
         elif len(target) < bound:
             target[key] = 1
 
+    def _metric_completion(
+        self,
+        aggregate: dict[str, Any],
+        turn: dict[str, Any] | None,
+        turn_ref: str | None,
+        item: dict[str, Any],
+        kind: str,
+        source: str,
+    ) -> None:
+        self._metric_increment(aggregate["completionSources"], source, bound=10)
+        native_id = item.get("id") or item.get("call_id")
+        if isinstance(native_id, str) and native_id:
+            # A repeated identity in the same turn/category is one completed item.
+            # Wrapping exec requests are counted separately, never in this set.
+            digest = sha256(canonical_json([turn_ref, kind, native_id]))
+            seen = aggregate["seenActivityDigests"]
+            if digest in seen:
+                aggregate["duplicateActivities"] += 1
+                return
+            if len(seen) < 100_000:
+                seen[digest] = True
+            else:
+                aggregate["deduplicationLimited"] = True
+        else:
+            aggregate["activitiesWithoutIdentity"] += 1
+        self._metric_increment(aggregate["nativeActivities"], kind, bound=100)
+        status = redact(str(item.get("status") or "notReported"))[:100]
+        self._metric_increment(aggregate["activityStatuses"], f"{kind}:{status}", bound=200)
+        if kind == "mcpToolCall":
+            aggregate["mcpCalls"] += 1
+            if turn is not None:
+                turn["mcpCalls"] += 1
+            key = (f"{redact(str(item.get('server') or item.get('app_name') or 'unknown'))[:250]}:"
+                   f"{redact(str(item.get('tool') or item.get('action_name') or 'unknown'))[:250]}")
+            self._metric_increment(aggregate["mcpCounts"], key, bound=2_000)
+        elif kind == "webSearch":
+            aggregate["webSearches"] += 1
+            if turn is not None:
+                turn["webSearches"] += 1
+        elif kind == "fileChange":
+            aggregate["fileChangeEvents"] += 1
+            if turn is not None:
+                turn["fileChangeEvents"] += 1
+            changes = item.get("changes")
+            paths = (list(changes) if isinstance(changes, dict) else
+                     [change.get("path") for change in changes if isinstance(change, dict)]
+                     if isinstance(changes, list) else [])
+            for path in paths:
+                if isinstance(path, str):
+                    self._metric_increment(aggregate["changedPathDigests"], sha256(path), bound=20_000)
+
     def _process_metric_record(
         self,
         ledger: sqlite3.Connection,
@@ -3823,6 +3898,32 @@ class CodexGateway:
             aggregate["lifecycle"]["contextCompactions"] += 1
             return
         if not isinstance(payload, dict):
+            if record_type in {"event_msg", "response_item", "token_usage_record"}:
+                aggregate["invalidRecords"] += 1
+            return
+        if record_type in {"event_msg", "response_item"} and not isinstance(payload.get("type"), str):
+            aggregate["invalidRecords"] += 1
+            return
+        if record_type == "session_meta":
+            aggregate["rolloutVersion"] = redact(str(payload.get("cli_version") or "unknown"))[:100]
+            aggregate["priorHistoryReferenced"] = isinstance(payload.get("history_base"), dict)
+            return
+        if record_type == "token_usage_record":
+            turn_id = payload.get("turn_id")
+            thread_usage = _usage_normalize(payload.get("thread_token_usage"))
+            if thread_usage:
+                aggregate["latestTotalUsage"] = thread_usage
+                aggregate["usageSource"] = "nativeThreadCumulative"
+            aggregate["tokenSamples"] += 1
+            usage = _usage_normalize(payload.get("turn_token_usage"))
+            if isinstance(turn_id, str) and turn_id and usage:
+                turn_ref = self._metric_turn_ref(ledger, session_ref, turn_id, turn_ref_cache)
+                turn = self._metrics_turn(aggregate, turn_ref)
+                # Native cumulative snapshots replace samples; duplicate snapshots
+                # and legacy token_count records cannot add the same work twice.
+                turn["tokenUsage"] = usage
+                turn["tokenUsageSource"] = "nativeTurnCumulative"
+                turn["tokenSamples"] += 1
             return
         if record_type == "response_item":
             item_type = payload.get("type")
@@ -3838,7 +3939,7 @@ class CodexGateway:
                     turn_ref_cache,
                 )
                 if isinstance(turn_id, str) and turn_id
-                else None
+                else aggregate.get("activeTurnRef")
             )
             turn = (
                 self._metrics_turn(aggregate, turn_ref)
@@ -3864,6 +3965,8 @@ class CodexGateway:
                     self._metric_increment(
                         turn["toolCallCounts"], tool, bound=500
                     )
+                else:
+                    aggregate["unattributedToolRequests"] += 1
                 arguments = payload.get("arguments", payload.get("input"))
                 parsed_arguments = arguments
                 if isinstance(arguments, str):
@@ -3903,6 +4006,32 @@ class CodexGateway:
         if record_type != "event_msg":
             return
         event_type = payload.get("type")
+        if event_type == "item_completed":
+            item = payload.get("item")
+            if not isinstance(item, dict):
+                aggregate["invalidRecords"] += 1
+                return
+            item_type = item.get("type")
+            if not isinstance(item_type, str):
+                aggregate["invalidRecords"] += 1
+                return
+            # Persisted 0.153.4 rollout names differ from public App Server items.
+            kinds = {"CommandExecution": "commandExecution", "FileChange": "fileChange",
+                     "McpToolCall": "mcpToolCall", "DynamicToolCall": "dynamicToolCall"}
+            kind = kinds.get(item_type)
+            if item_type == "Extension" and item.get("kind") == "web.search":
+                kind = "webSearch"
+            if kind is None:
+                if item_type not in {"UserMessage", "AgentMessage", "Reasoning",
+                                     "ContextCompaction", "SubAgentActivity"}:
+                    aggregate["unsupportedItemRecords"] += 1
+                return
+            turn_id = payload.get("turn_id")
+            turn_ref = (self._metric_turn_ref(ledger, session_ref, turn_id, turn_ref_cache)
+                        if isinstance(turn_id, str) and turn_id else aggregate.get("activeTurnRef"))
+            turn = self._metrics_turn(aggregate, turn_ref) if isinstance(turn_ref, str) else None
+            self._metric_completion(aggregate, turn, turn_ref, item, kind, "item_completed")
+            return
         if event_type == "agent_reasoning":
             aggregate["reasoningEvents"] += 1
             return
@@ -3916,10 +4045,11 @@ class CodexGateway:
                     turn_ref_cache,
                 )
                 turn = self._metrics_turn(aggregate, turn_ref)
-                turn["startedAt"] = timestamp
+                if turn["startedAt"] is None:
+                    aggregate["lifecycle"]["turnsStarted"] += 1
+                turn["startedAt"] = _metric_timestamp(payload.get("started_at"), timestamp)
                 turn["status"] = "inProgress"
                 aggregate["activeTurnRef"] = turn_ref
-                aggregate["lifecycle"]["turnsStarted"] += 1
             return
         if event_type in {"task_complete", "turn_aborted"}:
             turn_id = payload.get("turn_id")
@@ -3931,13 +4061,21 @@ class CodexGateway:
                     turn_ref_cache,
                 )
                 turn = self._metrics_turn(aggregate, turn_ref)
-                turn["completedAt"] = timestamp
+                previous_status = turn["status"]
+                turn["completedAt"] = _metric_timestamp(payload.get("completed_at"), timestamp)
+                if turn["startedAt"] is None:
+                    turn["startedAt"] = _metric_timestamp(payload.get("started_at"))
+                milliseconds = payload.get("duration_ms")
+                if isinstance(milliseconds, int) and not isinstance(milliseconds, bool) and milliseconds >= 0:
+                    turn["durationSeconds"] = milliseconds / 1000
                 if event_type == "task_complete":
                     turn["status"] = "completed"
-                    aggregate["lifecycle"]["turnsCompleted"] += 1
+                    if previous_status != "completed":
+                        aggregate["lifecycle"]["turnsCompleted"] += 1
                 else:
                     turn["status"] = "interrupted"
-                    aggregate["lifecycle"]["turnsInterrupted"] += 1
+                    if previous_status != "interrupted":
+                        aggregate["lifecycle"]["turnsInterrupted"] += 1
                 if aggregate.get("activeTurnRef") == turn_ref:
                     aggregate["activeTurnRef"] = None
             return
@@ -3949,9 +4087,9 @@ class CodexGateway:
             if not isinstance(info, dict):
                 return
             aggregate["tokenSamples"] += 1
-            aggregate["latestTotalUsage"] = _usage_normalize(
-                info.get("total_token_usage")
-            )
+            if aggregate["usageSource"] != "nativeThreadCumulative":
+                aggregate["latestTotalUsage"] = _usage_normalize(info.get("total_token_usage"))
+                aggregate["usageSource"] = "legacyTokenCountSnapshot"
             context_window = info.get("model_context_window")
             if isinstance(context_window, int) and not isinstance(context_window, bool):
                 aggregate["modelContextWindow"] = context_window
@@ -3962,49 +4100,24 @@ class CodexGateway:
             active_turn_ref = aggregate.get("activeTurnRef")
             if isinstance(active_turn_ref, str):
                 turn = self._metrics_turn(aggregate, active_turn_ref)
-                _usage_add(turn["tokenUsage"], info.get("last_token_usage"))
+                if turn["tokenUsageSource"] != "nativeTurnCumulative":
+                    _usage_add(turn["tokenUsage"], info.get("last_token_usage"))
+                    turn["tokenUsageSource"] = "legacyLastTokenSamples"
                 turn["tokenSamples"] += 1
             return
-        active_turn_ref = aggregate.get("activeTurnRef")
+        turn_id = payload.get("turn_id")
+        active_turn_ref = (self._metric_turn_ref(ledger, session_ref, turn_id, turn_ref_cache)
+                           if isinstance(turn_id, str) and turn_id else aggregate.get("activeTurnRef"))
         turn = (
             self._metrics_turn(aggregate, active_turn_ref)
             if isinstance(active_turn_ref, str)
             else None
         )
-        if event_type == "patch_apply_end":
-            aggregate["fileChangeEvents"] += 1
-            if turn is not None:
-                turn["fileChangeEvents"] += 1
-            changes = payload.get("changes")
-            raw_paths: list[Any] = []
-            if isinstance(changes, dict):
-                raw_paths.extend(changes.keys())
-            elif isinstance(changes, list):
-                raw_paths.extend(
-                    item.get("path")
-                    for item in changes
-                    if isinstance(item, dict) and item.get("path")
-                )
-            for raw_path in raw_paths:
-                digest = sha256(redact(str(raw_path)))
-                self._metric_increment(
-                    aggregate["changedPathDigests"], digest, bound=20_000
-                )
-            return
-        if event_type == "mcp_tool_call_end":
-            aggregate["mcpCalls"] += 1
-            if turn is not None:
-                turn["mcpCalls"] += 1
-            key = (
-                f"{redact(str(payload.get('app_name') or 'unknown'))}:"
-                f"{redact(str(payload.get('action_name') or 'unknown'))}"
-            )
-            self._metric_increment(aggregate["mcpCounts"], key, bound=2_000)
-            return
-        if event_type == "web_search_end":
-            aggregate["webSearches"] += 1
-            if turn is not None:
-                turn["webSearches"] += 1
+        legacy_kinds = {"patch_apply_end": "fileChange", "mcp_tool_call_end": "mcpToolCall",
+                        "web_search_end": "webSearch"}
+        if event_type in legacy_kinds:
+            self._metric_completion(aggregate, turn, active_turn_ref, payload,
+                                    legacy_kinds[event_type], "legacy_end_event")
 
     def _render_metrics(
         self,
@@ -4020,24 +4133,33 @@ class CodexGateway:
         latest_total = aggregate.get("latestTotalUsage") or {}
         input_tokens = int(latest_total.get("input_tokens", 0))
         cached_tokens = int(latest_total.get("cached_input_tokens", 0))
-        total_tokens = int(latest_total.get("total_tokens", 0))
         rendered_turns: list[dict[str, Any]] = []
         turn_entries = list(aggregate.get("turns", {}).items())
         turn_entries.sort(
             key=lambda item: item[1].get("startedAt") or "",
             reverse=True,
         )
-        durations: list[float] = []
+        completed_turns = [turn for _, turn in turn_entries if turn.get("status") == "completed"]
+        durations = [duration for turn in completed_turns
+                     if (duration := turn.get("durationSeconds") if turn.get("durationSeconds") is not None
+                         else _duration_seconds(turn.get("startedAt"), turn.get("completedAt"))) is not None]
+        measured_tokens = [turn["tokenUsage"]["total_tokens"] for turn in completed_turns
+                           if turn.get("tokenUsageSource") == "nativeTurnCumulative"
+                           and "total_tokens" in turn["tokenUsage"]]
+        indexed_completed = len(completed_turns)
+        tokens_complete = len(measured_tokens) == indexed_completed and not aggregate["turnIndexLimited"]
+        completed_calls = sum(turn["toolCalls"] for turn in completed_turns)
+        requests_attributable = (not aggregate["turnIndexLimited"]
+                                and not aggregate["unattributedToolRequests"]
+                                and all(turn.get("startedAt") for turn in completed_turns))
         for turn_ref, turn in turn_entries[:turn_limit]:
             if not isinstance(turn_ref, str) or not TURN_REF_PATTERN.fullmatch(
                 turn_ref
             ):
                 continue
-            duration = _duration_seconds(
-                turn.get("startedAt"), turn.get("completedAt")
-            )
-            if duration is not None:
-                durations.append(duration)
+            duration = turn.get("durationSeconds")
+            if duration is None:
+                duration = _duration_seconds(turn.get("startedAt"), turn.get("completedAt"))
             rendered_turns.append(
                 {
                     "turnRef": turn_ref,
@@ -4046,15 +4168,16 @@ class CodexGateway:
                     "durationSeconds": duration,
                     "status": turn.get("status"),
                     "tokenUsage": turn.get("tokenUsage", {}),
+                    "tokenUsageSource": turn.get("tokenUsageSource"),
                     "tokenSamples": turn.get("tokenSamples", 0),
                     "toolCalls": turn.get("toolCalls", 0),
                     "toolResults": turn.get("toolResults", 0),
                     "toolCallCounts": _top_counts(
                         turn.get("toolCallCounts", {}), 50
                     ),
-                    "mcpCalls": turn.get("mcpCalls", 0),
-                    "webSearches": turn.get("webSearches", 0),
-                    "fileChangeEvents": turn.get("fileChangeEvents", 0),
+                    "mcpCalls": turn.get("mcpCalls") or None,
+                    "webSearches": turn.get("webSearches") or None,
+                    "fileChangeEvents": turn.get("fileChangeEvents") or None,
                     "messageCount": turn.get("messageCount", 0),
                 }
             )
@@ -4071,7 +4194,25 @@ class CodexGateway:
                 ),
             },
             "recordCounts": aggregate.get("recordCounts", {}),
-            "lifecycle": lifecycle,
+            "coverage": {
+                "scope": "observed records in the selected rollout segment",
+                "wholeThreadVerified": False,
+                "rolloutVersion": aggregate["rolloutVersion"],
+                "priorHistoryReferenced": aggregate["priorHistoryReferenced"],
+                "completionSources": aggregate["completionSources"],
+                "unsupportedItemRecords": aggregate["unsupportedItemRecords"],
+                "invalidRecords": aggregate["invalidRecords"],
+                "turnIndexLimited": aggregate["turnIndexLimited"],
+                "unattributedToolRequests": aggregate["unattributedToolRequests"],
+                "deduplicationLimited": aggregate["deduplicationLimited"],
+                "activitiesWithoutIdentity": aggregate["activitiesWithoutIdentity"],
+                "crossFormatOverlapPossible": len(aggregate["completionSources"]) > 1,
+                "absencePolicy": "Unobserved MCP/web/file categories are null, not verified zero.",
+                "executionPolicy": "Completed items include failures/denials; they do not prove successful effects. Exec text is not execution evidence.",
+                "deduplicationPolicy": "Only identical native activity ID, category and turn are deduplicated; unmatched cross-format records may overlap.",
+                "cachePolicy": "Incremental cursor assumes append-only rollout; forceReindex is available for same-inode rewrites.",
+            },
+            "lifecycle": {**lifecycle, "turnsFailed": None},
             "messages": aggregate.get("messages", {}),
             "privateReasoning": {
                 "contentExcluded": True,
@@ -4080,15 +4221,18 @@ class CodexGateway:
             },
             "tokens": {
                 "latestCumulative": latest_total,
+                "source": aggregate["usageSource"],
+                "scope": "Native thread totals may include referenced history; legacy snapshots are not necessarily lifetime totals. Not billing or goal-budget accounting.",
                 "sampleCount": aggregate.get("tokenSamples", 0),
                 "modelContextWindow": aggregate.get("modelContextWindow"),
                 "cachedInputRatio": (
                     cached_tokens / input_tokens if input_tokens > 0 else None
                 ),
-                "uncachedInputTokens": max(0, input_tokens - cached_tokens),
+                "uncachedInputTokens": max(0, input_tokens - cached_tokens) if "input_tokens" in latest_total else None,
                 "latestRateLimits": aggregate.get("latestRateLimits"),
             },
             "tools": {
+                "unit": "observed model request records, including outer exec; not native child executions",
                 "calls": aggregate.get("toolCalls", 0),
                 "results": aggregate.get("toolResults", 0),
                 "byTool": _top_counts(aggregate.get("toolCallCounts", {}), 200),
@@ -4105,12 +4249,22 @@ class CodexGateway:
                 ],
             },
             "mcp": {
-                "calls": aggregate.get("mcpCalls", 0),
+                "unit": "observed completed native items/end events; not necessarily successful MCP execution",
+                "calls": aggregate.get("mcpCalls") or None,
                 "byAppAction": _top_counts(aggregate.get("mcpCounts", {}), 200),
             },
-            "webSearches": aggregate.get("webSearches", 0),
+            "nativeActivities": {
+                "unit": "observed native completion items/end events; separate from model request records",
+                "byType": aggregate["nativeActivities"],
+                "byTypeAndStatus": aggregate["activityStatuses"],
+                "commandExecutions": aggregate["nativeActivities"].get("commandExecution") or None,
+                "dynamicToolCalls": aggregate["nativeActivities"].get("dynamicToolCall") or None,
+                "duplicatesSuppressed": aggregate["duplicateActivities"],
+            },
+            "webSearches": aggregate.get("webSearches") or None,
             "fileChanges": {
-                "events": aggregate.get("fileChangeEvents", 0),
+                "unit": "observed patch completion events, not all filesystem changes or guaranteed applied patches",
+                "events": aggregate.get("fileChangeEvents") or None,
                 "distinctObservedPathCount": len(
                     aggregate.get("changedPathDigests", {})
                 ),
@@ -4122,13 +4276,18 @@ class CodexGateway:
                 ],
             },
             "efficiency": {
+                "scope": "all indexed completed turns, independent of displayed page; observed diagnostics, not whole-mission quality",
+                "completedTurnCount": indexed_completed,
+                "completedTurnsWithDuration": len(durations),
+                "completedTurnsWithNativeTokens": len(measured_tokens),
+                "completedTurnTokenTotal": sum(measured_tokens) if tokens_complete else None,
+                "completedTurnToolRequests": completed_calls if requests_attributable else None,
                 "tokensPerCompletedTurn": (
-                    total_tokens / completed if completed > 0 else None
+                    sum(measured_tokens) / indexed_completed
+                    if indexed_completed and tokens_complete else None
                 ),
                 "toolCallsPerCompletedTurn": (
-                    aggregate.get("toolCalls", 0) / completed
-                    if completed > 0
-                    else None
+                    completed_calls / indexed_completed if indexed_completed and requests_attributable else None
                 ),
                 "compactionsPerStartedTurn": (
                     lifecycle.get("contextCompactions", 0) / total_started
@@ -4206,7 +4365,7 @@ class CodexGateway:
                         row["file_identity"] == file_identity
                         and 0 <= stored_offset <= stat.st_size
                         and isinstance(stored_aggregate, dict)
-                        and stored_aggregate.get("schemaVersion") == 2
+                        and stored_aggregate.get("schemaVersion") == 3
                     ):
                         offset = stored_offset
                         aggregate = stored_aggregate
@@ -4216,6 +4375,7 @@ class CodexGateway:
             turn_ref_cache: dict[str, str] = {}
             scan_started_at_offset = offset
             records_processed = 0
+            scan_stop_reason = None
             with path.open("rb") as handle:
                 handle.seek(offset)
                 while handle.tell() < stat.st_size:
@@ -4224,14 +4384,27 @@ class CodexGateway:
                         >= MAX_METRICS_SCAN_BYTES_PER_CALL
                         or records_processed >= MAX_METRICS_RECORDS_PER_CALL
                     ):
+                        scan_stop_reason = "recordLimit" if records_processed >= MAX_METRICS_RECORDS_PER_CALL else "byteLimit"
                         break
-                    raw_line = handle.readline()
+                    line_start = handle.tell()
+                    remaining_bytes = MAX_METRICS_SCAN_BYTES_PER_CALL - (line_start - scan_started_at_offset)
+                    raw_line = handle.readline(min(stat.st_size - line_start, remaining_bytes))
                     if not raw_line:
+                        break
+                    if not raw_line.endswith(b"\n"):
+                        # Do not consume an in-flight final record or cross the
+                        # observed EOF. Resume this exact record on the next call.
+                        scan_stop_reason = ("partialRecordAtObservation" if handle.tell() == stat.st_size else "byteLimit")
+                        handle.seek(line_start)
+                        if scan_stop_reason == "byteLimit" and line_start == scan_started_at_offset:
+                            raise GatewayError("CODEX_METRICS_RECORD_TOO_LARGE",
+                                               "A rollout record exceeds the bounded metrics scan size")
                         break
                     records_processed += 1
                     try:
                         record = json.loads(raw_line)
                     except (UnicodeDecodeError, json.JSONDecodeError):
+                        aggregate["invalidRecords"] += 1
                         continue
                     if isinstance(record, dict):
                         self._process_metric_record(
@@ -4241,6 +4414,8 @@ class CodexGateway:
                             aggregate,
                             record,
                         )
+                    else:
+                        aggregate["invalidRecords"] += 1
                 indexed_offset = min(handle.tell(), stat.st_size)
             ledger.execute(
                 """
@@ -4264,13 +4439,15 @@ class CodexGateway:
             )
             ledger.commit()
             return {
-                "schemaVersion": 1,
+                "schemaVersion": 2,
                 "sessionRef": session_ref,
                 "serverRef": server["serverRef"],
                 "indexedThroughBytes": indexed_offset,
                 "rolloutBytesObserved": stat.st_size,
                 "completeAtObservation": indexed_offset >= stat.st_size,
                 "scanLimited": indexed_offset < stat.st_size,
+                "scanStopReason": scan_stop_reason,
+                "completionScope": "byte scan of the observed selected rollout only, not complete telemetry or whole-thread history",
                 "scanBytes": indexed_offset - scan_started_at_offset,
                 "recordsProcessed": records_processed,
                 "incrementalIndexReused": row is not None

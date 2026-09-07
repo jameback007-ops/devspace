@@ -581,6 +581,267 @@ class CodexGatewayTests(unittest.TestCase):
         self.assertNotIn("turn-private", aggregate_json)
         self.assertIn("cdx_turn_", aggregate_json)
 
+    def metric_records(self, records: list[dict[str, object]], **options: object) -> dict:
+        self.rollout.write_text("".join(json.dumps(item) + "\n" for item in records))
+        session = self.discover()
+        return self.gateway.handle({
+            "command": "codex_session_metrics", "sessionRef": session["sessionRef"],
+            "forceReindex": True, **options,
+        })
+
+    @staticmethod
+    def metric_event(kind: str, turn: str = "turn-private", **fields: object) -> dict:
+        native_time = fields.get("completed_at", fields.get("started_at"))
+        timestamp = (gateway_module.dt.datetime.fromtimestamp(native_time, gateway_module.dt.timezone.utc).isoformat()
+                     if isinstance(native_time, int) else "2026-08-21T00:00:00Z")
+        return {"type": "event_msg", "timestamp": timestamp,
+                "payload": {"type": kind, "turn_id": turn, **fields}}
+
+    def test_metrics_native_completions_are_not_exec_request_counts(self) -> None:
+        completed = self.metric_event("item_completed", item={
+            "type": "McpToolCall", "id": "native-private-mcp", "server": "context7",
+            "tool": "resolve-library-id", "status": "completed",
+            "arguments": {"query": "secret-private-query"},
+            "result": {"content": "secret-private-result"},
+        })
+        result = self.metric_records([
+            self.metric_event("task_started", started_at=100),
+            {"type": "response_item", "payload": {
+                "type": "custom_tool_call", "name": "exec",
+                "input": "await tools.never_executed(); // not execution evidence",
+            }},
+            completed, completed,
+            self.metric_event("item_completed", item={
+                "type": "CommandExecution", "id": "cmd-private", "status": "failed",
+                "command": "secret-private-command", "exit_code": 1,
+            }),
+            self.metric_event("item_completed", item={
+                "type": "FileChange", "id": "patch-private", "status": "completed",
+                "changes": {"/private/a.py": {"diff": "secret-private-source"}},
+            }),
+            self.metric_event("item_completed", item={
+                "type": "Extension", "kind": "web.search", "id": "web-private",
+                "query": "secret-private-search", "action": {"type": "open"},
+            }),
+            self.metric_event("task_complete", started_at=100, completed_at=110,
+                              duration_ms=10_125),
+        ])
+        m = result["metrics"]
+        self.assertEqual(m["tools"]["calls"], 1)
+        self.assertEqual(m["mcp"]["calls"], 1)
+        self.assertEqual(m["webSearches"], 1)
+        self.assertEqual(m["fileChanges"]["events"], 1)
+        self.assertEqual(m["fileChanges"]["distinctObservedPathCount"], 1)
+        self.assertEqual(m["nativeActivities"]["commandExecutions"], 1)
+        self.assertEqual(m["nativeActivities"]["duplicatesSuppressed"], 1)
+        self.assertEqual(m["turns"][0]["toolCalls"], 1)
+        self.assertEqual(m["turns"][0]["mcpCalls"], 1)
+        self.assertEqual(m["efficiency"]["averageCompletedTurnDurationSeconds"], 10.125)
+        with sqlite3.connect(self.state_dir / "codex-gateway.sqlite3") as ledger:
+            persisted = ledger.execute("select aggregate_json from metrics").fetchone()[0]
+        for private in ("native-private-mcp", "secret-private", "/private/a.py"):
+            self.assertNotIn(private, persisted + json.dumps(result))
+        self.assertNotIn("never_executed", persisted + json.dumps(result))
+
+    def test_metrics_completed_averages_are_page_and_active_work_independent(self) -> None:
+        records: list[dict[str, object]] = []
+        for name, start, seconds, tokens, calls, terminal in (
+            ("done-a", 100, 10, 100, 1, "task_complete"),
+            ("done-b", 200, 30, 300, 3, "task_complete"),
+            ("aborted", 300, 900, 9000, 9, "turn_aborted"),
+            ("active", 1300, 0, 99000, 15, None),
+        ):
+            records.append(self.metric_event("task_started", name, started_at=start))
+            records.extend({"type": "response_item", "payload": {
+                "type": "function_call", "name": "exec_command", "arguments": "{}",
+            }} for _ in range(calls))
+            records.append({"type": "token_usage_record", "payload": {
+                "turn_id": name, "turn_token_usage": {"total_tokens": tokens},
+                "thread_token_usage": {"total_tokens": 999_999},
+                "usage": {"total_tokens": tokens},
+            }})
+            if terminal:
+                records.append(self.metric_event(terminal, name, completed_at=start + seconds))
+        first = self.metric_records(records, turnLimit=1)["metrics"]
+        second = self.metric_records(records, turnLimit=20)["metrics"]
+        self.assertEqual(first["efficiency"], second["efficiency"])
+        self.assertEqual(first["efficiency"]["averageCompletedTurnDurationSeconds"], 20)
+        self.assertEqual(first["efficiency"]["tokensPerCompletedTurn"], 200)
+        self.assertEqual(first["efficiency"]["toolCallsPerCompletedTurn"], 2)
+        self.assertEqual(first["tokens"]["latestCumulative"]["total_tokens"], 999_999)
+        self.assertEqual(first["efficiency"]["completedTurnCount"], 2)
+
+    def test_metrics_native_token_snapshots_do_not_add_legacy_or_duplicate_samples(self) -> None:
+        native = {"type": "token_usage_record", "payload": {
+            "turn_id": "turn-private", "turn_token_usage": {"total_tokens": 120},
+            "thread_token_usage": {"total_tokens": 5000},
+            "usage": {"total_tokens": 30},
+        }}
+        result = self.metric_records([
+            {"type": "session_meta", "payload": {
+                "cli_version": "0.153.4", "history_mode": "paginated",
+                "history_base": {"thread_id": "private-parent", "end_ordinal_exclusive": 20},
+            }},
+            self.metric_event("task_started", started_at=100), native, native,
+            self.metric_event("token_count", info={
+                "last_token_usage": {"total_tokens": 999},
+                "total_token_usage": {"total_tokens": 999},
+            }),
+            self.metric_event("task_complete", completed_at=110),
+        ])["metrics"]
+        self.assertEqual(result["turns"][0]["tokenUsage"]["total_tokens"], 120)
+        self.assertEqual(result["tokens"]["latestCumulative"]["total_tokens"], 5000)
+        self.assertEqual(result["efficiency"]["tokensPerCompletedTurn"], 120)
+        self.assertTrue(result["coverage"]["priorHistoryReferenced"])
+        self.assertFalse(result["coverage"]["wholeThreadVerified"])
+        self.assertEqual(result["tokens"]["source"], "nativeThreadCumulative")
+
+    def test_metrics_unknown_telemetry_is_not_verified_zero(self) -> None:
+        result = self.metric_records([
+            self.metric_event("task_started"),
+            self.metric_event("item_completed", item={"type": "FutureAction", "id": "x"}),
+            self.metric_event("task_complete"),
+        ])["metrics"]
+        self.assertIsNone(result["mcp"]["calls"])
+        self.assertIsNone(result["webSearches"])
+        self.assertIsNone(result["fileChanges"]["events"])
+        self.assertEqual(result["coverage"]["unsupportedItemRecords"], 1)
+        self.assertIsNone(result["efficiency"]["tokensPerCompletedTurn"])
+
+    def test_metrics_partial_final_record_is_retried_after_append(self) -> None:
+        session = self.discover()
+        complete = json.dumps(self.metric_event("item_completed", item={
+            "type": "McpToolCall", "id": "append-private", "server": "exa", "tool": "fetch",
+        })).encode() + b"\n"
+        original_size = self.rollout.stat().st_size
+        with self.rollout.open("ab") as handle:
+            handle.write(complete[:len(complete) // 2])
+        first = self.gateway.handle({
+            "command": "codex_session_metrics", "sessionRef": session["sessionRef"],
+        })
+        self.assertFalse(first["completeAtObservation"])
+        self.assertEqual(first["indexedThroughBytes"], original_size)
+        self.assertEqual(first["scanStopReason"], "partialRecordAtObservation")
+        with self.rollout.open("ab") as handle:
+            handle.write(complete[len(complete) // 2:])
+        second = self.gateway.handle({
+            "command": "codex_session_metrics", "sessionRef": session["sessionRef"],
+        })
+        self.assertTrue(second["completeAtObservation"])
+        self.assertEqual(second["metrics"]["mcp"]["calls"], 1)
+
+    def test_metrics_malformed_complete_records_reduce_coverage(self) -> None:
+        session = self.discover()
+        with self.rollout.open("ab") as handle:
+            handle.write(b'{broken}\n[]\n')
+        result = self.gateway.handle({
+            "command": "codex_session_metrics", "sessionRef": session["sessionRef"],
+        })
+        self.assertTrue(result["completeAtObservation"])
+        self.assertEqual(result["metrics"]["coverage"]["invalidRecords"], 2)
+        self.assertFalse(result["metrics"]["coverage"]["wholeThreadVerified"])
+
+    def test_metrics_malformed_event_shapes_reduce_coverage_without_crashing(self) -> None:
+        result = self.metric_records([
+            {"type": "event_msg", "payload": []},
+            {"type": "response_item", "payload": {"type": ["function_call"]}},
+            self.metric_event("item_completed", item={"type": ["FileChange"]}),
+        ])["metrics"]
+        self.assertEqual(result["coverage"]["invalidRecords"], 3)
+        self.assertIsNone(result["mcp"]["calls"])
+
+    def test_metrics_oversized_record_has_explicit_bound_error(self) -> None:
+        session = self.discover()
+        self.rollout.write_text(json.dumps({"type": "session_meta", "payload": {"unused": "a" * 200}}) + "\n")
+        prior_limit = gateway_module.MAX_METRICS_SCAN_BYTES_PER_CALL
+        gateway_module.MAX_METRICS_SCAN_BYTES_PER_CALL = 64
+        try:
+            with self.assertRaises(gateway_module.GatewayError) as caught:
+                self.gateway.handle({"command": "codex_session_metrics", "sessionRef": session["sessionRef"]})
+            self.assertEqual(caught.exception.code, "CODEX_METRICS_RECORD_TOO_LARGE")
+        finally:
+            gateway_module.MAX_METRICS_SCAN_BYTES_PER_CALL = prior_limit
+
+    def test_metrics_old_cache_generation_is_reindexed(self) -> None:
+        session = self.discover()
+        self.gateway.handle({"command": "codex_session_metrics", "sessionRef": session["sessionRef"]})
+        with sqlite3.connect(self.state_dir / "codex-gateway.sqlite3") as ledger:
+            stored = json.loads(ledger.execute("select aggregate_json from metrics").fetchone()[0])
+            stored["schemaVersion"] = 2
+            stored["toolCalls"] = 123456
+            ledger.execute("update metrics set aggregate_json=?", (json.dumps(stored),))
+        result = self.gateway.handle({
+            "command": "codex_session_metrics", "sessionRef": session["sessionRef"],
+        })
+        self.assertFalse(result["incrementalIndexReused"])
+        self.assertEqual(result["metrics"]["tools"]["calls"], 0)
+
+    def test_metrics_legacy_overlap_requires_actual_item_identity(self) -> None:
+        result = self.metric_records([
+            self.metric_event("task_started"),
+            self.metric_event("mcp_tool_call_end", call_id="same-native-id", app_name="exa", action_name="fetch"),
+            self.metric_event("item_completed", item={
+                "type": "McpToolCall", "id": "same-native-id", "server": "exa", "tool": "fetch",
+            }),
+            # No identity is not proof that this is the same operation.
+            self.metric_event("mcp_tool_call_end", app_name="exa", action_name="fetch"),
+        ])["metrics"]
+        self.assertEqual(result["mcp"]["calls"], 2)
+        self.assertEqual(result["nativeActivities"]["duplicatesSuppressed"], 1)
+        self.assertEqual(result["coverage"]["activitiesWithoutIdentity"], 1)
+        self.assertTrue(result["coverage"]["crossFormatOverlapPossible"])
+
+    def test_metrics_native_deduplication_survives_incremental_reads(self) -> None:
+        session = self.discover()
+        event = self.metric_event("item_completed", item={
+            "type": "McpToolCall", "id": "repeat-id", "server": "exa", "tool": "fetch",
+        })
+        observations = []
+        for _ in range(2):
+            with self.rollout.open("a") as handle:
+                handle.write(json.dumps(event) + "\n")
+            observations.append(self.gateway.handle({
+                "command": "codex_session_metrics", "sessionRef": session["sessionRef"],
+            }))
+        self.assertEqual([r["metrics"]["mcp"]["calls"] for r in observations], [1, 1])
+        self.assertTrue(observations[1]["incrementalIndexReused"])
+
+    def test_metrics_missing_completed_token_snapshots_are_not_zero_filled(self) -> None:
+        result = self.metric_records([
+            self.metric_event("task_started", "a", started_at=100),
+            self.metric_event("token_count", "a", info={"last_token_usage": {"total_tokens": 100}}),
+            self.metric_event("task_complete", "a", completed_at=101),
+            self.metric_event("task_started", "b", started_at=200),
+            {"type": "token_usage_record", "payload": {
+                "turn_id": "b", "turn_token_usage": {"total_tokens": 20},
+            }},
+            self.metric_event("task_complete", "b", completed_at=202),
+        ])["metrics"]
+        self.assertEqual(result["efficiency"]["completedTurnsWithNativeTokens"], 1)
+        self.assertIsNone(result["efficiency"]["tokensPerCompletedTurn"])
+
+    def test_metrics_byte_limit_keeps_next_record_intact(self) -> None:
+        session = self.discover()
+        lines = self.rollout.read_bytes().splitlines(keepends=True)
+        limit = max(map(len, lines)) + 10
+        prior_limit = gateway_module.MAX_METRICS_SCAN_BYTES_PER_CALL
+        gateway_module.MAX_METRICS_SCAN_BYTES_PER_CALL = limit
+        try:
+            observations = []
+            for _ in range(10):
+                r = self.gateway.handle({
+                    "command": "codex_session_metrics", "sessionRef": session["sessionRef"],
+                })
+                self.assertLessEqual(r["scanBytes"], limit)
+                observations.append(r)
+                if r["completeAtObservation"]:
+                    break
+            self.assertTrue(observations[-1]["completeAtObservation"])
+            self.assertEqual(observations[-1]["metrics"]["lifecycle"]["contextCompactions"], 1)
+            self.assertEqual(sum(r["recordsProcessed"] for r in observations), len(lines))
+        finally:
+            gateway_module.MAX_METRICS_SCAN_BYTES_PER_CALL = prior_limit
+
     def test_metrics_scan_is_bounded_and_resumes_from_persisted_offset(self) -> None:
         session = self.discover()
         prior_limit = gateway_module.MAX_METRICS_RECORDS_PER_CALL

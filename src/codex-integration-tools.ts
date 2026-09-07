@@ -410,7 +410,7 @@ export function registerCodexIntegrationTools(
     {
       title: "Measure Codex session performance",
       description:
-        "Build or incrementally refresh aggregate session and per-turn metrics from the protected Codex rollout: duration, lifecycle, token/cache usage, tool/MCP/web activity, compaction, repeated target digests, file-change counts, and efficiency ratios. Only aggregate state is persisted; private reasoning and raw transcript content are not.",
+        "Incrementally read aggregate metrics from the selected protected Codex rollout. Separate model requests from observed native command/MCP/web/file completions; show coverage and unknown counts. Completed-turn statistics are independent of display pagination and exclude active work. Byte-scan completion is not whole-thread or telemetry completeness; tokens are not billing totals. Only counts/digests are persisted, not reasoning or transcript content.",
       inputSchema: {
         sessionRef,
         turnLimit: z.number().int().min(1).max(500).optional(),
