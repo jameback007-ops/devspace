@@ -1,3 +1,4 @@
+import { ResearchCaptureStore, type CaptureManifest } from "./research-captures.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { DEVSPACE_PACKAGE_VERSION } from "./version.js";
@@ -23,6 +24,7 @@ export const RESEARCH_ACTIONS = [
   "upstream_docs_query",
   "open_world_search",
   "known_source_fetch",
+  "capture_read",
 ] as const;
 
 export type ResearchAction = typeof RESEARCH_ACTIONS[number];
@@ -51,6 +53,13 @@ export interface ResearchOperateInput {
   urls?: string[];
   maxResults?: number;
   maxCharacters?: number;
+  responseMode?: "inline" | "reference";
+  previewCharacters?: number;
+  captureRef?: string;
+  section?: "manifest" | "text" | "structured" | "raw";
+  offset?: number;
+  length?: number;
+  find?: string;
 }
 
 export interface ResearchProviderTool {
@@ -76,6 +85,9 @@ export interface ResearchProviderToolResult {
   textTruncated: boolean;
   structuredContentTruncated: boolean;
   isError: boolean;
+  capture?: CaptureManifest;
+  preview?: unknown;
+  nextRead?: unknown;
 }
 
 export interface ResearchMcpClient {
@@ -89,6 +101,7 @@ export interface ResearchMcpClient {
     arguments_: Record<string, unknown>,
     timeoutMs: number,
     maxOutputCharacters: number,
+    delivery?: { reference: true; previewCharacters: number },
   ): Promise<ResearchProviderToolResult>;
 }
 
@@ -212,14 +225,19 @@ function normalizeToolResult(
       const type = typeof block.type === "string" ? block.type : "unknown";
       contentTypes.push(type);
       const text = block.text;
-      if (typeof text !== "string" || remaining <= 0) continue;
-      if (text.length > remaining) {
-        textParts.push(text.slice(0, remaining));
+      if (typeof text !== "string") continue;
+      const piece = (textParts.length ? "\n\n" : "") + text;
+      if (remaining <= 0) {
+        if (piece.length > 0) textTruncated = true;
+        continue;
+      }
+      if (piece.length > remaining) {
+        textParts.push(piece.slice(0, remaining));
         remaining = 0;
         textTruncated = true;
       } else {
-        textParts.push(text);
-        remaining -= text.length;
+        textParts.push(piece);
+        remaining -= piece.length;
       }
     }
   }
@@ -239,7 +257,7 @@ function normalizeToolResult(
   }
 
   return {
-    text: textParts.join("\n\n"),
+    text: textParts.join(""),
     structuredContent,
     contentTypes,
     textTruncated,
@@ -249,6 +267,7 @@ function normalizeToolResult(
 }
 
 export class NativeResearchMcpClient implements ResearchMcpClient {
+  constructor(private readonly captures?: ResearchCaptureStore) {}
   private async withClient<T>(
     route: ResearchProviderRoute,
     timeoutMs: number,
@@ -329,6 +348,7 @@ export class NativeResearchMcpClient implements ResearchMcpClient {
     arguments_: Record<string, unknown>,
     timeoutMs: number,
     maxOutputCharacters: number,
+    delivery?: { reference: true; previewCharacters: number },
   ): Promise<ResearchProviderToolResult> {
     try {
       return await this.withClient(route, timeoutMs, async (client) => {
@@ -347,6 +367,12 @@ export class NativeResearchMcpClient implements ResearchMcpClient {
           undefined,
           { timeout: timeoutMs, maxTotalTimeout: timeoutMs },
         );
+        if (delivery?.reference) {
+          if (!this.captures) throw new ResearchPlaneError("RESEARCH_CAPTURE_UNAVAILABLE", "No admitted capture store");
+          return await this.captures.capture(result, {
+            providerRef: route.providerRef, nativeTool: toolName, arguments: arguments_,
+          }, delivery.previewCharacters);
+        }
         return normalizeToolResult(result, maxOutputCharacters);
       });
     } catch (error) {
@@ -444,11 +470,19 @@ function routePublicView(route: ResearchProviderRoute): Record<string, unknown> 
 export class ResearchPlane {
   readonly config: ResearchPlaneConfig;
 
+  private readonly client: ResearchMcpClient;
   constructor(
     config: ResearchPlaneConfig = researchPlaneConfigFromEnvironment(),
-    private readonly client: ResearchMcpClient = new NativeResearchMcpClient(),
+    client?: ResearchMcpClient,
+    private readonly captures?: ResearchCaptureStore,
   ) {
     this.config = config;
+    this.client = client ?? new NativeResearchMcpClient(captures);
+  }
+
+  async captureResource(uri: string): Promise<unknown> {
+    if (!this.captures) throw new ResearchPlaneError("RESEARCH_CAPTURE_UNAVAILABLE", "No admitted capture store");
+    return this.captures.resource(uri);
   }
 
   manifest(): Record<string, unknown> {
@@ -505,7 +539,24 @@ export class ResearchPlane {
   }
 
   async operate(input: ResearchOperateInput): Promise<Record<string, unknown>> {
-    if (input.action === "manifest") return this.manifest();
+    if (input.action === "capture_read") {
+      if (!this.captures) throw new ResearchPlaneError("RESEARCH_CAPTURE_UNAVAILABLE", "No admitted capture store");
+      return this.captures.read({ captureRef: input.captureRef ?? "", section: input.section,
+        offset: input.offset, length: input.length, find: input.find });
+    }
+    if (input.responseMode !== undefined && !["inline", "reference"].includes(input.responseMode)) {
+      throw new ResearchPlaneError("RESEARCH_INPUT_INVALID", "Unknown response mode");
+    }
+    if (input.responseMode === "reference" && !this.captures) {
+      throw new ResearchPlaneError("RESEARCH_CAPTURE_UNAVAILABLE", "No admitted capture store; provider not called");
+    }
+    const previewCharacters = boundedInteger(input.previewCharacters, 4000, "previewCharacters", 1, 100000);
+    if (input.action === "manifest") return {
+      ...this.manifest(),
+      delivery: { captureAvailable: Boolean(this.captures), defaultMode: "inline",
+        referenceMode: "retain_native_parsed_response_before_normalization",
+        captureRead: "manifest_text_structured_or_raw_unicode_window_without_provider_call" },
+    };
     if (input.action === "probe") {
       return {
         schemaVersion: "devspace.native-research-probe.v1",
@@ -590,8 +641,12 @@ export class ResearchPlane {
       arguments_,
       this.config.timeoutMs,
       this.config.maxOutputCharacters,
+      input.responseMode === "reference" ? { reference: true, previewCharacters } : undefined,
     );
-    if (result.isError) {
+    if (input.responseMode === "reference" && !result.capture) {
+      throw new ResearchPlaneError("RESEARCH_CAPTURE_UNAVAILABLE", "Provider client returned no capture; no silent inline fallback");
+    }
+    if (result.isError && !result.capture) {
       const safeError = result.text.replaceAll("\n", " ").slice(0, 500);
       throw new ResearchPlaneError(
         "RESEARCH_PROVIDER_TOOL_ERROR",
@@ -618,7 +673,8 @@ export class ResearchPlane {
         contentTypes: result.contentTypes,
         textTruncated: result.textTruncated,
         structuredContentTruncated: result.structuredContentTruncated,
-        isError: false,
+        isError: result.isError,
+        ...(result.capture ? { capture: result.capture, preview: result.preview, nextRead: result.nextRead } : {}),
       },
       authority: {
         externalEvidenceOnly: true,

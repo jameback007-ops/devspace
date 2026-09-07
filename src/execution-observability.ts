@@ -959,7 +959,7 @@ export class ExecutionScopeManager {
       .prepare(`
         select count(*) as events,
                sum(case when outcome = 'succeeded' then 1 else 0 end) as succeeded,
-               sum(case when outcome = 'failed' then 1 else 0 end) as failed,
+               sum(case when outcome = 'error' then 1 else 0 end) as failed,
                coalesce(sum(duration_ms), 0) as total_ms,
                avg(duration_ms) as average_ms,
                max(duration_ms) as max_ms,
@@ -974,7 +974,7 @@ export class ExecutionScopeManager {
         select tool_name,
                count(*) as calls,
                sum(case when outcome = 'succeeded' then 1 else 0 end) as succeeded,
-               sum(case when outcome = 'failed' then 1 else 0 end) as failed,
+               sum(case when outcome = 'error' then 1 else 0 end) as failed,
                coalesce(sum(duration_ms), 0) as total_ms,
                avg(duration_ms) as average_ms,
                max(duration_ms) as max_ms

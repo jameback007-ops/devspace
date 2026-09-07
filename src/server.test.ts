@@ -828,8 +828,18 @@ test("turn continuity is advisory-only and recovery capsules detect later worksp
       "upstream_docs_query",
       "open_world_search",
       "known_source_fetch",
+      "capture_read",
     ],
   );
+  assert.deepEqual(
+    (researchTool?.inputSchema as Record<string, any>).properties.responseMode.enum,
+    ["inline", "reference"],
+  );
+  const captureManifest = await context.client.callTool({name: "research", arguments: {action: "manifest"}});
+  assert.equal((captureManifest.structuredContent as any).data.delivery.captureAvailable, true);
+  const templates = await context.client.listResourceTemplates();
+  assert.ok(templates.resourceTemplates.some((r) => r.uriTemplate === "zes-research://capture/{captureRef}"));
+  assert.ok((researchTool?.inputSchema as Record<string, any>).properties.captureRef);
   assert.equal(researchTool?.annotations?.readOnlyHint, true);
   assert.equal(researchTool?.annotations?.openWorldHint, true);
   assert.equal(
