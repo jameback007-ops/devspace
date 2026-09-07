@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { readFile, stat } from "node:fs/promises";
+import { readFile, realpath, stat } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { resolve } from "node:path";
 import type { registerAppTool as registerAppToolType } from "@modelcontextprotocol/ext-apps/server";
@@ -141,11 +141,26 @@ export interface ZesContinuationPreflightDeferredProjection {
   policy: ZesContinuationProjectionPolicy;
 }
 
+export interface ZesRepositoryContinuationProjection {
+  schemaVersion: 1;
+  capabilityRef: "zes.continuation.preflight.v2";
+  status: "repository_readback";
+  projectionRef: string;
+  route: "execution_scope_status_embedded_control_plane";
+  directToolName: "zes_continuation_preflight";
+  observedAt: string;
+  cacheUntil: string;
+  readback: Record<string, unknown>;
+  decisions: Record<ZesContinuationIntent, Record<string, unknown>>;
+  policy: typeof REPOSITORY_READBACK_POLICY;
+}
+
 export type ZesContinuationPreflightProjection =
   | ZesContinuationPreflightAvailableProjection
   | ZesContinuationPreflightRefreshingProjection
   | ZesContinuationPreflightUnavailableProjection
-  | ZesContinuationPreflightDeferredProjection;
+  | ZesContinuationPreflightDeferredProjection
+  | ZesRepositoryContinuationProjection;
 
 export interface ZesContinuationProjectionRequest {
   refresh?: boolean;
@@ -283,6 +298,18 @@ function fixedPath(
   return resolve(configured || fallback);
 }
 
+export function fixedContinuationProfile(): "legacy_runtime" | "repository_only" {
+  const profile = process.env.DEVSPACE_ZES_CONTINUATION_BACKEND?.trim()
+    || "legacy_runtime";
+  if (profile !== "legacy_runtime" && profile !== "repository_only") {
+    throw new Error("unsupported_fixed_continuation_profile");
+  }
+  if (profile === "repository_only" && !process.env.DEVSPACE_ZES_REPOSITORY_ROOT?.trim()) {
+    throw new Error("repository_continuation_requires_explicit_host_repository_root");
+  }
+  return profile;
+}
+
 export function fixedZesRepositoryRoot(): string {
   return fixedPath(
     "DEVSPACE_ZES_REPOSITORY_ROOT",
@@ -303,7 +330,10 @@ async function sha256File(path: string): Promise<string> {
 
 async function runFixedContinuationRefresh(): Promise<ProcessResult> {
   const repositoryRoot = fixedZesRepositoryRoot();
-  const python = fixedPath(
+  const profile = fixedContinuationProfile();
+  const command = profile === "repository_only"
+    ? resolve(repositoryRoot, "zes-continuation")
+    : fixedPath(
     "DEVSPACE_ZES_CONTINUATION_PYTHON",
     DEFAULT_ZES_CONTINUATION_PYTHON,
   );
@@ -314,8 +344,8 @@ async function runFixedContinuationRefresh(): Promise<ProcessResult> {
 
   return await new Promise((resolveResult, reject) => {
     const child = spawn(
-      python,
-      [
+      command,
+      profile === "repository_only" ? ["--summary"] : [
         "-m",
         "zes_build_runner.continuation_read_model",
         "--locator",
@@ -372,6 +402,88 @@ async function runFixedContinuationRefresh(): Promise<ProcessResult> {
       });
     });
   });
+}
+
+const REPOSITORY_READBACK_POLICY = {
+  authority: "fixed_repository_source_readback_only",
+  profile: "repository_only",
+  readOnly: true,
+  arbitraryRepositoryPathAccepted: false,
+  canonicalOrProviderStateMutated: false,
+  newWriterPublicationTakeoverOrEffectAuthorityGranted: false,
+  remoteAuthorityObserved: false,
+  runtimeStateObserved: false,
+  cacheIsReadOptimizationOnly: true,
+  cacheUntilIsNotSourceOrAuthorityExpiry: true,
+  downstreamEffectGateMustRevalidate: true,
+} as const;
+
+export function repositoryContinuationDecision(
+  intent: ZesContinuationIntent,
+): Record<string, unknown> {
+  // Source observation is not the retired runtime control contract. In particular,
+  // a clean Git checkout cannot establish publication, takeover, or retry safety.
+  return {
+    intent,
+    disposition: intent === "inspect" ? "observed" : "not_assessed",
+    actionAllowed: intent === "inspect",
+    newAuthorityGranted: false,
+    policyDenialObserved: false,
+    nextAction: intent === "publish_repository"
+      ? "execution_scope_status.stableControlPlane.capabilities.scopePublicationPreflight"
+      : intent === "runtime_takeover_or_effect_retry"
+        ? "reconcile_with_actual_runtime_and_effect_owner"
+        : intent === "inspect"
+          ? "use_source_readback_at_its_declared_scope"
+          : "reconcile_exact_workspace_changes_with_current_owner_direction",
+  };
+}
+
+export async function readFixedRepositoryContinuation(): Promise<Record<string, unknown>> {
+  if (fixedContinuationProfile() !== "repository_only") {
+    throw new Error("repository_continuation_profile_not_selected");
+  }
+  const startedAt = Date.now();
+  const result = await runFixedContinuationRefresh();
+  if (result.exitCode !== 0) {
+    throw new Error(`repository_continuation_failed:${result.exitCode}`);
+  }
+  const value = record(JSON.parse(result.stdout));
+  const method = record(value?.activeResearchMethod);
+  const workspace = record(value?.workspace);
+  if (!value || value.schema_version !== "zes.cleanroom.repository-continuation.v1"
+      || value.mode !== "repository_only" || value.read_only !== true
+      || method?.mode !== "repository_source_bound"
+      || method.runtimeMethodCapsuleClaimed !== false
+      || typeof workspace?.path !== "string"
+      || typeof workspace.head !== "string" || !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(workspace.head)
+      || typeof value.observed_at !== "string" || !Number.isFinite(Date.parse(value.observed_at))) {
+    throw new Error("invalid_repository_continuation_contract");
+  }
+  if (Date.parse(value.observed_at) < startedAt - PROCESS_TIMEOUT_MS
+      || Date.parse(value.observed_at) > Date.now() + 1000) {
+    throw new Error("stale_or_future_repository_continuation_observation");
+  }
+  const root = await realpath(fixedZesRepositoryRoot());
+  if (await realpath(workspace.path) !== root) {
+    throw new Error("repository_continuation_workspace_mismatch");
+  }
+  const bindings = method.sourceBindings;
+  if (!Array.isArray(bindings) || bindings.length === 0 || bindings.length > 1024) {
+    throw new Error("repository_continuation_source_bindings_missing_or_excessive");
+  }
+  for (const entry of bindings) {
+    const binding = record(entry);
+    if (typeof binding?.path !== "string" || typeof binding.sha256 !== "string"
+        || !/^[a-f0-9]{64}$/.test(binding.sha256)) {
+      throw new Error("invalid_repository_continuation_source_binding");
+    }
+    const path = await realpath(resolve(root, binding.path));
+    if (!isInside(path, root) || await sha256File(path) !== binding.sha256) {
+      throw new Error("repository_continuation_source_binding_mismatch");
+    }
+  }
+  return value;
 }
 
 export function continuationIntentDecision(
@@ -673,6 +785,25 @@ implements ZesContinuationPreflightProjectionSource {
 
   private async refreshProjection(): Promise<CachedProjection> {
     try {
+      if (fixedContinuationProfile() === "repository_only") {
+        const readback = await readFixedRepositoryContinuation();
+        const expiresAtMs = this.now() + this.cacheTtlMs;
+        const value: ZesRepositoryContinuationProjection = {
+          schemaVersion: 1,
+          capabilityRef: "zes.continuation.preflight.v2",
+          status: "repository_readback",
+          projectionRef: `zes-control-plane://repository-continuation/${sha256(readback)}`,
+          route: "execution_scope_status_embedded_control_plane",
+          directToolName: "zes_continuation_preflight",
+          observedAt: readback.observed_at as string,
+          cacheUntil: new Date(expiresAtMs).toISOString(),
+          readback,
+          decisions: Object.fromEntries(ZES_CONTINUATION_INTENTS.map((intent) =>
+            [intent, repositoryContinuationDecision(intent)])) as ZesRepositoryContinuationProjection["decisions"],
+          policy: REPOSITORY_READBACK_POLICY,
+        };
+        return { expiresAtMs, value };
+      }
       const snapshot = await this.refresh();
       if (snapshot.schemaVersion !== 1) {
         throw new Error("unsupported_continuation_snapshot_readback_schema");
@@ -751,6 +882,20 @@ implements ZesContinuationPreflightProjectionSource {
 export async function invokeZesContinuationPreflight(
   intent: ZesContinuationIntent,
 ) {
+  if (fixedContinuationProfile() === "repository_only") {
+    const readback = await readFixedRepositoryContinuation();
+    const data = {
+      schemaVersion: 1,
+      scope: "fixed-repository-continuation-readback",
+      intent,
+      decision: repositoryContinuationDecision(intent),
+      readback,
+      policy: REPOSITORY_READBACK_POLICY,
+    };
+    const result = JSON.stringify(data, null, 2);
+    return { content: [{ type: "text" as const, text: result }],
+      structuredContent: { result, data } };
+  }
   const snapshot = await refreshZesContinuationSnapshot();
   const decision = continuationIntentDecision(intent, snapshot.preflight);
   const data = {
@@ -808,7 +953,7 @@ export function registerZesContinuationPreflightTool(
     {
       title: "Refresh ZES continuation preflight",
       description:
-        "Invoke the fixed host-owned live ZES continuation route and return its product-computed action disposition. Use this before governed-main integration, repository publication, runtime takeover, or effect retry. It accepts no repository, credential, thread, DSN, command, or filesystem path. A positive classification revalidates supplied authority but never creates a writer lease, publication authorization, takeover authority, or effect-retry authority.",
+        "Read the host-selected fixed continuation profile. Repository mode returns current source-bound Cleanroom state, not runtime or effect authority; publication requires the candidate-bound scopePublicationPreflight in execution_scope_status, and unassessed write intents are not policy denials. Explicit legacy-runtime mode retains its product-computed dispositions. No repository, credential, thread, DSN, command or filesystem path is accepted. Neither profile grants writer, publication, takeover or retry authority.",
       inputSchema: {
         intent: z.enum([
           "inspect",

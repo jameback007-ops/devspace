@@ -281,9 +281,14 @@ candidate from trapping a frozen client in a direct-tool discovery dead end.
 For governed-checkout mutation, runtime deployment/takeover, runtime-state
 reliance, or exact material-effect reconciliation, a frozen client may consume
 the embedded projection as the read-only preflight; a fresh catalog may use the
-fixed direct continuation tool as an ergonomic alias. Neither route grants
-writer, takeover, retry, or effect authority, and the downstream effect gate
-must revalidate current authority immediately before mutation.
+fixed direct continuation tool as an ergonomic alias. The host-selected
+`repository` profile exposes the current source reader with status
+`repository_readback`; it is not the legacy product preflight and does not
+assess runtime or effect state. Its unassessed write intents are not policy
+denials. Neither route grants writer, takeover, retry, or effect authority;
+the downstream effect gate revalidates current authority before mutation.
+See [continuation profiles](continuation-profiles.md) when selecting or
+repairing the deployment-owned route.
 
 Treat top-level MCP tools as a versioned call ABI rather than an unbounded
 feature catalog. Keep the bootstrap names and their existing accepted input

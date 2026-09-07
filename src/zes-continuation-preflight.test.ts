@@ -1,7 +1,17 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { mkdtemp, rm, writeFile, symlink } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import test from "node:test";
 import {
   continuationIntentDecision,
+  fixedContinuationProfile,
+  invokeZesContinuationPreflight,
   isVerifiedDeepSubset,
+  readFixedRepositoryContinuation,
+  repositoryContinuationDecision,
+  ZES_CONTINUATION_INTENTS,
   ZesContinuationPreflightProjector,
   type ZesContinuationSnapshotReadback,
 } from "./zes-continuation-preflight.js";
@@ -21,6 +31,115 @@ const basePreflight = {
   runtime_reconciliation_scope:
     "runtime_takeover_effect_retry_or_runtime_state_reliance_only",
 };
+
+await test("explicit repository profile uses the native reader without inventing runtime authority", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "zes-repository-preflight-"));
+  const oldProfile = process.env.DEVSPACE_ZES_CONTINUATION_BACKEND;
+  const oldRoot = process.env.DEVSPACE_ZES_REPOSITORY_ROOT;
+  const restore = (name: string, value: string | undefined) => {
+    if (value === undefined) delete process.env[name];
+    else process.env[name] = value;
+  };
+  const source = "current: source\n";
+  const digest = createHash("sha256").update(source).digest("hex");
+  const native = () => ({
+    schema_version: "zes.cleanroom.repository-continuation.v1",
+    mode: "repository_only", read_only: true,
+    observed_at: new Date().toISOString(),
+    workspace: { path: directory, head: "a".repeat(40), dirty: true },
+    activeResearchMethod: { mode: "repository_source_bound",
+      runtimeMethodCapsuleClaimed: false,
+      sourceBindings: [{ path: "control.yaml", sha256: digest }] },
+  });
+  const reader = async (payload: unknown, exit = 0) => {
+    // Controlled fixture transport only: no model, provider or shared service.
+    const text = JSON.stringify(payload).replaceAll("'", "'\\''");
+    await writeFile(join(directory, "zes-continuation"),
+      `#!/bin/sh\n[ "$#" = 1 ] && [ "$1" = --summary ] || exit 64\nprintf '%s\\n' '${text}'\nexit ${exit}\n`,
+      { mode: 0o700 });
+  };
+  try {
+    process.env.DEVSPACE_ZES_CONTINUATION_BACKEND = "repository_only";
+    process.env.DEVSPACE_ZES_REPOSITORY_ROOT = directory;
+    await writeFile(join(directory, "control.yaml"), source);
+    await t.test("profile selection is explicit and invalid values do not fall back", async () => {
+      assert.equal(fixedContinuationProfile(), "repository_only");
+      delete process.env.DEVSPACE_ZES_REPOSITORY_ROOT;
+      assert.throws(() => fixedContinuationProfile(), /explicit_host_repository_root/);
+      process.env.DEVSPACE_ZES_REPOSITORY_ROOT = directory;
+      process.env.DEVSPACE_ZES_CONTINUATION_BACKEND = "unknown";
+      assert.throws(() => fixedContinuationProfile(), /unsupported_fixed_continuation_profile/);
+      process.env.DEVSPACE_ZES_CONTINUATION_BACKEND = "repository_only";
+    });
+    await t.test("all five intents preserve read-only, candidate and runtime distinctions", async () => {
+      await reader(native());
+      for (const intent of ZES_CONTINUATION_INTENTS) {
+        const response = await invokeZesContinuationPreflight(intent);
+        const data = response.structuredContent.data;
+        assert.equal(data.scope, "fixed-repository-continuation-readback");
+        assert.equal(data.decision.actionAllowed, intent === "inspect");
+        assert.equal(data.decision.newAuthorityGranted, false);
+        assert.equal(data.decision.policyDenialObserved, false);
+      }
+      assert.match(String(repositoryContinuationDecision("publish_repository").nextAction), /scopePublicationPreflight/);
+      assert.equal(repositoryContinuationDecision("runtime_takeover_or_effect_retry").disposition, "not_assessed");
+    });
+    await t.test("stable projection exposes repository state, not a fabricated legacy preflight", async () => {
+      await reader(native());
+      const projector = new ZesContinuationPreflightProjector();
+      await projector.warm();
+      const projected = await projector.project();
+      assert.equal(projected.status, "repository_readback");
+      assert.equal("preflight" in projected, false);
+      assert.equal("sourceExpiresAt" in projected, false);
+      if (projected.status === "repository_readback") {
+        assert.equal(projected.policy.runtimeStateObserved, false);
+        assert.equal(projected.policy.cacheUntilIsNotSourceOrAuthorityExpiry, true);
+      }
+    });
+    await t.test("nonzero reader exit is not successful source observation", async () => {
+      await reader(native(), 7);
+      await assert.rejects(readFixedRepositoryContinuation, /repository_continuation_failed:7/);
+    });
+    await t.test("wrong contract and workspace are rejected", async () => {
+      await reader({ ...native(), mode: "runtime" });
+      await assert.rejects(readFixedRepositoryContinuation, /invalid_repository_continuation_contract/);
+      await reader({ ...native(), workspace: { path: tmpdir(), head: "a".repeat(40) } });
+      await assert.rejects(readFixedRepositoryContinuation, /workspace_mismatch/);
+    });
+    await t.test("old or future observations are not fresh source readbacks", async () => {
+      for (const observed_at of ["2000-01-01T00:00:00Z", "2100-01-01T00:00:00Z"]) {
+        await reader({ ...native(), observed_at });
+        await assert.rejects(readFixedRepositoryContinuation, /stale_or_future/);
+      }
+    });
+    await t.test("missing and stale source bindings are rejected", async () => {
+      const payload = native();
+      payload.activeResearchMethod.sourceBindings = [];
+      await reader(payload);
+      await assert.rejects(readFixedRepositoryContinuation, /source_bindings_missing/);
+      await reader(native());
+      await writeFile(join(directory, "control.yaml"), "changed: source\n");
+      await assert.rejects(readFixedRepositoryContinuation, /source_binding_mismatch/);
+      await writeFile(join(directory, "control.yaml"), source);
+    });
+    await t.test("symlink escape cannot become a validated source binding", async () => {
+      const outside = `${directory}-outside.yaml`;
+      try {
+        await writeFile(outside, source);
+        await symlink(outside, join(directory, "escape.yaml"));
+        const payload = native();
+        payload.activeResearchMethod.sourceBindings[0].path = "escape.yaml";
+        await reader(payload);
+        await assert.rejects(readFixedRepositoryContinuation, /source_binding_mismatch/);
+      } finally { await rm(outside, { force: true }); }
+    });
+  } finally {
+    restore("DEVSPACE_ZES_CONTINUATION_BACKEND", oldProfile);
+    restore("DEVSPACE_ZES_REPOSITORY_ROOT", oldRoot);
+    await rm(directory, { recursive: true, force: true });
+  }
+});
 
 assert.deepEqual(
   continuationIntentDecision("inspect", basePreflight),
