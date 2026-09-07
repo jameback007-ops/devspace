@@ -28,6 +28,7 @@ interface Fixture {
   supervisor: ExecutionScopeIdentity;
   worker: ExecutionScopeIdentity;
   outsider: ExecutionScopeIdentity;
+  now(): number;
   advance(ms: number): void;
 }
 
@@ -85,6 +86,7 @@ async function fixture(
     supervisor,
     worker,
     outsider,
+    now: () => now,
     advance(ms: number) {
       now += ms;
     },
@@ -450,7 +452,7 @@ test("an implicit-TTL idempotent retry survives a later default-TTL change", asy
   const restarted = new ExecutionMailboxManager(
     { ...mailboxConfig, defaultTtlMs: 24 * 60 * 60 * 1_000 },
     context.stateDir,
-    { now: () => Date.parse("2026-08-17T04:00:00Z") },
+    { now: context.now },
   );
   t.after(() => restarted.close());
   const replay = restarted.send(context.supervisor, {
@@ -461,4 +463,5 @@ test("an implicit-TTL idempotent retry survives a later default-TTL change", asy
   });
   assert.equal(replay.idempotentReplay, true);
   assert.equal(replay.message.messageId, first.message.messageId);
+  assert.equal(replay.message.expiresAt, first.message.expiresAt);
 });
