@@ -28,6 +28,108 @@ const primaryTools = [
   "self_repository_publish",
 ];
 
+test("unobserved host catalog is not a missing tool or a server repair incident", () => {
+  const assessment = assessMcpPrimaryRecovery({
+    primaryFunctionalState: "healthy",
+    catalogStatus: "SERVER_CURRENT_CLIENT_UNKNOWN",
+    primaryRegisteredToolNames: primaryTools,
+    knownCallableToolNames: ["execution_scope_status"],
+    requiredCapabilityRefs: ["workspace_mutation", "process_continuation"],
+  });
+  assert.equal(assessment.state, "ATTEST_CLIENT_CATALOG");
+  assert.equal(assessment.primaryRepairRequired, false);
+  assert.equal(assessment.clientCatalogRepairRequired, false);
+  assert.equal(assessment.clientCatalogAttestationRequired, true);
+  assert.deepEqual(assessment.primary.missingRegisteredTools, []);
+  assert.deepEqual(assessment.primary.missingRequiredTools, []);
+  assert.deepEqual(assessment.primary.unobservedRequiredTools, [
+    "apply_patch", "exec_command", "open_workspace", "read", "write_stdin",
+  ]);
+  assert.equal(assessment.workMayContinue, false);
+});
+
+test("native research mode does not require a disabled research-cycle surface", () => {
+  const nativeTools = ["execution_scope_status", "research"];
+  const assessment = assessMcpPrimaryRecovery({
+    primaryFunctionalState: "healthy",
+    catalogStatus: "CURRENT",
+    primaryRegisteredToolNames: nativeTools,
+    clientObservedToolNames: nativeTools,
+    researchMode: "native",
+    requiredCapabilityRefs: ["research_freshness"],
+  });
+  assert.equal(assessment.state, "CONTINUE_PRIMARY");
+  assert.deepEqual(assessment.capabilities[0]?.requiredTools, ["research"]);
+  assert.deepEqual(assessment.primary.missingRegisteredTools, []);
+});
+
+test("native research with unknown host catalog requests observation, not server repair", () => {
+  const assessment = assessMcpPrimaryRecovery({
+    primaryFunctionalState: "healthy",
+    catalogStatus: "SERVER_CURRENT_CLIENT_UNKNOWN",
+    primaryRegisteredToolNames: ["execution_scope_status", "research"],
+    knownCallableToolNames: ["execution_scope_status"],
+    researchMode: "native",
+    requiredCapabilityRefs: ["research_freshness"],
+  });
+  assert.equal(assessment.state, "ATTEST_CLIENT_CATALOG");
+  assert.equal(assessment.primaryRepairRequired, false);
+  assert.deepEqual(assessment.primary.unobservedRequiredTools, ["research"]);
+});
+
+test("enabled research-cycle obligations cannot be discharged by native research alone", () => {
+  const assessment = assessMcpPrimaryRecovery({
+    primaryFunctionalState: "healthy",
+    catalogStatus: "CURRENT",
+    primaryRegisteredToolNames: ["execution_scope_status", "research"],
+    clientObservedToolNames: ["execution_scope_status", "research"],
+    researchMode: "cycle",
+    requiredCapabilityRefs: ["research_freshness"],
+  });
+  assert.equal(assessment.state, "DIAGNOSE_PRIMARY");
+  assert.ok(assessment.primary.missingRegisteredTools.includes("zes_research_cycle_open"));
+});
+
+test("unknown host catalog does not obstruct the stable readback already being returned", () => {
+  const assessment = assessMcpPrimaryRecovery({
+    primaryFunctionalState: "healthy",
+    catalogStatus: "SERVER_CURRENT_CLIENT_UNKNOWN",
+    primaryRegisteredToolNames: ["execution_scope_status"],
+    knownCallableToolNames: ["execution_scope_status"],
+    stableCapabilityRefs: ["zes.continuation.preflight.v2"],
+    requiredCapabilityRefs: ["bootstrap", "continuation_readback"],
+  });
+  assert.equal(assessment.state, "USE_STABLE_CONTROL_PLANE");
+  assert.equal(assessment.workMayContinue, true);
+  assert.equal(assessment.primary.clientCatalogAttested, false);
+});
+
+test("default bootstrap does not invent mission requirements", () => {
+  const assessment = assessMcpPrimaryRecovery({
+    primaryFunctionalState: "healthy",
+    catalogStatus: "SERVER_CURRENT_CLIENT_UNKNOWN",
+    primaryRegisteredToolNames: ["execution_scope_status"],
+    knownCallableToolNames: ["execution_scope_status"],
+  });
+  assert.equal(assessment.state, "CONTINUE_PRIMARY");
+  assert.deepEqual(assessment.requiredCapabilityRefs, ["bootstrap"]);
+});
+
+test("a real server tool deficit still prevents failback even with claimed current client names", () => {
+  const assessment = assessMcpPrimaryRecovery({
+    primaryFunctionalState: "healthy",
+    activeRoute: "fallback",
+    catalogStatus: "CURRENT",
+    primaryRegisteredToolNames: ["execution_scope_status"],
+    clientObservedToolNames: ["execution_scope_status", "research"],
+    researchMode: "native",
+    requiredCapabilityRefs: ["research_freshness"],
+  });
+  assert.equal(assessment.state, "DIAGNOSE_PRIMARY");
+  assert.deepEqual(assessment.primary.missingRegisteredTools, ["research"]);
+  assert.equal(assessment.workMayContinue, false);
+});
+
 test("stale partial client catalog repairs before fallback", () => {
   const assessment = assessMcpPrimaryRecovery({
     primaryFunctionalState: "healthy",

@@ -64,6 +64,50 @@ grant writer authority, authorize publication, or prove downstream effects.
 
 ## Probe and manifest generation
 
+### Recovery diagnosis is not a permission request
+
+The `execution_scope_status` recovery projection evaluates only the caller's
+declared `requiredCapabilityRefs`; omission evaluates bootstrap, not an inferred
+mission. A current server with no client inventory reports required tools as
+`unobservedRequiredTools`, not `missingRequiredTools`. Its next step is
+`ATTEST_CLIENT_CATALOG`, with `clientCatalogAttestationRequired=true`, not a
+server restart or a claim that the tool is absent. Observed partial inventories
+still reveal real missing names and request a bounded catalog refresh. Neither
+path authorizes a permission change or blocks unrelated capabilities.
+
+Read-only stable projections already returned by the successful bootstrap call
+remain usable without a complete client-catalog attestation. This does not
+attest missing direct tools, permit effect replay, or release publication gates.
+
+Research requirements follow the server's configured contract. When the research
+cycle is off, `research_freshness` checks the native `research` surface. When the
+cycle is enabled, its complete cycle tool requirements remain mandatory; native
+acquisition alone does not discharge cycle obligations. Registration is not a
+provider-health, evidence-quality or mission-completion claim.
+
+`permissionBoundaries` separates three independent layers without changing them:
+
+- Host app permission and host safety review are not observable by Nexus.
+- Direct DevSpace workspace execution does not traverse Codex approvals.
+- Native Codex approval applies only to Codex gateway operations. Its
+  `autoApproval=false` describes the relay's refusal to approve automatically,
+  not evidence that an observed host popup originated in Codex. Inspect an exact
+  native pending request before diagnosing that layer.
+
+Do not translate host Full Access into `approvalPolicy=never`, widen a sandbox,
+or reroute a safety-denied operation as a catalog repair. Record the exact tool,
+time, failing layer and error category. A host-side tool-not-found, an expired
+process session, an OS command-not-found and a permission denial require different
+repairs. A successful retry or another session's success does not prove that the
+original host failure has been repaired.
+
+Official context: OpenAI's [developer-mode app documentation](https://help.openai.com/en/articles/12584461-developer-mode-and-mcp-apps-in-chatgpt)
+and [sandbox/approval documentation](https://developers.openai.com/codex/sandboxing)
+describe host app lifecycle and Codex execution boundaries separately. Updating
+the server cannot attest that ChatGPT has refreshed its imported app metadata.
+
+### Generate the exact configured surface
+
 Run the probe with the same feature flags as the target service. The probe uses
 temporary state and an in-memory MCP transport, so it does not mutate the live
 workspace registry or require a network listener.

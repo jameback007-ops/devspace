@@ -219,6 +219,8 @@ export interface McpPrimaryRecoveryAssessmentInput {
   knownCallableToolNames?: readonly string[];
   stableCapabilityRefs?: readonly string[];
   requiredCapabilityRefs?: readonly McpWorkCapabilityRef[];
+  /** Server-selected research contract; native acquisition is not a cycle gate. */
+  researchMode?: "native" | "cycle";
   recovery?: McpPrimaryRecoveryRoutes;
   fallback?: McpFallbackObservation;
   safeTurnLandingAvailable?: boolean;
@@ -229,6 +231,7 @@ export interface McpCapabilityRecoveryView {
   requiredTools: string[];
   missingServerTools: string[];
   missingPrimaryTools: string[];
+  unobservedPrimaryTools: string[];
   stableProjectionSatisfied: boolean;
   qualityCritical: boolean;
   effectful: boolean;
@@ -244,6 +247,7 @@ export interface McpPrimaryRecoveryAssessment {
   workMayContinue: boolean;
   primaryRepairRequired: boolean;
   clientCatalogRepairRequired: boolean;
+  clientCatalogAttestationRequired: boolean;
   exactNextAction: string;
   reasonCodes: string[];
   requiredCapabilityRefs: McpWorkCapabilityRef[];
@@ -254,6 +258,8 @@ export interface McpPrimaryRecoveryAssessment {
     clientCatalogAttested: boolean;
     missingRegisteredTools: string[];
     missingRequiredTools: string[];
+    unobservedRequiredTools: string[];
+    researchMode: "native" | "cycle";
     stableSatisfiedCapabilityRefs: McpWorkCapabilityRef[];
   };
   recovery: {
@@ -301,6 +307,11 @@ export interface McpPrimaryRecoveryAssessment {
   };
   policy: {
     primaryRepairBeforeFallback: true;
+    assessmentScope: "declared_capabilities_only";
+    unobservedClientCatalogIsFailure: false;
+    catalogAttestationIsPermissionApproval: false;
+    capabilityAvailabilityIsProviderReadiness: false;
+    unrelatedCapabilitiesBlocked: false;
     fallbackIsLastResort: true;
     fallbackRequiresTypedQualityEquivalence: true;
     fallbackRequiresSurfaceFingerprintAndEvidence: true;
@@ -603,6 +614,7 @@ export function assessMcpPrimaryRecovery(
   // freshness assessor's CURRENT state establishes a complete descriptor
   // attestation. Names alone must not release capability-critical work.
   const clientCatalogAttested = input.catalogStatus === "CURRENT";
+  const clientNamesObserved = input.clientObservedToolNames !== undefined;
   const callableTools = new Set([
     ...(input.knownCallableToolNames ?? []),
     ...(input.clientObservedToolNames ?? []),
@@ -612,7 +624,10 @@ export function assessMcpPrimaryRecovery(
     input.fallback?.stableCapabilityRefs ?? [],
   );
   const capabilities = requiredCapabilityRefs.map((capabilityRef) => {
-    const definition = CAPABILITIES[capabilityRef];
+    const definition = capabilityRef === "research_freshness"
+      && input.researchMode === "native"
+      ? { ...CAPABILITIES[capabilityRef], requiredTools: ["research"] }
+      : CAPABILITIES[capabilityRef];
     const stableSatisfied = stableProjectionSatisfied(
       definition,
       stableRefs,
@@ -621,9 +636,13 @@ export function assessMcpPrimaryRecovery(
     const missingServerTools = stableSatisfied
       ? []
       : definition.requiredTools.filter((tool) => !registeredTools.has(tool));
-    const missingPrimaryTools = stableSatisfied
+    const unconfirmedTools = stableSatisfied
       ? []
       : definition.requiredTools.filter((tool) => !callableTools.has(tool));
+    // The primary cannot read the host's catalog. Missing observation is not
+    // evidence of missing tools and must not trigger refresh/repair escalation.
+    const missingPrimaryTools = clientNamesObserved ? unconfirmedTools : [];
+    const unobservedPrimaryTools = clientNamesObserved ? [] : unconfirmedTools;
     const fallbackStableSatisfied = stableProjectionSatisfied(
       definition,
       fallbackStableRefs,
@@ -637,6 +656,7 @@ export function assessMcpPrimaryRecovery(
       requiredTools: [...definition.requiredTools],
       missingServerTools,
       missingPrimaryTools,
+      unobservedPrimaryTools,
       stableProjectionSatisfied: stableSatisfied,
       qualityCritical: definition.qualityCritical,
       effectful: definition.effectful,
@@ -652,6 +672,16 @@ export function assessMcpPrimaryRecovery(
   );
   const missingRegisteredTools = uniqueSorted(
     capabilities.flatMap((view) => view.missingServerTools),
+  );
+  const unobservedPrimaryTools = uniqueSorted(
+    capabilities.flatMap((view) => view.unobservedPrimaryTools),
+  );
+  const allSatisfiedByStableProjection = capabilities.some(
+    (view) => view.stableProjectionSatisfied,
+  ) && capabilities.every(
+    (view) => view.stableProjectionSatisfied
+      || (view.capabilityRef === "bootstrap"
+        && callableTools.has("execution_scope_status")),
   );
   const recovery = input.recovery ?? {};
   const leaseState = recovery.recoveryLease ?? "unknown";
@@ -676,7 +706,9 @@ export function assessMcpPrimaryRecovery(
     input.primaryFunctionalState === "healthy"
     && input.activeRoute === "fallback"
     && input.catalogStatus === "CURRENT"
+    && missingRegisteredTools.length === 0
     && missingPrimaryTools.length === 0
+    && unobservedPrimaryTools.length === 0
   ) {
     decision = {
       state: "FAILBACK_PRIMARY",
@@ -830,25 +862,25 @@ export function assessMcpPrimaryRecovery(
       decision = fallbackDecision(input, capabilities);
     }
   } else if (
+    input.catalogStatus !== "CURRENT"
+    && allSatisfiedByStableProjection
+  ) {
+    decision = {
+      state: "USE_STABLE_CONTROL_PLANE",
+      route: "stable_control_plane",
+      workMayContinue: true,
+      exactNextAction:
+        "Use the exact read-only stable projection already returned by this call; an unobserved host catalog is not a server failure or a permission request. Direct effects retain their own gates.",
+      reasonCodes: ["required_capabilities_satisfied_by_stable_projection"],
+      admitted: false,
+      blockingFactors: [],
+      missingRequiredTools: [],
+    };
+  } else if (
     input.catalogStatus === "STALE_CLIENT"
     || missingPrimaryTools.length > 0
   ) {
-    const allSatisfiedByStableProjection = capabilities.every(
-      (view) => view.stableProjectionSatisfied,
-    );
-    if (allSatisfiedByStableProjection) {
-      decision = {
-        state: "USE_STABLE_CONTROL_PLANE",
-        route: "stable_control_plane",
-        workMayContinue: true,
-        exactNextAction:
-          "Use only the exact read-only stable control-plane projection for the required capability while catalog repair proceeds; do not infer availability of missing direct tools.",
-        reasonCodes: ["required_capabilities_satisfied_by_stable_projection"],
-        admitted: false,
-        blockingFactors: [],
-        missingRequiredTools: [],
-      };
-    } else if (
+    if (
       hostCatalogRefresh !== "unavailable"
       && attemptAvailable(
         recovery.catalogRefreshAttempts,
@@ -947,7 +979,7 @@ export function assessMcpPrimaryRecovery(
       decision = fallbackDecision(input, capabilities);
     }
   } else if (
-    !clientCatalogAttested
+    (!clientCatalogAttested || unobservedPrimaryTools.length > 0)
     && requiredCapabilityRefs.some((ref) => ref !== "bootstrap")
   ) {
     decision = {
@@ -955,7 +987,7 @@ export function assessMcpPrimaryRecovery(
       route: "none",
       workMayContinue: false,
       exactNextAction:
-        "Attest the client-observed complete tools/list fingerprint and tool names through the stable bootstrap before capability-critical work.",
+        "Observe and attest the client-visible complete tools/list fingerprint and tool names for the declared capability set. Unobserved tools are not missing tools; do not restart the server, request permission, or stop unrelated work solely for this observation gap.",
       reasonCodes: ["client_catalog_unobserved_for_capability_critical_work"],
       admitted: false,
       blockingFactors: [],
@@ -993,7 +1025,6 @@ export function assessMcpPrimaryRecovery(
     "WAIT_FOR_RECOVERY_OWNER",
   ].includes(decision.state);
   const clientCatalogRepairRequired = [
-    "ATTEST_CLIENT_CATALOG",
     "REFRESH_CLIENT_CATALOG",
   ].includes(decision.state)
     || input.catalogStatus === "STALE_CLIENT";
@@ -1006,6 +1037,7 @@ export function assessMcpPrimaryRecovery(
     workMayContinue: decision.workMayContinue,
     primaryRepairRequired,
     clientCatalogRepairRequired,
+    clientCatalogAttestationRequired: decision.state === "ATTEST_CLIENT_CATALOG",
     exactNextAction: decision.exactNextAction,
     reasonCodes: uniqueSorted(decision.reasonCodes),
     requiredCapabilityRefs,
@@ -1016,6 +1048,8 @@ export function assessMcpPrimaryRecovery(
       clientCatalogAttested,
       missingRegisteredTools,
       missingRequiredTools: missingPrimaryTools,
+      unobservedRequiredTools: unobservedPrimaryTools,
+      researchMode: input.researchMode ?? "cycle",
       stableSatisfiedCapabilityRefs,
     },
     recovery: {
@@ -1067,6 +1101,11 @@ export function assessMcpPrimaryRecovery(
     },
     policy: {
       primaryRepairBeforeFallback: true,
+      assessmentScope: "declared_capabilities_only",
+      unobservedClientCatalogIsFailure: false,
+      catalogAttestationIsPermissionApproval: false,
+      capabilityAvailabilityIsProviderReadiness: false,
+      unrelatedCapabilitiesBlocked: false,
       fallbackIsLastResort: true,
       fallbackRequiresTypedQualityEquivalence: true,
       fallbackRequiresSurfaceFingerprintAndEvidence: true,

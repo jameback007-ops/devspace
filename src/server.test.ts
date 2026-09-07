@@ -1816,6 +1816,43 @@ test("stable status repairs a partial catalog before admitting fallback or safe 
   );
 });
 
+test("native research recovery and permission diagnostics work through the existing status ABI", async (t) => {
+  const context = await fixture(t, {
+    toolMode: "codex",
+    codexNavigationTools: true,
+    runtimeCapabilities: true,
+    zesResearchCycleMode: "off",
+  });
+  const listed = await context.client.listTools();
+  const names = listed.tools.map((tool) => tool.name);
+  assert.ok(names.includes("research"));
+  assert.equal(names.includes("zes_research_cycle_open"), false);
+  const status = await context.client.callTool({
+    name: "execution_scope_status",
+    arguments: {
+      requiredCapabilityRefs: ["research_freshness", "workspace_mutation"],
+    },
+    _meta: { "openai/session": "native-research-recovery-regression" },
+  } as Parameters<Client["callTool"]>[0]);
+  const data = structuredData(status);
+  const recovery = data.stableControlPlane.capabilities.primaryMcpRecovery;
+  assert.equal(recovery.state, "ATTEST_CLIENT_CATALOG");
+  assert.equal(recovery.primaryRepairRequired, false);
+  assert.equal(recovery.clientCatalogRepairRequired, false);
+  assert.equal(recovery.primary.researchMode, "native");
+  assert.deepEqual(recovery.primary.missingRegisteredTools, []);
+  assert.deepEqual(recovery.primary.missingRequiredTools, []);
+  assert.ok(recovery.primary.unobservedRequiredTools.includes("research"));
+  assert.equal(data.permissionBoundaries.workspaceExecution.codexApprovalPolicyApplies, false);
+  assert.equal(data.permissionBoundaries.codex.autoApproval, false);
+  assert.equal(data.permissionBoundaries.codex.inheritsHostFullAccess, false);
+  assert.equal(data.permissionBoundaries.host.state, "not_observable_by_nexus");
+  // Diagnostics add response data, not a new tool, required argument or an
+  // approval downgrade that would require old hosts to rediscover the ABI.
+  const relisted = await context.client.listTools();
+  assert.deepEqual(relisted.tools, listed.tools);
+});
+
 test("one host scope can inspect another through bounded execution-scope tools", async (t) => {
   const context = await fixture(t, { toolMode: "codex", git: true });
   const workerSession = "worker-private-session-id";

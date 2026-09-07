@@ -1753,6 +1753,7 @@ function registerExecutionScopeTools(
         clientObservedToolNames,
         knownCallableToolNames: ["execution_scope_status"],
         stableCapabilityRefs,
+        researchMode: config.zesResearchCycle.mode === "off" ? "native" : "cycle",
         requiredCapabilityRefs:
           requiredCapabilityRefs as McpWorkCapabilityRef[] | undefined,
         recovery: {
@@ -1897,6 +1898,27 @@ function registerExecutionScopeTools(
           ? {}
           : { capabilityQuickstart }),
         ...status,
+        permissionBoundaries: {
+          host: {
+            state: "not_observable_by_nexus",
+            permissionOwner: "mcp_host",
+            fullAccessImpliesCatalogRefresh: false,
+            hostSafetyDenialsMustNotBeRetriedThroughAnotherRoute: true,
+          },
+          workspaceExecution: {
+            route: "devspace_local_process_execution",
+            codexApprovalPolicyApplies: false,
+            localUserAuthorityAndPathGatesUnchanged: true,
+          },
+          codex: {
+            scope: "codex_gateway_operations_only",
+            pendingRequestReadTool: "codex_approval_list",
+            autoApproval: false,
+            inheritsHostFullAccess: false,
+            emptyQueueDoesNotIdentifyHostApprovalCause: true,
+          },
+          catalogAttestationIsPermissionApproval: false,
+        },
         backendRuntime: backendRuntimeForStatus,
         ...(scope === undefined
           ? {}
