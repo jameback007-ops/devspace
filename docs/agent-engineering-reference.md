@@ -118,7 +118,11 @@ checkout, and worktree interchangeably.
 
 Skill search refreshes the queried workspace's catalog through the existing
 native loader. A legitimately reused checkout bootstrap also refreshes metadata;
-normal reads and commands do not rescan the library. Added or revised source can
+ordinary project reads and commands do not rescan the library. External reads
+and reads of known skill bodies revalidate current exposure and content-bound
+activation, so retirement or a revised body cannot keep an old external read
+grant merely because no new search occurred. Relative skill-body paths resolve
+against the owning workspace before activation. Added or revised source can
 therefore become discoverable without replacing the workspace or MCP connection.
 Native precedence and diagnostics remain with the loader, not a second registry.
 Previously selected on-demand skills remain exposed when still valid. At a

@@ -14,6 +14,7 @@ import { createManagedWorktree } from "./git-worktrees.js";
 import {
   AccessDeniedError,
   assertAllowedPath,
+  expandHomePath,
   isPathInsideRoot,
   resolveAllowedPath,
 } from "./roots.js";
@@ -395,10 +396,19 @@ export class WorkspaceRegistry {
   }
 
   resolveReadPath(workspace: Workspace, inputPath: string): WorkspaceReadPath {
+    const absolutePath = resolve(workspace.root, expandHomePath(inputPath));
+    // Revalidate skill exposure at the external read boundary, not on ordinary
+    // project reads. Reuse the same native loader and content-bound activation.
+    if (
+      !isPathInsideRoot(absolutePath, workspace.root) ||
+      workspace.skillCatalog.some((skill) => resolve(skill.filePath) === absolutePath)
+    ) {
+      this.refreshSkillsForWorkspace(workspace);
+    }
     const skillRead = resolveSkillReadPath(
       workspace.skills,
       workspace.activatedSkillDirs,
-      inputPath,
+      absolutePath,
     );
     if (skillRead) {
       return {
@@ -409,7 +419,7 @@ export class WorkspaceRegistry {
     }
 
     return {
-      absolutePath: this.resolvePath(workspace, inputPath),
+      absolutePath: this.resolvePath(workspace, absolutePath),
       readRoots: [workspace.root],
     };
   }

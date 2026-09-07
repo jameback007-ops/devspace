@@ -109,26 +109,22 @@ test(
 
 test("advertised home-relative skill paths resolve before workspace-relative files", async (t) => {
   const context = await fixture(t);
-  const opened = await context.registry.openWorkspace(context.root);
-  const baseDir = join(homedir(), ".devspace-skill-path-test");
+  const hostRoot = await mkdtemp(join(homedir(), ".devspace-skill-path-test-"));
+  t.after(() => rm(hostRoot, { recursive: true, force: true }));
+  const baseDir = join(hostRoot, "home-relative-skill");
   const filePath = join(baseDir, "SKILL.md");
-  opened.workspace.skills.push({
-    name: "home-relative-skill",
-    description: "Test home-relative skill path resolution.",
-    filePath,
-    baseDir,
-    sourceInfo: {} as never,
-    disableModelInvocation: false,
-    exposure: "on-demand",
-    workspaceMarkers: [],
-    autoAdvertised: false,
-  });
+  await writeSearchSkill(baseDir, "home-relative-skill", "Test home-relative skill path resolution.");
+  const registry = new WorkspaceRegistry({ ...context.config, devspaceSkillsDir: hostRoot });
+  const opened = await registry.openWorkspace(context.root);
+  registry.searchSkills(opened.workspace.id, "home-relative-skill");
 
   const promptPath = formatPathForPrompt(filePath);
   assert.match(promptPath, /^~\//);
-  const resolved = context.registry.resolveReadPath(opened.workspace, promptPath);
+  const resolved = registry.resolveReadPath(opened.workspace, promptPath);
   assert.equal(resolved.absolutePath, filePath);
   assert.equal(resolved.skillRead?.isSkillFile, true);
+  await rm(filePath);
+  assert.throws(() => registry.resolveReadPath(opened.workspace, promptPath), /outside/);
 });
 
 test("worktree opens require Git and create an isolated managed workspace", async (t) => {
@@ -245,6 +241,45 @@ test("skill refresh remains scoped to the queried workspace", async (t) => {
   assert.equal(context.registry.searchSkills(second.workspace.id, "fresh-scope-probe").length, 1);
   assert.equal(context.registry.searchSkills(first.workspace.id, "fresh-scope-probe").length, 0);
   assert.equal(first.workspace.activatedSkillDirs.size, 0);
+});
+
+test("external reference reads revalidate revised and disabled skills without another search", async (t) => {
+  const context = await fixture(t);
+  const hostRoot = join(context.outsideRoot, "read-freshness-skills");
+  const skillRoot = join(hostRoot, "read-freshness-probe");
+  const bodyPath = join(skillRoot, "SKILL.md");
+  const referencePath = join(skillRoot, "reference.md");
+  await writeSearchSkill(skillRoot, "read-freshness-probe", "Read freshness procedure.");
+  await writeFile(referencePath, "Public fixture reference.\n");
+  const registry = new WorkspaceRegistry({ ...context.config, devspaceSkillsDir: hostRoot });
+  const { workspace } = await registry.openWorkspace(context.root);
+  registry.searchSkills(workspace.id, "read-freshness-probe");
+  registry.markReadPathLoaded(workspace, registry.resolveReadPath(workspace, bodyPath));
+  assert.equal(registry.resolveReadPath(workspace, referencePath).skillRead?.isSkillFile, false);
+
+  await writeSearchSkill(skillRoot, "read-freshness-probe", "Read freshness procedure.", "Revised body.");
+  assert.throws(() => registry.resolveReadPath(workspace, referencePath), /outside/);
+  registry.markReadPathLoaded(workspace, registry.resolveReadPath(workspace, bodyPath));
+  assert.equal(registry.resolveReadPath(workspace, referencePath).skillRead?.isSkillFile, false);
+
+  await writeFile(bodyPath, "---\nname: read-freshness-probe\ndescription: Read freshness procedure.\ndisable-model-invocation: true\n---\nDisabled.\n");
+  assert.throws(() => registry.resolveReadPath(workspace, referencePath), /outside/);
+  assert.throws(() => registry.resolveReadPath(workspace, bodyPath), /outside/);
+});
+
+test("ordinary project reads do not reload skill catalogs and relative skill bodies activate correctly", async (t) => {
+  const context = await fixture(t);
+  const { workspace } = await context.registry.openWorkspace(context.root);
+  const initialCatalog = workspace.skillCatalog;
+  await writeSearchSkill(join(context.root, ".agents", "skills", "relative-read-probe"), "relative-read-probe", "Relative skill procedure.");
+  context.registry.resolveReadPath(workspace, "nested/file.txt");
+  assert.equal(workspace.skillCatalog, initialCatalog);
+  assert.equal(workspace.skillCatalog.some((skill) => skill.name === "relative-read-probe"), false);
+  context.registry.searchSkills(workspace.id, "relative-read-probe");
+  const body = context.registry.resolveReadPath(workspace, ".agents/skills/relative-read-probe/SKILL.md");
+  assert.equal(body.skillRead?.isSkillFile, true);
+  context.registry.markReadPathLoaded(workspace, body);
+  assert.equal(workspace.activatedSkillDirs.has(join(context.root, ".agents", "skills", "relative-read-probe")), true);
 });
 
 async function writeSearchSkill(baseDir: string, name: string, description: string, body = "Initial body."): Promise<void> {
