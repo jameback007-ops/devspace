@@ -530,7 +530,10 @@ class WorkspaceRegistry:
             _is_relative_to(candidate, root) for root in self._config.allowed_roots
         ):
             allowed = ", ".join(str(root) for root in self._config.allowed_roots)
-            raise BridgeError(f"workspace path is outside allowed roots: {allowed}")
+            raise BridgeError(
+                f"workspace path is outside allowed roots: requested={candidate}; "
+                f"allowed={allowed}"
+            )
         return candidate
 
     def _get(self, workspace_id: str) -> WorkspaceHandle:

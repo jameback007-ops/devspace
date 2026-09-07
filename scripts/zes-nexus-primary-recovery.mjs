@@ -16,7 +16,7 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
-const SERVICE_NAME = "devspace-zesnexus.service";
+const DEFAULT_SERVICE_NAME = "devspace-zesnexus.service";
 const DEFAULT_READY_URL = "http://127.0.0.1:7677/readyz";
 const DEFAULT_HOST_HEADER = "mcp.zesnexus.com";
 const DEFAULT_STATE_ROOT = "/run/devspace-zesnexus-primary-recovery";
@@ -85,7 +85,15 @@ function safeHostHeader(value) {
   return selected;
 }
 
-function systemdUnitNames(value) {
+function primaryServiceName(value) {
+  const selected = value?.trim() || DEFAULT_SERVICE_NAME;
+  if (!/^devspace-zesnexus(?:-[a-z0-9][a-z0-9-]{0,80})?(?:@[a-z0-9-]{1,40})?\.service$/.test(selected)) {
+    throw new Error("Primary recovery service must be a deployment-owned Nexus unit.");
+  }
+  return selected;
+}
+
+function systemdUnitNames(value, primaryUnit) {
   const selected = value?.trim()
     ? value.split(/[\s,]+/)
     : DEFAULT_CONFLICTING_RESTART_UNITS;
@@ -94,7 +102,7 @@ function systemdUnitNames(value) {
     if (!/^[A-Za-z0-9_.@:-]{1,256}\.(?:service|timer)$/.test(unit)) {
       throw new Error(`Conflicting recovery unit name is invalid: ${unit}`);
     }
-    if (unit === SERVICE_NAME) {
+    if (unit === primaryUnit) {
       throw new Error(
         "The primary service cannot be its own conflicting recovery owner.",
       );
@@ -104,6 +112,7 @@ function systemdUnitNames(value) {
 }
 
 export function loadRecoveryPolicy(environment = process.env) {
+  const serviceName = primaryServiceName(environment.ZES_NEXUS_PRIMARY_SERVICE_NAME);
   const stateRoot = absolutePath(
     environment.ZES_NEXUS_PRIMARY_RECOVERY_STATE_ROOT,
     DEFAULT_STATE_ROOT,
@@ -126,13 +135,14 @@ export function loadRecoveryPolicy(environment = process.env) {
   );
   return {
     schemaVersion: "zes.nexus-primary-recovery-policy.v1",
-    serviceName: SERVICE_NAME,
+    serviceName,
     readyUrl: readyUrl(environment.ZES_NEXUS_PRIMARY_READY_URL),
     hostHeader: safeHostHeader(
       environment.ZES_NEXUS_PRIMARY_HOST_HEADER,
     ),
     stateRoot,
-    statePath: join(stateRoot, "state.json"),
+    statePath: join(stateRoot, serviceName === DEFAULT_SERVICE_NAME
+      ? "state.json" : `state-${serviceName}.json`),
     leaseRoot,
     leasePath: join(leaseRoot, "owner.lock"),
     receiptRoot: absolutePath(
@@ -178,6 +188,7 @@ export function loadRecoveryPolicy(environment = process.env) {
     ),
     conflictingRestartUnits: systemdUnitNames(
       environment.ZES_NEXUS_PRIMARY_RECOVERY_CONFLICTING_RESTART_UNITS,
+      serviceName,
     ),
   };
 }
@@ -745,11 +756,11 @@ async function probePrimary(policy) {
   }
 }
 
-async function serviceState() {
+async function serviceState(serviceName) {
   try {
     const result = await execFileAsync(
       "/usr/bin/systemctl",
-      ["is-active", SERVICE_NAME],
+      ["is-active", serviceName],
       { timeout: 5_000, maxBuffer: 16_384 },
     );
     return result.stdout.trim() || "unknown";
@@ -977,7 +988,7 @@ async function main() {
     const [probe, observedServiceState, competingRestartOwners] =
       await Promise.all([
       probePrimary(policy),
-      serviceState(),
+      serviceState(policy.serviceName),
       activeSystemdUnits(policy.conflictingRestartUnits),
     ]);
     const basePlan = planPrimaryRecovery({
@@ -1107,7 +1118,7 @@ async function main() {
       recoveryOwnerObservation,
       effect: {
         state: "prepared",
-        serviceName: SERVICE_NAME,
+        serviceName: policy.serviceName,
         operation: "restart",
       },
       policy: {
@@ -1132,7 +1143,7 @@ async function main() {
     try {
       await execFileAsync(
         "/usr/bin/systemctl",
-        ["restart", SERVICE_NAME],
+        ["restart", policy.serviceName],
         { timeout: 60_000, maxBuffer: 64 * 1_024 },
       );
     } catch (error) {
@@ -1147,7 +1158,7 @@ async function main() {
       effect: restartError
         ? {
             state: "failed",
-            serviceName: SERVICE_NAME,
+            serviceName: policy.serviceName,
             operation: "restart",
             errorDigestSha256: createHash("sha256")
               .update(
@@ -1161,12 +1172,12 @@ async function main() {
         : verification.verified
           ? {
               state: "terminal_succeeded",
-              serviceName: SERVICE_NAME,
+              serviceName: policy.serviceName,
               operation: "restart",
             }
           : {
               state: "postcondition_failed",
-              serviceName: SERVICE_NAME,
+              serviceName: policy.serviceName,
               operation: "restart",
             },
       verification: {

@@ -523,6 +523,9 @@ export class TurnContinuityManager {
   private readonly operationalRefreshIntervalMs: number | false;
   private operationalRefreshTimer?: NodeJS.Timeout;
   private nextPruneAtMs = 0;
+  // Local receipt of a host boundary, not durable task/writer ownership. A
+  // standby process opening the same database has observed none of its scopes.
+  private readonly locallyObservedScopes = new Map<string, number>();
 
   constructor(
     readonly config: TurnContinuityConfig,
@@ -1472,6 +1475,7 @@ export class TurnContinuityManager {
       clearInterval(this.operationalRefreshTimer);
       this.operationalRefreshTimer = undefined;
     }
+    this.locallyObservedScopes.clear();
     this.database.close();
   }
 
@@ -1497,6 +1501,7 @@ export class TurnContinuityManager {
     nowMs: number,
     restartSealedSameBoundary: boolean,
   ): HorizonRow | undefined {
+    this.locallyObservedScopes.set(identity.scopeRef, nowMs);
     const turnRef = metadata.identity?.turnRef;
     const deadlineAtMs = metadata.deadlineAtMs;
     if (!turnRef && deadlineAtMs === undefined) return undefined;
@@ -1710,6 +1715,11 @@ export class TurnContinuityManager {
       this.config.capsuleRefreshAfterMs * 2,
       this.config.staleRunningProcessMs * 2,
     );
+    for (const [scopeRef, observedAt] of this.locallyObservedScopes) {
+      if (observedAt < nowMs - activeLookbackMs) {
+        this.locallyObservedScopes.delete(scopeRef);
+      }
+    }
     const rows = this.database.sqlite
       .prepare(`
         select * from execution_turn_horizons
@@ -1723,12 +1733,32 @@ export class TurnContinuityManager {
       ) as HorizonRow[];
     for (const row of rows) {
       try {
-        this.refreshLandingEnvelopeIfMaterial(
-          row.scope_ref,
-          row,
-          nowMs,
-          "background_observation",
-        );
+        const observedAt = this.locallyObservedScopes.get(row.scope_ref);
+        if (observedAt === undefined) continue;
+        // Re-read and update atomically. Another backend may have handled the
+        // scope since this process last saw it. Its process-local observations
+        // cannot be replaced by a timer on a draining or cold backend.
+        this.database.sqlite.transaction(() => {
+          const current = this.getHorizon(row.scope_ref);
+          if (!current || current.last_activity_at_ms > observedAt) return;
+          const existing = this.latestLandingEnvelopeForScope(row.scope_ref);
+          const value = existing
+            ? parseOptionalRecordJson(existing.envelope_json)
+            : undefined;
+          const existingBackend = value && isRecord(value.backend)
+            ? value.backend.instanceRef
+            : undefined;
+          const assessment = this.assessInstability(row.scope_ref, current, nowMs);
+          if (existingBackend !== undefined
+            && existingBackend !== assessment.backend?.instanceRef) return;
+          this.refreshLandingEnvelopeIfMaterial(
+            row.scope_ref,
+            current,
+            nowMs,
+            "background_observation",
+            assessment,
+          );
+        }).immediate();
       } catch {
         // One stale or partially migrated scope must not prevent bounded
         // refresh of the remaining active horizons.

@@ -264,6 +264,67 @@ test("the background observer persists a landing envelope when timing becomes ma
   );
 });
 
+test("a cold backend sharing the state directory cannot rewrite another backend's landing envelope", async (t) => {
+  const stateDir = await mkdtemp(join(tmpdir(), "devspace-landing-shared-cold-"));
+  let now = 2_300_000;
+  const makeManager = (instanceRef: string) => new TurnContinuityManager(config, stateDir, {
+    now: () => now,
+    operationalRefreshIntervalMs: false,
+    operationalObservation: () => ({ backend: { instanceRef } }),
+  });
+  const active = makeManager("active-backend");
+  const standby = makeManager("standby-backend");
+  const identity = executionScopeIdentity({ "openai/session": "shared-state-cold-scope" });
+  assert.ok(identity);
+  t.after(async () => {
+    active.close();
+    standby.close();
+    await rm(stateDir, { recursive: true, force: true });
+  });
+  active.begin(identity, {}, { idempotencyKey: "cold-turn", reason: "new_turn" });
+  now += config.awarenessAfterMs;
+  active.refreshOperationalLandingState();
+  const before = active.landingProjectionForScope(identity.scopeRef).operationalEnvelope;
+  assert.ok(before);
+  // A read-only peer inspection is not evidence this process handled the scope.
+  standby.landingProjectionForScope(identity.scopeRef);
+  standby.refreshOperationalLandingState();
+  assert.deepEqual(active.landingProjectionForScope(identity.scopeRef).operationalEnvelope, before);
+});
+
+test("a previously active background observer cannot overwrite a scope after another backend handles it", async (t) => {
+  const stateDir = await mkdtemp(join(tmpdir(), "devspace-landing-shared-handoff-"));
+  let now = 2_350_000;
+  const makeManager = (instanceRef: string) => new TurnContinuityManager(config, stateDir, {
+    now: () => now,
+    operationalRefreshIntervalMs: false,
+    operationalObservation: () => ({ backend: { instanceRef } }),
+  });
+  const old = makeManager("old-backend");
+  const current = makeManager("current-backend");
+  const identity = executionScopeIdentity({ "openai/session": "shared-state-handoff-scope" });
+  assert.ok(identity);
+  t.after(async () => {
+    old.close();
+    current.close();
+    await rm(stateDir, { recursive: true, force: true });
+  });
+  old.observeToolFinish(identity, {}, "read", {}, true);
+  now += config.awarenessAfterMs;
+  old.refreshOperationalLandingState();
+  current.observeToolFinish(identity, {}, "read", {}, true);
+  const afterHandoff = current.landingProjectionForScope(identity.scopeRef).operationalEnvelope;
+  assert.ok(afterHandoff);
+  old.refreshOperationalLandingState();
+  assert.deepEqual(current.landingProjectionForScope(identity.scopeRef).operationalEnvelope, afterHandoff);
+  // Even an explicit same-timestamp status boundary can establish a new
+  // observer; the other timer must not ping-pong the backend identity back.
+  old.status(identity, {});
+  const afterDirectStatus = old.landingProjectionForScope(identity.scopeRef).operationalEnvelope;
+  current.refreshOperationalLandingState();
+  assert.deepEqual(old.landingProjectionForScope(identity.scopeRef).operationalEnvelope, afterDirectStatus);
+});
+
 test("a turn-boundary capsule seals the epoch and the next non-control tool resumes the same mission in a fresh epoch", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "devspace-sealed-turn-test-"));
   const stateDir = join(root, ".state");

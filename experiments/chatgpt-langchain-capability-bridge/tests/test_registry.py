@@ -94,8 +94,10 @@ def test_workspace_must_be_under_allowed_root(tmp_path: Path) -> None:
     denied.mkdir()
     registry = make_registry(allowed)
 
-    with pytest.raises(BridgeError, match="outside allowed roots"):
+    with pytest.raises(BridgeError, match="outside allowed roots") as error:
         registry.open(str(denied))
+    assert f"requested={denied.resolve()}" in str(error.value)
+    assert f"allowed={allowed.resolve()}" in str(error.value)
 
 
 def test_same_root_supports_distinct_workstream_handles(tmp_path: Path) -> None:

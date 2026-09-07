@@ -505,6 +505,24 @@ test("unchanged recovery states suppress duplicate durable receipts", () => {
   );
 });
 
+test("recovery binds a deployment-selected Nexus service and isolates its incident counters", () => {
+  const policy = loadRecoveryPolicy({
+    ZES_NEXUS_PRIMARY_SERVICE_NAME: "devspace-zesnexus-skill-refresh-r1.service",
+    ZES_NEXUS_PRIMARY_READY_URL: "http://127.0.0.1:7683/readyz",
+  });
+  assert.equal(policy.serviceName, "devspace-zesnexus-skill-refresh-r1.service");
+  assert.equal(policy.readyUrl.port, "7683");
+  assert.notEqual(policy.statePath, loadRecoveryPolicy({}).statePath);
+  assert.equal(policy.effectsEnabled, false);
+  for (const unit of ["ssh.service", "--all", "devspace-zesnexus.service;reboot"])
+    assert.throws(() => loadRecoveryPolicy({ ZES_NEXUS_PRIMARY_SERVICE_NAME: unit }));
+  assert.throws(() => loadRecoveryPolicy({
+    ZES_NEXUS_PRIMARY_SERVICE_NAME: "devspace-zesnexus-skill-refresh-r1.service",
+    ZES_NEXUS_PRIMARY_RECOVERY_CONFLICTING_RESTART_UNITS:
+      "devspace-zesnexus-skill-refresh-r1.service",
+  }));
+});
+
 test("effects-disabled policy never restarts the service", () => {
   const plan = planPrimaryRecovery({
     probe: failedProbe(),
