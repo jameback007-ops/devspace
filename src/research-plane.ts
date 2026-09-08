@@ -54,6 +54,12 @@ export interface ResearchOperateInput {
   maxResults?: number;
   maxCharacters?: number;
   responseMode?: "inline" | "reference";
+  /**
+   * Presentation-only opt-in handled by the MCP adapter. Retained captures are
+   * internal references by default so ordinary research does not surface a
+   * host attachment/resource boundary.
+   */
+  surfaceResourceLink?: boolean;
   previewCharacters?: number;
   captureRef?: string;
   section?: "manifest" | "text" | "structured" | "raw";
@@ -555,6 +561,9 @@ export class ResearchPlane {
       ...this.manifest(),
       delivery: { captureAvailable: Boolean(this.captures), defaultMode: "inline",
         referenceMode: "retain_native_parsed_response_before_normalization",
+        referenceSurface: "internal_capture_ref_by_default",
+        hostResourceLinkDefault: false,
+        hostResourceLinkOptIn: "surfaceResourceLink=true with responseMode=reference",
         captureRead: "manifest_text_structured_or_raw_unicode_window_without_provider_call" },
     };
     if (input.action === "probe") {

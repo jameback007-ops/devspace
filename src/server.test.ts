@@ -866,8 +866,13 @@ test("turn continuity is advisory-only and recovery capsules detect later worksp
     (researchTool?.inputSchema as Record<string, any>).properties.responseMode.enum,
     ["inline", "reference"],
   );
+  assert.equal(
+    (researchTool?.inputSchema as Record<string, any>).properties.surfaceResourceLink.type,
+    "boolean",
+  );
   const captureManifest = await context.client.callTool({name: "research", arguments: {action: "manifest"}});
   assert.equal((captureManifest.structuredContent as any).data.delivery.captureAvailable, true);
+  assert.equal((captureManifest.structuredContent as any).data.delivery.hostResourceLinkDefault, false);
   const templates = await context.client.listResourceTemplates();
   assert.ok(templates.resourceTemplates.some((r) => r.uriTemplate === "zes-research://capture/{captureRef}"));
   assert.ok((researchTool?.inputSchema as Record<string, any>).properties.captureRef);

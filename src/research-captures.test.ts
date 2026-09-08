@@ -171,7 +171,7 @@ async function withNativeMcp(run: (f: any) => Promise<void>) {
   });
 }
 
-test('actual MCP registration returns resource link, retains all20 results and reads tail without provider replay', async () => {
+test('actual MCP registration keeps reference mode internal by default, retains all20 results and reads tail without provider replay', async () => {
   await withNativeMcp(async ({reader, payload, getCalls}: any) => {
     const result = await reader.callTool({name: 'research', arguments: {action: 'open_world_search', query: 'fixture', maxResults: 20, responseMode: 'reference', previewCharacters: 300}});
     assert.notEqual(result.isError, true);
@@ -180,8 +180,8 @@ test('actual MCP registration returns resource link, retains all20 results and r
     assert.equal(data.result.capture.contentBlocks, 20);
     assert.ok(Array.from(data.result.text).length <= 300);
     const linked = result.content.find((b: any) => b.type === 'resource_link');
-    assert.ok(linked);
-    const full = await reader.readResource({uri: linked.uri});
+    assert.equal(linked, undefined);
+    const full = await reader.readResource({uri: data.result.capture.uri});
     assert.deepEqual(JSON.parse(full.contents[0].text).result, payload);
     const text = providerText(payload);
     const location = Array.from(text.slice(0, text.indexOf('SOURCE-20'))).length;
@@ -195,6 +195,30 @@ test('actual MCP registration returns resource link, retains all20 results and r
       section: 'structured', length: 3000}});
     assert.deepEqual(JSON.parse(structured.structuredContent.data.text), payload.structuredContent);
     assert.equal(getCalls(), 1);
+  });
+});
+
+test('resource link is emitted only by explicit host-surface opt-in', async () => {
+  await withNativeMcp(async ({reader, payload, getCalls}: any) => {
+    const result = await reader.callTool({name: 'research', arguments: {action: 'open_world_search', query: 'fixture', maxResults: 20,
+      responseMode: 'reference', surfaceResourceLink: true, previewCharacters: 300}});
+    assert.notEqual(result.isError, true);
+    assert.equal(getCalls(), 1);
+    const linked = result.content.find((b: any) => b.type === 'resource_link');
+    assert.ok(linked);
+    assert.equal(linked.uri, result.structuredContent.data.result.capture.uri);
+    const full = await reader.readResource({uri: linked.uri});
+    assert.deepEqual(JSON.parse(full.contents[0].text).result, payload);
+  });
+});
+
+test('host-surface opt-in is rejected without retained reference mode', async () => {
+  await withNativeMcp(async ({reader, getCalls}: any) => {
+    const result = await reader.callTool({name: 'research', arguments: {action: 'open_world_search', query: 'fixture', maxResults: 20,
+      surfaceResourceLink: true}});
+    assert.equal(result.isError, true);
+    assert.match(result.structuredContent.result, /surfaceResourceLink requires responseMode=reference/);
+    assert.equal(getCalls(), 0);
   });
 });
 
