@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { setTimeout as delay } from "node:timers/promises";
 import { ProcessOutputLog } from "./process-output-log.js";
-import { ProcessSessionManager, type ProcessSnapshot } from "./process-sessions.js";
+import { ProcessInputError, ProcessSessionManager, type ProcessSnapshot } from "./process-sessions.js";
 
 const command = (code: string) => `${JSON.stringify(process.execPath)} -e ${JSON.stringify(code)}`;
 const input = (snapshot: ProcessSnapshot) => ({
@@ -204,4 +206,101 @@ test("empty process completion wakes observers without requiring output", async 
     assert.equal(page.wakeReason, "exit");
     assert.equal(page.outputComplete, true);
   }
+});
+
+test("invalid process limits are rejected before creating a child", async (t) => {
+  for (const field of ["yieldTimeMs", "maxOutputTokens"] as const) {
+    for (const value of [-1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      await t.test(`${field}=${value}`, async (t) => {
+        const manager = new ProcessSessionManager();
+        t.after(() => manager.shutdown());
+        await assert.rejects(manager.start({
+          workspaceId: "replay-test", cwd: process.cwd(),
+          command: command("process.stdin.resume();setTimeout(()=>process.exit(0),1000)"),
+          yieldTimeMs: 0, [field]: value,
+        }), /non-negative/);
+        assert.deepEqual(manager.inspect(), [], "a rejected request must not leave an unreturned child");
+      });
+    }
+  }
+});
+
+test("invalid process write limits cannot deliver stdin before rejecting", async (t) => {
+  for (const field of ["yieldTimeMs", "maxOutputTokens"] as const) {
+    await t.test(field, async (t) => {
+      const manager = new ProcessSessionManager();
+      t.after(() => manager.shutdown());
+      const running = await start(manager,
+        "require('readline').createInterface({input:process.stdin}).on('line',line=>{process.stdout.write(line+'\\n',()=>{if(line==='BARRIER')process.exit(0)})});setTimeout(()=>process.exit(2),3000)", 0);
+      await assert.rejects(manager.write({
+        workspaceId: "replay-test", sessionId: running.sessionId!,
+        chars: "UNEXPECTED_SIDE_EFFECT\n", yieldTimeMs: 0, [field]: -1,
+      }), /non-negative/);
+      const barrier = await manager.write({
+        workspaceId: "replay-test", sessionId: running.sessionId!, chars: "BARRIER\n", yieldTimeMs: 2000,
+      });
+      assert.equal(barrier.running, false);
+      assert.equal(barrier.output, "BARRIER\n", "rejected input must never reach the child");
+    });
+  }
+});
+
+test("stdin pipe errors cannot crash the manager host or corrupt retained output", {
+  skip: process.platform === "win32" ? "native fd-close fixture uses a POSIX exec shell" : false,
+  timeout: 10_000,
+}, async () => {
+  // Run the manager in a disposable process: the original unhandled EPIPE
+  // terminates Node itself and cannot be caught by an in-process assertion.
+  const fixture = "require('fs').closeSync(0);console.log('STDIN_CLOSED');setTimeout(()=>process.exit(0),1500)";
+  const childCommand = `exec ${command(fixture)}`;
+  const driver = `
+    import assert from 'node:assert/strict';
+    import { ProcessSessionManager } from './src/process-sessions.ts';
+    const manager = new ProcessSessionManager();
+    try {
+      const running = await manager.start({workspaceId:'pipe-fixture',cwd:process.cwd(),command:${JSON.stringify(childCommand)},yieldTimeMs:0});
+      const observation = {workspaceId:'pipe-fixture',sessionId:running.outputSessionId,processRef:running.processRef,waitTimeMs:2000};
+      const ready = await manager.readOutput(observation);
+      assert.equal(ready.output,'STDIN_CLOSED\\n');
+      await assert.rejects(manager.write({workspaceId:'pipe-fixture',sessionId:running.sessionId,chars:'bounded-fixture\\n',yieldTimeMs:50}),{name:'ProcessInputError',code:'EPIPE'});
+      const replay = await manager.readOutput({...observation,waitTimeMs:0});
+      assert.equal(replay.output,ready.output);
+      assert.equal(replay.outputDigestSha256,ready.outputDigestSha256);
+      assert.equal(replay.stdinError.code,'EPIPE');
+      assert.equal(replay.stdinError.delivery,'unknown');
+      assert.equal(manager.inspect()[0].running,true);
+      await assert.rejects(manager.write({workspaceId:'pipe-fixture',sessionId:running.sessionId,chars:'not-replayed\\n'}),{name:'ProcessInputError',code:'EPIPE'});
+      const stopped = await manager.write({workspaceId:'pipe-fixture',sessionId:running.sessionId,chars:'\\u0003',yieldTimeMs:2000});
+      assert.equal(stopped.running,false);
+      const other = await manager.start({workspaceId:'pipe-fixture',cwd:process.cwd(),command:${JSON.stringify(command("console.log('UNRELATED_OK')"))},yieldTimeMs:2000});
+      assert.equal(other.output,'UNRELATED_OK\\n');
+      assert.equal(other.stdinError,undefined);
+      console.log('HOST_SURVIVED_PIPE_FAILURE');
+    } finally { manager.shutdown(); }
+  `;
+  const result = await promisify(execFile)(process.execPath,
+    ["--import", "tsx", "--input-type=module", "--eval", driver],
+    { cwd: process.cwd(), timeout: 8000, maxBuffer: 128_000 });
+  assert.match(result.stdout, /HOST_SURVIVED_PIPE_FAILURE/);
+});
+
+test("backpressured stdin retains bounded interaction yield without waiting for drain", async (t) => {
+  const manager = new ProcessSessionManager();
+  t.after(() => manager.shutdown());
+  const running = await start(manager, "setTimeout(()=>process.exit(0),3000)", 0);
+  const before = performance.now();
+  const snapshot = await manager.write({
+    workspaceId: "replay-test", sessionId: running.sessionId!,
+    chars: "x".repeat(1024 * 1024), yieldTimeMs: 5,
+  });
+  assert.equal(snapshot.running, true);
+  assert.ok(performance.now() - before < 1000, "must not wait indefinitely for a child that does not read");
+});
+
+test("stdin failure projection retains only a bounded native code, not private error content", () => {
+  const error = new ProcessInputError(Object.assign(new Error("secret-stdin-content"), { code: "EPIPE" }));
+  assert.equal(error.code, "EPIPE");
+  assert.doesNotMatch(error.message, /secret-stdin-content/);
+  assert.match(error.message, /partial/);
+  assert.equal(new ProcessInputError({ code: "unsafe code with payload" }).code, "STDIN_WRITE_FAILED");
 });

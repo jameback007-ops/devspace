@@ -7,7 +7,7 @@ import test from "node:test";
 import { promisify } from "node:util";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { ExecutionScopeManager } from "./execution-observability.js";
-import { ProcessSessionManager } from "./process-sessions.js";
+import { ProcessInputError, ProcessSessionManager } from "./process-sessions.js";
 import {
   executionScopeIdentity,
   executorTurnMetadata,
@@ -56,6 +56,12 @@ test("negative operation outcomes do not invent transport or turn loss", async (
   const cases = [
     { name: "actual ENOENT repeated", outcome: "error" as const, error: missing,
       count: 4, expected: "normal", evidence: "operation" },
+    { name: "typed stdin pipe failure is local operation evidence", outcome: "error" as const,
+      error: new ProcessInputError(Object.assign(new Error("private-input-not-retained"), { code: "EPIPE" })),
+      count: 4, expected: "normal", evidence: "operation" },
+    { name: "unscoped native pipe failure still carries transport evidence", outcome: "error" as const,
+      error: Object.assign(new Error("transport fixture"), { code: "EPIPE" }),
+      count: 1, expected: "degraded", evidence: "transport" },
     { name: "policy denial repeated", outcome: "blocked" as const,
       error: Object.assign(new Error("owned fixture denial"), { code: "EACCES" }),
       count: 4, expected: "normal", evidence: "policy" },

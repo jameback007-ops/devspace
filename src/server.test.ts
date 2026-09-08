@@ -469,6 +469,40 @@ test("process_output is additive read-only replay through actual MCP, with retai
   assert.equal((invalid as { isError?: boolean }).isError, true);
 });
 
+test("native MCP stdin failure stays local and the same client can still read and control", {
+  skip: process.platform === "win32" ? "native fd-close fixture uses POSIX exec" : false,
+}, async (t) => {
+  const context = await fixture(t, { toolMode: "codex" });
+  const opened = await callOpen(context.client, context.project, "stdin-fault");
+  const workspaceId = String(structuredContent(opened).workspaceId);
+  const script = "require('fs').closeSync(0);console.log('CLOSED');setTimeout(()=>process.exit(0),3000)";
+  const started = structuredContent(await context.client.callTool({ name: "exec_command", arguments: {
+    workspaceId, cmd: `exec ${JSON.stringify(process.execPath)} -e ${JSON.stringify(script)}`, yieldTimeMs: 0,
+  } }));
+  const observation = {workspaceId, sessionId: started.outputSessionId, processRef: started.processRef, waitTimeMs: 2000};
+  const before = structuredContent(await context.client.callTool({ name: "process_output", arguments: observation }));
+  assert.equal(before.output, "CLOSED\n");
+  const failed = await context.client.callTool({ name: "write_stdin", arguments: {
+    workspaceId, sessionId: started.sessionId, chars: "not-secret-fixture\n", yieldTimeMs: 50,
+  } });
+  assert.equal(failed.isError, true);
+  assert.match(responseText(failed), /EPIPE/);
+  assert.match(responseText(failed), /partial/);
+  assert.doesNotMatch(responseText(failed), /not-secret-fixture/);
+  const after = structuredContent(await context.client.callTool({ name: "process_output", arguments: {...observation, waitTimeMs: 0} }));
+  assert.deepEqual(after.stdinError, {code: "EPIPE", delivery: "unknown"});
+  assert.equal(after.output, before.output);
+  assert.equal(after.outputDigestSha256, before.outputDigestSha256);
+  const read = await context.client.callTool({ name: "read", arguments: {workspaceId, path: "AGENTS.md"} });
+  assert.notEqual(read.isError, true);
+  assert.match(responseText(read), /project instructions/);
+  const stopped = await context.client.callTool({ name: "write_stdin", arguments: {
+    workspaceId, sessionId: started.sessionId, chars: "\u0003", yieldTimeMs: 2000,
+  } });
+  assert.equal(structuredContent(stopped).running, false);
+  assert.equal((await context.client.listTools()).tools.some(tool => tool.name === "process_output"), true);
+});
+
 test("codex mode can opt into the upstream native navigation tools", async (t) => {
   const disabled = await fixture(t, { toolMode: "codex", git: true });
   const disabledTools = await disabled.client.listTools();

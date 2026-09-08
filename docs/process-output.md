@@ -78,6 +78,33 @@ does not invent a cause such as a known restart or a known host refusal. SDK inp
 validation errors remain SDK errors. A pre-handler host failure is not observed
 by this implementation and cannot be relabeled from missing server logs alone.
 
+### Child stdin failure is not executor or transport death
+
+A child may close stdin while continuing to run. Native pipe errors (for example
+`EPIPE`) are handled on the child's writable stream and retained as a scoped
+`ProcessInputError`, not emitted unhandled on the server process. A stdin call
+whose failure is observed during its existing bounded yield returns that error
+without consuming output. Further input to the failed pipe is rejected; polling,
+retained output, Ctrl-C and unrelated processes remain available.
+
+Late errors are also visible as optional `stdinError: {code, delivery: "unknown"}`
+on process status and output. The native code is bounded; neither private error
+messages nor input content enter this field. The actual stdout/stderr stream and
+its digests are unchanged. Delivery can be partial, so this error never authorizes
+blind input replay or claims that the child's business effect did not happen.
+Reads still wait for output/exit, not input delivery, and a bounded write response
+is not a promise that all buffered stdin was consumed by the child. Native stream
+buffering/backpressure is not replaced with an unbounded callback or drain wait.
+
+Duration/output limits are checked before spawning or writing, and resize options
+are validated before any terminal change. This protects direct manager consumers
+as well as the MCP schema boundary. Transport/lifecycle protection is unchanged:
+only the typed child-input fault is classified as operation evidence, rather than
+treating every native `EPIPE` in the system as benign.
+
+The asynchronous writable error and callback behavior is documented by Node:
+https://nodejs.org/api/stream.html#event-error
+
 The MCP annotation definition and OpenAI tool-design guidance support separating
 operations by actual effects, not relabeling arbitrary control as read-only:
 

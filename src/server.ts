@@ -966,6 +966,16 @@ async function assertWorkspaceAppAssets(): Promise<void> {
   }
 }
 
+function processInputFailureText(failure: ProcessSnapshot["stdinError"]): string {
+  return failure
+    ? ` Stdin failed (${failure.code}); delivery is unknown and may be partial. Reconcile before replaying input.`
+    : "";
+}
+
+function processStdinFailureSchema() {
+  return z.object({ code: z.string().regex(/^[A-Za-z0-9_.-]{1,64}$/), delivery: z.literal("unknown") }).optional();
+}
+
 function processResult(snapshot: ProcessSnapshot): string {
   const status = snapshot.running
     ? snapshot.wakeReason === "mailbox"
@@ -976,7 +986,8 @@ function processResult(snapshot: ProcessSnapshot): string {
       : `Process exited with code ${snapshot.exitCode ?? "unknown"}.`;
   const identity = snapshot.processRef === undefined ? ""
     : `\nRetained output: sessionId=${snapshot.outputSessionId}, processRef=${snapshot.processRef}; use process_output with afterSequence=0 or its prior nextSequence.`;
-  return (snapshot.output ? `${snapshot.output.replace(/\n$/, "")}\n${status}` : status) + identity;
+  return (snapshot.output ? `${snapshot.output.replace(/\n$/, "")}\n${status}` : status)
+    + processInputFailureText(snapshot.stdinError) + identity;
 }
 
 function processOutputSchema(): z.ZodRawShape {
@@ -988,6 +999,7 @@ function processOutputSchema(): z.ZodRawShape {
     running: z.boolean(),
     exitCode: z.number().int().optional(),
     signal: z.string().optional(),
+    stdinError: processStdinFailureSchema(),
     wakeReason: z.enum(["mailbox"]).optional(),
     wallTimeMs: z.number().nonnegative(),
     outputTruncated: z.boolean(),
@@ -1030,6 +1042,7 @@ function processToolResponse(
       running: snapshot.running,
       exitCode: snapshot.exitCode,
       signal: snapshot.signal,
+      stdinError: snapshot.stdinError,
       wakeReason: snapshot.wakeReason,
       wallTimeMs: snapshot.wallTimeMs,
       outputTruncated: snapshot.outputTruncated,
@@ -2791,6 +2804,7 @@ function registerCodexProcessTools(
         running: z.boolean(),
         exitCode: z.number().int().optional(),
         signal: z.string().optional(),
+        stdinError: processStdinFailureSchema(),
         expiresAt: z.string().optional(),
         wallTimeMs: z.number().nonnegative(),
         outputComplete: z.boolean(),
@@ -2814,7 +2828,7 @@ function registerCodexProcessTools(
         });
         const status = snapshot.running ? "Process running." : `Process terminal; exit=${snapshot.exitCode ?? "unknown"}.`;
         const gap = snapshot.gap ? ` Retention gap through sequence ${snapshot.droppedThroughSequence}.` : "";
-        const result = `${snapshot.output}${snapshot.output ? "\n" : ""}${status}${gap} nextSequence=${snapshot.nextSequence}; hasMore=${snapshot.hasMore}.`;
+        const result = `${snapshot.output}${snapshot.output ? "\n" : ""}${status}${processInputFailureText(snapshot.stdinError)}${gap} nextSequence=${snapshot.nextSequence}; hasMore=${snapshot.hasMore}.`;
         return { content: [textBlock(result)], structuredContent: { result, ...snapshot } };
       } finally {
         waiter?.cancel();

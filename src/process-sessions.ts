@@ -91,6 +91,7 @@ export interface ProcessSnapshot {
   running: boolean;
   exitCode?: number;
   signal?: string;
+  stdinError?: ProcessStdinFailure;
   wakeReason?: "mailbox";
   wallTimeMs: number;
 }
@@ -123,6 +124,7 @@ export interface ProcessOutputSnapshot {
   running: boolean;
   exitCode?: number;
   signal?: string;
+  stdinError?: ProcessStdinFailure;
   expiresAt?: string;
   wallTimeMs: number;
   outputComplete: boolean;
@@ -144,6 +146,7 @@ export interface ProcessSessionInspection {
   wallTimeMs: number;
   exitCode?: number;
   signal?: string;
+  stdinError?: ProcessStdinFailure;
   tty: boolean;
   workingDirectory: string;
   commandLength: number;
@@ -160,12 +163,36 @@ interface ManagedProcess {
   resize?(columns: number, rows: number): void;
 }
 
+export interface ProcessStdinFailure {
+  code: string;
+  delivery: "unknown";
+}
+
+// An OS pipe error belongs to this child's input, not the MCP transport.
+// Keep the native code, but never retain or expose submitted stdin content.
+export class ProcessInputError extends Error {
+  readonly code: string;
+  constructor(error: unknown) {
+    const raw = error && typeof error === "object" && "code" in error ? error.code : undefined;
+    const code = typeof raw === "string" && /^[A-Za-z0-9_.-]{1,64}$/.test(raw)
+      ? raw : "STDIN_WRITE_FAILED";
+    super(`Process stdin write failed (${code}). Delivery may be partial; inspect the process and reconcile before replaying input.`);
+    this.name = "ProcessInputError";
+    this.code = code;
+  }
+}
+
+function stdinFailure(session: ProcessSession): ProcessStdinFailure | undefined {
+  return session.stdinError ? { code: session.stdinError.code, delivery: "unknown" } : undefined;
+}
+
 interface ProcessSession {
   id: number;
   processRef: string;
   workspaceId: string;
   executionScopeRef?: string;
   process?: ManagedProcess;
+  stdinError?: ProcessInputError;
   startedAt: number;
   lastOutputAt?: number;
   outputEventCount: number;
@@ -434,6 +461,9 @@ export class ProcessSessionManager {
   }
 
   async start(input: StartCommandInput): Promise<ProcessSnapshot> {
+    // Reject bad response/wait options before spawning any user command.
+    const yieldTimeMs = boundedInteger(input.yieldTimeMs, DEFAULT_EXEC_YIELD_MS, MAX_COMMAND_YIELD_MS);
+    const maxOutputTokens = boundedInteger(input.maxOutputTokens, DEFAULT_MAX_OUTPUT_TOKENS, 100_000);
     const runningSessions = Array.from(this.sessions.values()).filter((session) => session.running).length;
     if (runningSessions >= this.maxConcurrentSessions) {
       throw new Error(`Process session limit reached (${this.maxConcurrentSessions}).`);
@@ -451,10 +481,9 @@ export class ProcessSessionManager {
       throw error;
     }
 
-    const yieldTimeMs = boundedInteger(input.yieldTimeMs, DEFAULT_EXEC_YIELD_MS, MAX_COMMAND_YIELD_MS);
     await this.waitForExit(session, yieldTimeMs);
 
-    const snapshot = this.consume(session, input.maxOutputTokens);
+    const snapshot = this.consume(session, maxOutputTokens);
     if (!session.running) this.removeSession(session.id);
     return snapshot;
   }
@@ -464,28 +493,32 @@ export class ProcessSessionManager {
     const chars = input.chars ?? "";
     const interactionRequested =
       chars.length > 0 || input.columns !== undefined || input.rows !== undefined;
+    const fallback = interactionRequested ? DEFAULT_INTERACTIVE_YIELD_MS : DEFAULT_POLL_YIELD_MS;
+    const maximum = interactionRequested ? MAX_COMMAND_YIELD_MS : MAX_POLL_YIELD_MS;
+    const yieldTimeMs = boundedInteger(input.yieldTimeMs, fallback, maximum);
+    const maxOutputTokens = boundedInteger(input.maxOutputTokens, DEFAULT_MAX_OUTPUT_TOKENS, 100_000);
+    const columns = terminalSize(input.columns, session.columns);
+    const rows = terminalSize(input.rows, session.rows);
+    const writableChars = chars.replaceAll("\u0003", "");
+    if (writableChars && session.running && session.stdinError) throw session.stdinError;
 
     if (input.columns !== undefined || input.rows !== undefined) {
-      session.columns = terminalSize(input.columns, session.columns);
-      session.rows = terminalSize(input.rows, session.rows);
       if (!session.process?.resize) {
         throw new Error(`Process session ${session.id} is not a PTY and cannot be resized.`);
       }
-      session.process.resize(session.columns, session.rows);
+      session.process.resize(columns, rows);
+      session.columns = columns;
+      session.rows = rows;
     }
 
     const interruptRequested = chars.includes("\u0003") && session.running;
     if (interruptRequested) {
       session.process?.kill("SIGINT");
     }
-    const writableChars = chars.replaceAll("\u0003", "");
     if (writableChars && session.running) session.process?.write(writableChars);
 
     let wakeReason: ProcessSnapshot["wakeReason"];
     if ((interactionRequested || !session.buffer.hasOutput()) && session.running) {
-      const fallback = interactionRequested ? DEFAULT_INTERACTIVE_YIELD_MS : DEFAULT_POLL_YIELD_MS;
-      const maximum = interactionRequested ? MAX_COMMAND_YIELD_MS : MAX_POLL_YIELD_MS;
-      const yieldTimeMs = boundedInteger(input.yieldTimeMs, fallback, maximum);
       if (interactionRequested) await this.waitForExit(session, yieldTimeMs);
       else if (
         await this.waitForOutputOrExit(session, yieldTimeMs, input.externalWake)
@@ -495,7 +528,11 @@ export class ProcessSessionManager {
       }
     }
 
-    const snapshot = this.consume(session, input.maxOutputTokens, wakeReason);
+    // Stream errors are asynchronous. Observe failures before consuming output,
+    // but retain the original bounded yield rather than waiting forever for drain.
+    // Later failures remain visible through both observation routes.
+    if (writableChars && session.stdinError) throw session.stdinError;
+    const snapshot = this.consume(session, maxOutputTokens, wakeReason);
     if (!session.running) this.removeSession(session.id);
     return snapshot;
   }
@@ -537,6 +574,7 @@ export class ProcessSessionManager {
       running: session.running,
       exitCode: session.exitCode,
       signal: session.signal,
+      stdinError: stdinFailure(session),
       expiresAt: session.completedAt === undefined ? undefined
         : new Date(session.completedAt + this.completedSessionTtlMs).toISOString(),
       wallTimeMs: (session.completedAt ?? Date.now()) - session.startedAt,
@@ -621,6 +659,7 @@ export class ProcessSessionManager {
         wallTimeMs: Math.max(0, now - session.startedAt),
         exitCode: session.exitCode,
         signal: session.signal,
+        stdinError: stdinFailure(session),
         tty: session.tty,
         workingDirectory: session.workingDirectory,
         commandLength: session.commandLength,
@@ -734,8 +773,22 @@ export class ProcessSessionManager {
       shell: shell.executable,
     });
 
+    const recordInputFailure = (error: unknown) => {
+      session.stdinError ??= new ProcessInputError(error);
+      return session.stdinError;
+    };
+    // A try/catch around write() alone cannot handle a later Writable 'error'.
+    // The event and callback can both report the same failure; record it once.
+    child.stdin.on("error", recordInputFailure);
     session.process = {
-      write: (data) => child.stdin.write(data),
+      write: (data) => {
+        if (session.stdinError) throw session.stdinError;
+        try {
+          child.stdin.write(data, (error) => { if (error) recordInputFailure(error); });
+        } catch (error) {
+          throw recordInputFailure(error);
+        }
+      },
       kill: (signal = "SIGTERM") => terminateProcessTree(child, signal, detached),
       resize: input.tty ? () => undefined : undefined,
     };
@@ -863,6 +916,7 @@ export class ProcessSessionManager {
       exitCode: session.exitCode,
       signal: session.signal,
       wakeReason,
+      stdinError: stdinFailure(session),
       wallTimeMs: Date.now() - session.startedAt,
     };
   }

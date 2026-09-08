@@ -194,6 +194,7 @@ type FailureEvidenceKind = "operation" | "policy" | "transport" | "lifecycle" | 
 function failureEvidenceKind(event: InstabilityEventRow): FailureEvidenceKind {
   const kind = event.error_kind ?? "";
   if (kind === "server_restart") return "lifecycle";
+  if (kind.startsWith("ProcessInputError:")) return "operation";
   if (event.outcome === "blocked" || /:(?:EACCES|EPERM)$/.test(kind)) return "policy";
   if (/:(?:ENOENT|ENOTDIR|EISDIR|EEXIST|EINVAL|ENOTEMPTY|ABORT_ERR)$/.test(kind)
     || kind === "ZodError" || kind === "AbortError") return "operation";
