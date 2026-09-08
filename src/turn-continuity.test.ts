@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { promisify } from "node:util";
+import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { ExecutionScopeManager } from "./execution-observability.js";
 import { ProcessSessionManager } from "./process-sessions.js";
 import {
@@ -33,6 +34,72 @@ const config: TurnContinuityConfig = {
   maxCapsulesPerWorkspace: 10,
   maxCapsuleCharacters: 64_000,
 };
+
+test("negative operation outcomes do not invent transport or turn loss", async (t) => {
+  const stateDir = await mkdtemp(join(tmpdir(), "devspace-outcome-health-"));
+  let now = 3_000_000;
+  const processes = new ProcessSessionManager();
+  const observations = new ExecutionScopeManager(
+    { enabled: true, retentionMs: 86_400_000, maxEventsPerScope: 100, idleAfterMs: 60_000 },
+    stateDir, processes, { now: () => now },
+  );
+  const manager = new TurnContinuityManager(config, stateDir, { now: () => now });
+  t.after(async () => {
+    observations.close();
+    manager.close();
+    processes.shutdown();
+    await rm(stateDir, { recursive: true, force: true });
+  });
+  let missing: unknown;
+  try { await readFile(join(stateDir, "absent-AGENTS.md")); } catch (error) { missing = error; }
+  assert.equal((missing as NodeJS.ErrnoException).code, "ENOENT");
+  const cases = [
+    { name: "actual ENOENT repeated", outcome: "error" as const, error: missing,
+      count: 4, expected: "normal", evidence: "operation" },
+    { name: "policy denial repeated", outcome: "blocked" as const,
+      error: Object.assign(new Error("owned fixture denial"), { code: "EACCES" }),
+      count: 4, expected: "normal", evidence: "policy" },
+    { name: "negative tool result", outcome: "error" as const,
+      response: { isError: true }, count: 1, expected: "normal", evidence: "unclassified" },
+    { name: "transport words without native evidence", outcome: "error" as const,
+      error: new Error("connection closed transport failure"), count: 2,
+      expected: "normal", evidence: "unclassified" },
+    { name: "interrupted outcome without restart evidence", outcome: "interrupted" as const,
+      count: 1, expected: "normal", evidence: "unclassified" },
+    { name: "native connection closed code", outcome: "error" as const,
+      error: new McpError(ErrorCode.ConnectionClosed, "owned connection fixture"),
+      count: 1, expected: "degraded", evidence: "transport" },
+    { name: "native request timeout code", outcome: "error" as const,
+      error: new McpError(ErrorCode.RequestTimeout, "owned timeout fixture"),
+      count: 1, expected: "degraded", evidence: "transport" },
+  ];
+  for (const [index, subject] of cases.entries()) {
+    await t.test(subject.name, () => {
+      const identity = executionScopeIdentity({ "openai/session": "outcome-health-" + index });
+      assert.ok(identity);
+      for (let repeat = 0; repeat < subject.count; repeat += 1) {
+        const handle = observations.beginTool(identity, "read", { workspaceId: "ws_health" });
+        observations.finishTool(handle, subject.outcome, {
+          ...("error" in subject ? { error: subject.error } : {}),
+          ...("response" in subject ? { response: subject.response } : {}),
+        });
+        manager.observeToolFinish(identity, {}, "read", {}, false);
+        now += 1;
+      }
+      const status = manager.status(identity, {}).status as Record<string, unknown>;
+      const instability = status.instability as Record<string, unknown>;
+      assert.equal(instability.state, subject.expected);
+      const outcomes = instability.recentOutcomes as Record<string, number>;
+      assert.equal(outcomes[subject.outcome], subject.count);
+      const health = instability.failureEvidence as Record<string, unknown>;
+      assert.equal((health.counts as Record<string, number>)[subject.evidence], subject.count);
+      assert.equal(health.globalTransportHealthEstablished, false);
+      assert.equal(status.toolsBlocked, false);
+      const notice = manager.advisoryNotice(identity, {}, "read") ?? "";
+      if (subject.expected === "normal") assert.doesNotMatch(notice, /turn-stability/i);
+    });
+  }
+});
 
 test("turn horizon is advisory-only, emits each threshold once, and explicit begin is idempotent", async (t) => {
   const stateDir = await mkdtemp(join(tmpdir(), "devspace-turn-horizon-test-"));
@@ -447,7 +514,7 @@ test("repeated normalized tool lifecycle errors escalate early landing guidance 
     path: "one.ts",
   });
   observations.finishTool(firstHandle, "error", {
-    error: new Error("first transport failure detail must remain private"),
+    error: Object.assign(new Error("first transport failure detail must remain private"), { code: "ECONNRESET" }),
   });
   manager.observeToolFinish(identity, {}, "read", { path: "one.ts" }, false);
   const degradedNotice = manager.advisoryNotice(identity, {}, "read");
@@ -462,7 +529,7 @@ test("repeated normalized tool lifecycle errors escalate early landing guidance 
     path: "two.ts",
   });
   observations.finishTool(secondHandle, "error", {
-    error: new Error("first transport failure detail must remain private"),
+    error: Object.assign(new Error("first transport failure detail must remain private"), { code: "ECONNRESET" }),
   });
   manager.observeToolFinish(identity, {}, "read", { path: "two.ts" }, false);
   const unstableNotice = manager.advisoryNotice(identity, {}, "read");
@@ -482,7 +549,7 @@ test("repeated normalized tool lifecycle errors escalate early landing guidance 
   assert.equal(manager.advisoryNotice(identity, {}, "read"), undefined);
 });
 
-test("distinct tool failures remain degraded instead of imitating repeated transport failure", async (t) => {
+test("uncoded tool failures retain unknown health impact instead of imitating transport failure", async (t) => {
   const stateDir = await mkdtemp(join(tmpdir(), "devspace-instability-distinct-errors-"));
   let now = 4_500_000;
   const processes = new ProcessSessionManager();
@@ -527,7 +594,11 @@ test("distinct tool failures remain degraded instead of imitating repeated trans
 
   const status = manager.status(identity, {}).status as Record<string, unknown>;
   const instability = status.instability as Record<string, unknown>;
-  assert.equal(instability.state, "degraded");
+  assert.equal(instability.state, "normal");
+  assert.equal(
+    ((instability.failureEvidence as Record<string, unknown>).counts as Record<string, number>).unclassified,
+    2,
+  );
   assert.equal(
     (instability.reasonCodes as string[]).includes("repeated_normalized_tool_failure"),
     false,
@@ -582,7 +653,7 @@ test("generic tool error responses without a stable digest do not become a repea
 
   const status = manager.status(identity, {}).status as Record<string, unknown>;
   const instability = status.instability as Record<string, unknown>;
-  assert.equal(instability.state, "degraded");
+  assert.equal(instability.state, "normal");
   assert.equal(
     (instability.recentOutcomes as Record<string, unknown>).repeatedFailureCount,
     0,
@@ -763,7 +834,7 @@ test("mutation after an aging capsule amplifies but does not manufacture instabi
     path: "missing.ts",
   });
   observations.finishTool(handle, "error", {
-    error: new Error("bounded tool lifecycle anomaly"),
+    error: Object.assign(new Error("bounded tool lifecycle anomaly"), { code: "ECONNRESET" }),
   });
   manager.observeToolFinish(identity, {}, "read", { path: "missing.ts" }, false);
   const baseline = manager.status(identity, {}).status as Record<string, unknown>;
@@ -928,7 +999,7 @@ test("the operational landing envelope survives restart, detects backend epoch c
     cmd: `printf ${secret}`,
   });
   observations.finishTool(handle, "error", {
-    error: new Error(secret),
+    error: Object.assign(new Error(secret), { code: "ECONNRESET" }),
   });
   manager.observeToolFinish(
     identity,

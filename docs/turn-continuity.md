@@ -109,8 +109,8 @@ reports one of four states:
 
 The assessor considers:
 
-- MCP tool responses recorded as `error`, `blocked`, or `interrupted`;
-- repeated normalized lifecycle failures;
+- sanitized native connection/timeout codes and explicit executor lifecycle evidence;
+- repeated normalized failures with that actual instability evidence;
 - an observation interrupted by a DevSpace backend restart;
 - an abandoned/stale non-process tool observation;
 - a backend instance change since the latest machine envelope;
@@ -119,9 +119,25 @@ The assessor considers:
 - an explicit capsule whose effect is `in_flight`, `unknown`, or
   `reconcile_before_retry`.
 
-False-positive controls are deliberate. A nonzero exit from an ordinary shell
-command is still a completed `exec_command` receipt rather than an MCP
-transport error. A legitimately long `exec_command` or `write_stdin` remains a
+Negative operation outcomes remain visible in `recentOutcomes`, including its
+original repeated-failure count. They do not alone establish turn or transport
+loss. `failureEvidence` separately counts operation, policy, transport, lifecycle
+and unclassified observations, plus repeated qualifying instability evidence.
+Native ENOENT and permission denials do not score as transport faults. A generic
+error result, uncoded exception or unspecified interruption has unknown health
+impact; message words and a repeated digest do not convert it into a known fault.
+Existing uncoded historical events retain that uncertainty.
+
+Known native codes can describe a dependency connection, not necessarily the MCP
+host connection. `normal` means no qualifying instability evidence in the bounded
+observed scope; it does not verify global transport health. MCP 1.29 numeric
+connection/timeout codes are preserved alongside existing string codes. The
+current status and persisted envelope use the same classification projection.
+There is no database migration, new health service or automatic retry/restart.
+
+A nonzero exit from an ordinary shell command is still a completed
+`exec_command` receipt rather than an MCP transport error. A legitimately long
+`exec_command` or `write_stdin` remains a
 running process/tool exposure but is not classified as an abandoned ordinary
 tool merely because it exceeds the short stale-tool threshold. A quiet process
 alone does not establish a transport failure.
@@ -130,6 +146,11 @@ Instability is advisory evidence. It never blocks tools, cancels a process,
 creates task priority, grants writer/effect authority, or proves that a model is
 hung. Private model reasoning and provider generation remain unobservable
 between MCP calls.
+
+The distinction follows the [MCP tool-error contract](https://modelcontextprotocol.io/specification/2025-11-25/server/tools#error-handling),
+the installed [TypeScript SDK v1.29.0 types](https://github.com/modelcontextprotocol/typescript-sdk/blob/v1.29.0/src/types.ts)
+and [Node 24 error codes](https://nodejs.org/docs/latest-v24.x/api/errors.html#errorcode).
+An `isError` result reports an operation failure; it is not a transport liveness test.
 
 ## Operational Landing Envelope
 

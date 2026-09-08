@@ -796,6 +796,37 @@ test("enforced ZES research cycle is registered and holds mutation before admiss
   assert.equal(structuredData(status).stateExists, false);
 });
 
+test("same MCP scope preserves negative reads without false instability guidance", async (t) => {
+  const context = await fixture(t, { toolMode: "codex", git: true });
+  const session = "domain-outcome-health";
+  const opened = await callOpen(context.client, context.project, session);
+  const workspaceId = String(structuredContent(opened).workspaceId);
+  const call = (name: string, args: Record<string, unknown>) => context.client.callTool({
+    name, arguments: args, _meta: { "openai/session": session },
+  } as Parameters<Client["callTool"]>[0]);
+  for (let index = 0; index < 4; index += 1) {
+    const missing = await call("read", { workspaceId, path: "absent-AGENTS.md" });
+    assert.equal(missing.isError, true);
+    assert.match(responseAllText(missing), /ENOENT|not found|no such file/i);
+    assert.doesNotMatch(responseAllText(missing), /turn-stability/i);
+  }
+  const denied = await call("read", { workspaceId, path: "../outside.txt" });
+  assert.equal(denied.isError, true);
+  assert.doesNotMatch(responseAllText(denied), /turn-stability/i);
+  const normal = await call("read", { workspaceId, path: "README.md" });
+  assert.notEqual(normal.isError, true);
+  const status = structuredData(await call("turn_horizon_status", {})).status as Record<string, unknown>;
+  const instability = status.instability as Record<string, unknown>;
+  assert.equal(instability.state, "normal");
+  assert.equal((instability.recentOutcomes as Record<string, number>).error, 5);
+  const evidence = instability.failureEvidence as Record<string, unknown>;
+  const counts = evidence.counts as Record<string, number>;
+  assert.equal(counts.operation + counts.policy + counts.unclassified, 5);
+  assert.equal(counts.transport + counts.lifecycle, 0);
+  assert.equal(evidence.globalTransportHealthEstablished, false);
+  assert.equal(status.toolsBlocked, false);
+});
+
 test("turn continuity is advisory-only and recovery capsules detect later workspace changes", async (t) => {
   const context = await fixture(t, { toolMode: "codex", git: true });
   const session = "turn-continuity-session";

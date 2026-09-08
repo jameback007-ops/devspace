@@ -34,7 +34,9 @@ mandatory `AGENTS.md`; it does not replace it.
   implicit epoch. It never blocks tools or limits a task.
 - **Turn instability assessment** — a bounded classification of sanitized tool,
   process, capsule, effect, and backend lifecycle evidence as normal, degraded,
-  unstable, or critical. It is guidance, not hang detection or authority.
+  unstable, or critical. Operation/policy outcomes and unclassified failures remain
+  distinct from native transport/lifecycle evidence. It is guidance, not global
+  health verification, hang detection or authority.
 - **Operational landing envelope** — a persisted bounded machine envelope for
   one scope/turn epoch containing safe lifecycle IDs, timing, checkpoint,
   backend, and effect-disposition facts. It excludes semantic inference,

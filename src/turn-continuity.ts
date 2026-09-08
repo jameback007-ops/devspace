@@ -186,6 +186,22 @@ interface InstabilityEventRow {
   error_digest_sha256: string | null;
 }
 
+type FailureEvidenceKind = "operation" | "policy" | "transport" | "lifecycle" | "unclassified";
+
+// Interpret existing sanitized native codes, never private messages or a generic
+// error/blocked/interrupted outcome as proof of runtime loss. Old uncoded events
+// remain unclassified; this does not retroactively declare their causes benign.
+function failureEvidenceKind(event: InstabilityEventRow): FailureEvidenceKind {
+  const kind = event.error_kind ?? "";
+  if (kind === "server_restart") return "lifecycle";
+  if (event.outcome === "blocked" || /:(?:EACCES|EPERM)$/.test(kind)) return "policy";
+  if (/:(?:ENOENT|ENOTDIR|EISDIR|EEXIST|EINVAL|ENOTEMPTY|ABORT_ERR)$/.test(kind)
+    || kind === "ZodError" || kind === "AbortError") return "operation";
+  if (/:(?:ECONNRESET|ECONNREFUSED|ECONNABORTED|ETIMEDOUT|ENETUNREACH|EHOSTUNREACH|ENOTCONN|EPIPE)$/.test(kind)
+    || /^McpError:-3200[01]$/.test(kind)) return "transport";
+  return "unclassified";
+}
+
 interface TurnInstabilityAssessment {
   state: TurnInstabilityState;
   score: number;
@@ -197,6 +213,8 @@ interface TurnInstabilityAssessment {
   recentBlockedCount: number;
   recentInterruptedCount: number;
   repeatedFailureCount: number;
+  repeatedInstabilityEvidenceCount: number;
+  failureEvidenceCounts: Record<FailureEvidenceKind, number>;
   runningTools: InstabilityEventRow[];
   staleRunningToolCount: number;
   runningProcesses: TurnContinuityProcessObservation[];
@@ -1784,6 +1802,13 @@ export class TurnContinuityManager {
         interrupted: assessment.recentInterruptedCount,
         repeatedFailureCount: assessment.repeatedFailureCount,
       },
+      failureEvidence: {
+        counts: assessment.failureEvidenceCounts,
+        repeatedInstabilityEvidenceCount: assessment.repeatedInstabilityEvidenceCount,
+        classification: "sanitized_native_codes_and_executor_lifecycle_not_message_text",
+        unclassifiedHealthImpact: "unknown_not_assumed_benign_or_runtime_loss",
+        globalTransportHealthEstablished: false,
+      },
       exposure: {
         staleRunningToolCount: assessment.staleRunningToolCount,
         runningProcessCount: assessment.runningProcesses.length,
@@ -1883,8 +1908,22 @@ export class TurnContinuityManager {
     const recentInterrupted = materialEvents.filter(
       (event) => event.outcome === "interrupted",
     );
+    const failures = [...recentErrors, ...recentBlocked, ...recentInterrupted];
+    const failureEvidenceCounts: Record<FailureEvidenceKind, number> = {
+      operation: 0, policy: 0, transport: 0, lifecycle: 0, unclassified: 0,
+    };
+    for (const event of failures) failureEvidenceCounts[failureEvidenceKind(event)] += 1;
+    const instabilityEvents = failures.filter((event) => {
+      const kind = failureEvidenceKind(event);
+      return kind === "transport" || kind === "lifecycle";
+    });
+    const instabilityErrors = instabilityEvents.filter((event) => event.outcome === "error");
+    const instabilityInterruptions = instabilityEvents.filter(
+      (event) => event.outcome === "interrupted",
+    );
     const failureCounts = new Map<string, number>();
-    for (const event of [...recentErrors, ...recentBlocked, ...recentInterrupted]) {
+    const instabilityFailureCounts = new Map<string, number>();
+    for (const event of failures) {
       if (!event.error_digest_sha256) continue;
       const key = [
         event.tool_name,
@@ -1892,8 +1931,13 @@ export class TurnContinuityManager {
         event.error_digest_sha256,
       ].join(":");
       failureCounts.set(key, (failureCounts.get(key) ?? 0) + 1);
+      const kind = failureEvidenceKind(event);
+      if (kind === "transport" || kind === "lifecycle") {
+        instabilityFailureCounts.set(key, (instabilityFailureCounts.get(key) ?? 0) + 1);
+      }
     }
     const repeatedFailureCount = Math.max(0, ...failureCounts.values());
+    const repeatedInstabilityEvidenceCount = Math.max(0, ...instabilityFailureCounts.values());
     const serverRestartObserved = recentInterrupted.some(
       (event) => event.error_kind === "server_restart",
     );
@@ -1970,19 +2014,15 @@ export class TurnContinuityManager {
 
     const reasonCodes: string[] = [];
     let score = 0;
-    if (recentErrors.length > 0) {
+    if (instabilityErrors.length > 0) {
       reasonCodes.push("recent_tool_error_response");
-      score += Math.min(3, recentErrors.length);
+      score += Math.min(3, instabilityErrors.length);
     }
-    if (recentBlocked.length > 0) {
-      reasonCodes.push("recent_tool_blocked");
-      score += Math.min(3, recentBlocked.length);
-    }
-    if (recentInterrupted.length > 0) {
+    if (instabilityInterruptions.length > 0) {
       reasonCodes.push("recent_tool_interrupted");
-      score += Math.min(4, recentInterrupted.length * 2);
+      score += Math.min(4, instabilityInterruptions.length * 2);
     }
-    if (repeatedFailureCount >= 2) {
+    if (repeatedInstabilityEvidenceCount >= 2) {
       reasonCodes.push("repeated_normalized_tool_failure");
       score += 2;
     }
@@ -2015,7 +2055,7 @@ export class TurnContinuityManager {
     if (staleRunningProcessCount > 0) {
       reasonCodes.push("stale_running_process_exposure");
       if (
-        recentErrors.length + recentBlocked.length + recentInterrupted.length > 0
+        instabilityEvents.length > 0
         || effectReconciliationRequired
         || backendChangedSinceEnvelope
       ) {
@@ -2027,7 +2067,7 @@ export class TurnContinuityManager {
       && (
         serverRestartObserved
         || staleRunningTools.length > 0
-        || recentInterrupted.length >= 2
+        || instabilityInterruptions.length >= 2
       );
     const state: TurnInstabilityState = criticalCombination || score >= 7
       ? "critical"
@@ -2049,6 +2089,8 @@ export class TurnContinuityManager {
       recentBlockedCount: recentBlocked.length,
       recentInterruptedCount: recentInterrupted.length,
       repeatedFailureCount,
+      repeatedInstabilityEvidenceCount,
+      failureEvidenceCounts,
       runningTools: materialRunningTools,
       staleRunningToolCount: staleRunningTools.length,
       runningProcesses,
@@ -2205,31 +2247,7 @@ export class TurnContinuityManager {
         processesTruncated:
           assessment.runningProcesses.length > MAX_ENVELOPE_RUNNING_ITEMS,
       },
-      instability: {
-        state: assessment.state,
-        score: assessment.score,
-        reasonCodes: assessment.reasonCodes,
-        recentOutcomes: {
-          error: assessment.recentErrorCount,
-          blocked: assessment.recentBlockedCount,
-          interrupted: assessment.recentInterruptedCount,
-          repeatedFailureCount: assessment.repeatedFailureCount,
-        },
-        exposure: {
-          staleRunningToolCount: assessment.staleRunningToolCount,
-          runningProcessCount: assessment.runningProcesses.length,
-          staleRunningProcessCount: assessment.staleRunningProcessCount,
-          mutationAfterCapsule: assessment.mutationAfterCapsule,
-          capsuleRefreshDebt: assessment.capsuleRefreshDebt,
-          effectReconciliationRequired:
-            assessment.effectReconciliationRequired,
-          backendChangedSinceEnvelope:
-            assessment.backendChangedSinceEnvelope,
-        },
-        advisoryOnly: true,
-        toolsBlocked: false,
-        newMutationOrEffectAuthorityGranted: false,
-      },
+      instability: this.instabilityView(assessment),
       backend: assessment.backend,
       effectExposure: semantic
         ? {

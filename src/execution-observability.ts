@@ -352,8 +352,9 @@ function errorObservation(error: unknown): {
   errorDigestSha256: string;
 } {
   const baseKind = error instanceof Error ? error.name || "Error" : typeof error;
-  const code = isRecord(error) && typeof error.code === "string"
-    ? error.code.slice(0, 64).replace(/[^A-Za-z0-9_.-]/g, "_")
+  const code = isRecord(error) && (typeof error.code === "string"
+    || (typeof error.code === "number" && Number.isSafeInteger(error.code)))
+    ? String(error.code).slice(0, 64).replace(/[^A-Za-z0-9_.-]/g, "_")
     : undefined;
   const kind = code ? `${baseKind}:${code}` : baseKind;
   const raw = error instanceof Error ? error.message : String(error);
