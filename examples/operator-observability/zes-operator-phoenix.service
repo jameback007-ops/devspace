@@ -1,0 +1,35 @@
+[Unit]
+Description=ZES operator Phoenix trace analysis (not Product observability authority)
+After=network.target
+
+[Service]
+Type=simple
+DynamicUser=yes
+StateDirectory=zes-operator-phoenix
+StateDirectoryMode=0700
+WorkingDirectory=/var/lib/zes-operator-phoenix
+Environment=PHOENIX_WORKING_DIR=/var/lib/zes-operator-phoenix
+Environment=PHOENIX_HOST=127.0.0.1
+Environment=PHOENIX_PORT=16006
+Environment=PHOENIX_GRPC_PORT=14317
+Environment=PHOENIX_DEFAULT_RETENTION_POLICY_DAYS=14
+Environment=PHOENIX_ALLOW_EXTERNAL_RESOURCES=false
+Environment=PHOENIX_TELEMETRY_ENABLED=false
+Environment=DO_NOT_TRACK=1
+ExecStart=/opt/zes-operator-observability/venv/bin/phoenix serve
+Restart=on-failure
+RestartSec=3s
+TimeoutStopSec=30s
+MemoryHigh=1G
+MemoryMax=2G
+TasksMax=128
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+IPAddressDeny=any
+IPAddressAllow=localhost
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

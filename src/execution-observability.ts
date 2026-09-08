@@ -5,6 +5,7 @@ import type {
   ProcessSessionManager,
 } from "./process-sessions.js";
 import type { ExecutionScopeIdentity } from "./request-meta.js";
+import type { OperatorTelemetry } from "./operator-telemetry.js";
 
 export interface ExecutionObservabilityConfig {
   enabled: boolean;
@@ -44,6 +45,7 @@ export interface ExecutionScopeReadinessProbe {
 
 export interface ExecutionScopeManagerOptions {
   now?: () => number;
+  operatorTelemetry?: OperatorTelemetry;
 }
 
 interface StoredExecutionScope {
@@ -411,6 +413,7 @@ export class ExecutionScopeManager {
   private readonly now: () => number;
   private readonly activeObservations = new Set<string>();
   private nextGlobalPruneAtMs = 0;
+  private readonly operatorTelemetry?: OperatorTelemetry;
 
   constructor(
     readonly config: ExecutionObservabilityConfig,
@@ -420,6 +423,7 @@ export class ExecutionScopeManager {
   ) {
     this.database = openDatabase(stateDir);
     this.now = options.now ?? Date.now;
+    this.operatorTelemetry = options.operatorTelemetry;
     if (!config.enabled) return;
     this.recoverInterruptedObservations();
     this.pruneExpired();
@@ -484,6 +488,7 @@ export class ExecutionScopeManager {
       toolName,
     };
     this.activeObservations.add(this.observationKey(handle));
+    this.operatorTelemetry?.start(handle, identity.adapter, detail);
     return handle;
   }
 
@@ -545,6 +550,7 @@ export class ExecutionScopeManager {
         this.pruneScope(handle.scopeRef, completedAtMs);
       });
       transaction.immediate();
+      this.operatorTelemetry?.finish(handle, outcome, responseDetail, completedAtMs, observedError?.errorKind);
     } finally {
       this.activeObservations.delete(this.observationKey(handle));
     }

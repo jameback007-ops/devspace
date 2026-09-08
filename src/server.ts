@@ -29,6 +29,7 @@ import {
   type WidgetMode,
 } from "./config.js";
 import { ExecutionScopeManager } from "./execution-observability.js";
+import { OperatorTelemetry } from "./operator-telemetry.js";
 import {
   ExecutionMailboxManager,
   type ExecutionMessageKind,
@@ -4671,6 +4672,7 @@ export function createMcpServer(
 export interface CreateServerOptions {
   incomingArtifactAdapters?: readonly IncomingArtifactAdapter[];
   serviceProcessObserver?: () => ServiceProcessObservation;
+  operatorTelemetry?: OperatorTelemetry;
 }
 
 export function createServer(
@@ -4702,6 +4704,7 @@ export function createServer(
   const reviewCheckpoints = createReviewCheckpointManager();
   const processSessions = new ProcessSessionManager();
   const runtimeCapabilities = new RuntimeCapabilityRegistry(config);
+  const operatorTelemetry = options.operatorTelemetry ?? OperatorTelemetry.fromEnvironment();
   const researchCycle = new ZesResearchCycleManager(config.zesResearchCycle);
   const continuationPreflightProjector =
     new ZesContinuationPreflightProjector();
@@ -4712,6 +4715,7 @@ export function createServer(
     config.executionObservability,
     config.stateDir,
     processSessions,
+    { operatorTelemetry },
   );
   const executionMailbox = new ExecutionMailboxManager(
     config.executionMailbox,
@@ -4921,6 +4925,7 @@ export function createServer(
           ? toolSurfaceFreshness.status
           : "INDETERMINATE",
       serviceProcessObservation: serviceProcesses,
+      operatorTelemetry: operatorTelemetry?.snapshot() ?? { enabled: false },
       policy: {
         ...readiness.policy,
         endpointAuthority:
@@ -5112,6 +5117,7 @@ export function createServer(
         turnContinuity.close();
         executionMailbox.close();
         executionScopes.close();
+        await operatorTelemetry?.shutdown().catch(() => undefined);
         await catalogBootstrapServer.close();
         oauthProvider.close();
         workspaceStore.close?.();

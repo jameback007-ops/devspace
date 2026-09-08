@@ -1,0 +1,139 @@
+# Separate ingress makes the source boundary explicit. No raw/debug exporter.
+# All persistence (including the native export WAL) is downstream of minimization.
+receivers:
+  otlp/codex:
+    protocols:
+      http:
+        endpoint: 127.0.0.1:14318
+  otlp/nexus:
+    protocols:
+      http:
+        endpoint: 127.0.0.1:14319
+extensions:
+  health_check:
+    endpoint: 127.0.0.1:13133
+  file_storage:
+    directory: /var/lib/zes-operator-collector/queue
+    create_directory: true
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 256
+    spike_limit_mib: 64
+  filter/codex:
+    error_mode: propagate
+    logs:
+      log_record:
+        - 'attributes["event.name"] == nil'
+        - 'not IsMatch(attributes["event.name"], "^codex\\.(conversation_starts|api_request|sse_event|websocket_request|websocket_event|user_prompt|tool_decision|tool_result|turn_ttft|turn_cost)$")'
+    traces:
+      span:
+        - 'Len(links) > 0'
+      spanevent:
+        - 'attributes["event.name"] == nil'
+        - 'not IsMatch(attributes["event.name"], "^codex\\.(conversation_starts|tool_decision|tool_result|sse_event|api_request|websocket_request|websocket_event|turn_ttft|turn_cost)$")'
+  transform/codex:
+    error_mode: propagate
+    log_statements:
+      - context: log
+        statements:
+          - 'keep_keys(resource.attributes, ["service.name", "service.version", "service.instance.id", "deployment.environment"] )'
+          - 'set(resource.attributes["openinference.project.name"], "zes-operator-codex")'
+          - 'keep_keys(scope.attributes, [])'
+          - 'set(body, "")'
+          - 'keep_keys(attributes, ["event.name", "event.kind", "conversation.id", "turn.id", "model", "app.version", "tool_name", "tool_namespace", "call_id", "tool_result_seq", "duration_ms", "success", "output_truncated", "prompt_length", "arguments_length", "output_length", "output_line_count", "input_token_count", "output_token_count", "cached_token_count", "cache_write_token_count", "reasoning_token_count", "tool_token_count", "ttft_ms", "status", "attempt"] )'
+    trace_statements:
+      - context: span
+        statements:
+          - 'keep_keys(resource.attributes, ["service.name", "service.version", "service.instance.id", "deployment.environment"] )'
+          - 'set(resource.attributes["openinference.project.name"], "zes-operator-codex")'
+          - 'keep_keys(scope.attributes, [])'
+          - 'set(name, "codex.native")'
+          - 'set(status.message, "")'
+          - 'keep_keys(attributes, ["conversation.id", "turn.id", "model", "app.version", "tool_name", "tool_namespace", "call_id", "success", "duration_ms", "otel.kind"] )'
+          - 'set(attributes["session.id"], attributes["conversation.id"]) where attributes["conversation.id"] != nil'
+          - 'set(attributes["openinference.span.kind"], "CHAIN")'
+          - 'set(attributes["zes.observation.boundary"], "codex_native_filtered")'
+          - 'set(attributes["zes.task.outcome"], "not_assessed")'
+      - context: spanevent
+        statements:
+          - 'set(name, "codex.observable.event")'
+          - 'keep_keys(attributes, ["event.name", "event.kind", "conversation.id", "turn.id", "tool_name", "tool_namespace", "call_id", "tool_result_seq", "duration_ms", "success", "output_truncated", "arguments_length", "output_length", "output_line_count", "tool_origin", "mcp_tool", "input_token_count", "output_token_count", "cached_token_count", "cache_write_token_count", "reasoning_token_count", "tool_token_count", "ttft_ms"] )'
+    metric_statements:
+      - context: datapoint
+        statements:
+          - 'keep_keys(resource.attributes, ["service.name", "service.version", "service.instance.id", "deployment.environment"] )'
+          - 'keep_keys(scope.attributes, [])'
+          - 'keep_keys(attributes, ["tool", "success", "status", "kind", "model", "app.version"] )'
+  transform/nexus:
+    error_mode: propagate
+    trace_statements:
+      - context: span
+        statements:
+          - 'keep_keys(resource.attributes, ["service.name", "service.version", "service.instance.id", "openinference.project.name", "zes.source.commit", "zes.observation.boundary"] )'
+          - 'keep_keys(scope.attributes, [])'
+          - 'set(status.message, "")'
+          - 'set(resource.attributes["openinference.project.name"], "zes-operator-chatgpt")'
+          - 'keep_keys(attributes, ["openinference.span.kind", "tool.name", "session.id", "zes.host.adapter", "zes.event.sequence", "zes.event.id", "zes.observation.boundary", "zes.model_internals_observed", "zes.tool.outcome", "zes.task.outcome", "zes.error.kind_sha256", "error.type", "zes.workspaceId", "zes.processRef", "zes.path_sha256", "zes.sessionId", "zes.outputSessionId", "zes.yieldTimeMs", "zes.waitTimeMs", "zes.maxOutputTokens", "zes.afterSequence", "zes.nextSequence", "zes.cmdLength", "zes.commandLength", "zes.patternLength", "zes.queryLength", "zes.patchLength", "zes.promptLength", "zes.charactersWritten", "zes.exitCode", "zes.wallTimeMs", "zes.outputDeltaBytes", "zes.outputTotalBytes", "zes.outputEventCount", "zes.outputSequenceStart", "zes.outputSequenceEnd", "zes.additions", "zes.removals", "zes.fileReceiptCount", "zes.tty", "zes.pollOnly", "zes.interruptRequested", "zes.running", "zes.outputTruncated", "zes.outputComplete", "zes.gap", "zes.hasMore", "zes.cmdDigestSha256", "zes.commandDigestSha256", "zes.patternDigestSha256", "zes.queryDigestSha256", "zes.patchDigestSha256", "zes.outputDeltaDigestSha256", "zes.outputDigestSha256"] )'
+  batch:
+    timeout: 1s
+    send_batch_size: 128
+    send_batch_max_size: 256
+  filter/nexus:
+    error_mode: propagate
+    traces:
+      spanevent:
+        - 'true'
+exporters:
+  otlp_http/phoenix:
+    endpoint: http://127.0.0.1:16006
+    encoding: proto
+    timeout: 5s
+    retry_on_failure:
+      enabled: true
+      initial_interval: 1s
+      max_interval: 30s
+      max_elapsed_time: 10m
+    sending_queue:
+      enabled: true
+      num_consumers: 2
+      queue_size: 2048
+      storage: file_storage
+  file/logs:
+    path: /var/lib/zes-operator-collector/logs.jsonl
+    rotation: {max_megabytes: 32, max_days: 7, max_backups: 7}
+    flush_interval: 1s
+  file/traces:
+    path: /var/lib/zes-operator-collector/traces.jsonl
+    rotation: {max_megabytes: 64, max_days: 7, max_backups: 7}
+    flush_interval: 1s
+  file/metrics:
+    path: /var/lib/zes-operator-collector/metrics.jsonl
+    rotation: {max_megabytes: 16, max_days: 7, max_backups: 7}
+    flush_interval: 1s
+service:
+  extensions: [health_check, file_storage]
+  telemetry:
+    logs: {level: warn}
+    metrics:
+      readers:
+        - pull:
+            exporter:
+              prometheus: {host: 127.0.0.1, port: 18888}
+  pipelines:
+    logs/codex:
+      receivers: [otlp/codex]
+      processors: [memory_limiter, filter/codex, transform/codex, batch]
+      exporters: [file/logs]
+    traces/codex:
+      receivers: [otlp/codex]
+      processors: [memory_limiter, filter/codex, transform/codex, batch]
+      exporters: [otlp_http/phoenix, file/traces]
+    metrics/codex:
+      receivers: [otlp/codex]
+      processors: [memory_limiter, transform/codex, batch]
+      exporters: [file/metrics]
+    traces/nexus:
+      receivers: [otlp/nexus]
+      processors: [memory_limiter, filter/nexus, transform/nexus, batch]
+      exporters: [otlp_http/phoenix, file/traces]

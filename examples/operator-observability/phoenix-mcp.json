@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "phoenix-operator": {
+      "command": "/opt/zes-operator-observability/native/node_modules/.bin/phoenix-mcp",
+      "args": ["--baseUrl", "http://127.0.0.1:16006"]
+    }
+  }
+}

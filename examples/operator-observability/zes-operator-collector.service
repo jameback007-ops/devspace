@@ -1,0 +1,27 @@
+[Unit]
+Description=ZES native OTel operator collector (filtered before persistence)
+After=network.target zes-operator-phoenix.service
+
+[Service]
+Type=simple
+DynamicUser=yes
+StateDirectory=zes-operator-collector
+StateDirectoryMode=0700
+WorkingDirectory=/var/lib/zes-operator-collector
+ExecStart=/opt/zes-operator-observability/otelcol-contrib --config=/opt/zes-operator-observability/collector.yaml
+Restart=on-failure
+RestartSec=3s
+TimeoutStopSec=30s
+MemoryHigh=384M
+MemoryMax=512M
+TasksMax=128
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+IPAddressDeny=any
+IPAddressAllow=localhost
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

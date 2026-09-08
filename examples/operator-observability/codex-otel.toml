@@ -1,0 +1,8 @@
+# Merge only this otel table into the actual producer CODEX_HOME/config.toml.
+# Running producers retain their startup configuration; no forced restart.
+[otel]
+environment = "zes-operator"
+log_user_prompt = false
+exporter = { otlp-http = { endpoint = "http://127.0.0.1:14318/v1/logs", protocol = "binary" } }
+trace_exporter = { otlp-http = { endpoint = "http://127.0.0.1:14318/v1/traces", protocol = "binary" } }
+metrics_exporter = { otlp-http = { endpoint = "http://127.0.0.1:14318/v1/metrics", protocol = "binary" } }
