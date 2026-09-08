@@ -231,6 +231,8 @@ export function summarizeExecutionToolInput(
     "columns",
     "rows",
     "yieldTimeMs",
+    "waitTimeMs",
+    "afterSequence",
     "maxOutputTokens",
     "lineOffset",
     "lineLimit",
@@ -242,6 +244,9 @@ export function summarizeExecutionToolInput(
   }
   for (const key of ["tty", "includeHidden", "fixedStrings", "caseSensitive"]) {
     addBoolean(detail, input, key);
+  }
+  if (typeof input.processRef === "string" && /^prc_[a-f0-9]{32}$/.test(input.processRef)) {
+    detail.processRef = input.processRef;
   }
 
   for (const key of [
@@ -307,6 +312,14 @@ function summarizeExecutionToolResponse(response: unknown): Record<string, unkno
   }
   for (const key of [
     "sessionId",
+    "outputSessionId",
+    "afterSequence",
+    "nextSequence",
+    "oldestSequence",
+    "latestSequence",
+    "droppedThroughSequence",
+    "retainedCharacters",
+    "retainedChunks",
     "exitCode",
     "wallTimeMs",
     "outputDeltaBytes",
@@ -319,8 +332,11 @@ function summarizeExecutionToolResponse(response: unknown): Record<string, unkno
   ]) {
     addInteger(detail, structured, key);
   }
-  for (const key of ["running", "outputTruncated", "outputComplete"]) {
+  for (const key of ["running", "outputTruncated", "outputComplete", "gap", "hasMore", "completeFromRequestedCursor"]) {
     addBoolean(detail, structured, key);
+  }
+  if (typeof structured.processRef === "string" && /^prc_[a-f0-9]{32}$/.test(structured.processRef)) {
+    detail.processRef = structured.processRef;
   }
   if (Array.isArray(structured.files)) {
     detail.fileReceiptCount = structured.files.length;

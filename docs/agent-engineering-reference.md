@@ -22,6 +22,10 @@ mandatory `AGENTS.md`; it does not replace it.
   Codex-compatible.
 - **Process session** — a long-running command tracked for later polling, input,
   resizing, or termination.
+- **Process output replay** — `process_output` reads bounded retained output with
+  a client-owned cursor and exact process incarnation. It does not drain the
+  legacy buffer, signal the child or renew retention. See
+  [process output](process-output.md) for identity, gap and expiry semantics.
 - **Execution scope** — a stable provider-neutral host conversation/task scope
   joining workspace, process, mailbox, and bounded audit observations. It is
   not a transcript or product authority.

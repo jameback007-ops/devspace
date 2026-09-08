@@ -415,6 +415,35 @@ test("sensitive tool fields are represented only by bounded metadata", () => {
   assert.equal(serialized.includes("private model prompt"), false);
 });
 
+test("process output audit retains cursor and incarnation evidence without output content", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "devspace-output-audit-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const processes = new ProcessSessionManager();
+  const manager = new ExecutionScopeManager(config, join(root, "state"), processes);
+  t.after(() => { processes.shutdown(); manager.close(); });
+  const identity = executionScopeIdentity({ "openai/session": "replay-audit" });
+  assert.ok(identity);
+  const processRef = "prc_" + "a".repeat(32);
+  const handle = manager.beginTool(identity, "process_output", {
+    workspaceId: "ws_replay", sessionId: 9, processRef, afterSequence: 20, waitTimeMs: 100,
+  });
+  manager.finishTool(handle, "succeeded", { response: { structuredContent: {
+    sessionId: 9, processRef, output: "private-output-canary", nextSequence: 30,
+    oldestSequence: 25, latestSequence: 30, gap: true, hasMore: false, outputComplete: true,
+    completeFromRequestedCursor: false,
+  } } });
+  const audit = manager.audit(identity.scopeRef, undefined);
+  assert.equal(JSON.stringify(audit).includes("private-output-canary"), false);
+  const event = (audit.events as Array<{ detail: Record<string, unknown> }>)[0];
+  assert.equal(event.detail.processRef, processRef);
+  assert.equal(event.detail.afterSequence, 20);
+  assert.equal(event.detail.nextSequence, 30);
+  assert.equal(event.detail.waitTimeMs, 100);
+  assert.equal(event.detail.gap, true);
+  assert.equal(event.detail.completeFromRequestedCursor, false);
+  assert.equal(summarizeExecutionToolInput("process_output", { processRef: "secret-canary" }).processRef, undefined);
+});
+
 test("global retention prunes inactive scopes during later activity", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "devspace-execution-global-retention-"));
   const stateDir = join(root, ".state");

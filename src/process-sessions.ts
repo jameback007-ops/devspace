@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
-import { createHash, type Hash } from "node:crypto";
+import { createHash, randomUUID, type Hash } from "node:crypto";
 import { resolveShellCommand, terminateProcessTree } from "./process-platform.js";
+import { ProcessOutputError, ProcessOutputLog } from "./process-output-log.js";
 
 export const DEFAULT_EXEC_YIELD_MS = 10_000;
 export const DEFAULT_INTERACTIVE_YIELD_MS = 250;
@@ -74,6 +75,9 @@ export interface WriteStdinInput {
 
 export interface ProcessSnapshot {
   sessionId?: number;
+  // Additive observation identity, available even for a fast terminal command.
+  outputSessionId?: number;
+  processRef?: string;
   output: string;
   outputTruncated: boolean;
   outputDeltaBytes: number;
@@ -91,8 +95,48 @@ export interface ProcessSnapshot {
   wallTimeMs: number;
 }
 
+export interface ReadProcessOutputInput {
+  workspaceId: string;
+  sessionId: number;
+  processRef: string;
+  afterSequence?: number;
+  waitTimeMs?: number;
+  maxOutputTokens?: number;
+  signal?: AbortSignal;
+  externalWake?: Promise<void>;
+}
+
+export interface ProcessOutputSnapshot {
+  sessionId: number;
+  processRef: string;
+  output: string;
+  afterSequence: number;
+  nextSequence: number;
+  oldestSequence: number;
+  latestSequence: number;
+  sequenceStart?: number;
+  gap: boolean;
+  droppedThroughSequence: number;
+  hasMore: boolean;
+  retainedCharacters: number;
+  retainedChunks: number;
+  running: boolean;
+  exitCode?: number;
+  signal?: string;
+  expiresAt?: string;
+  wallTimeMs: number;
+  outputComplete: boolean;
+  completeFromRequestedCursor: boolean;
+  outputDeltaBytes: number;
+  outputDeltaDigestSha256: string;
+  outputTotalBytes: number;
+  outputDigestSha256: string;
+  wakeReason?: "output" | "exit" | "timeout" | "mailbox";
+}
+
 export interface ProcessSessionInspection {
   sessionId: number;
+  processRef?: string;
   workspaceId: string;
   running: boolean;
   startedAt: string;
@@ -118,6 +162,7 @@ interface ManagedProcess {
 
 interface ProcessSession {
   id: number;
+  processRef: string;
   workspaceId: string;
   executionScopeRef?: string;
   process?: ManagedProcess;
@@ -134,6 +179,10 @@ interface ProcessSession {
   columns: number;
   rows: number;
   buffer: HeadTailBuffer;
+  outputLog: ProcessOutputLog;
+  outputWaiters: Set<(reason: "output" | "exit" | "expired") => void>;
+  observationExpired: boolean;
+  completedAt?: number;
   running: boolean;
   exitCode?: number;
   signal?: string;
@@ -148,6 +197,9 @@ export interface ProcessSessionManagerOptions {
   maxBufferCharacters?: number;
   completedSessionTtlMs?: number;
   maxConcurrentSessions?: number;
+  maxOutputChunks?: number;
+  maxCompletedOutputSessions?: number;
+  maxOutputWaiters?: number;
 }
 
 function deferredSignal(): { promise: Promise<void>; resolve: () => void } {
@@ -350,15 +402,32 @@ function truncateOutput(output: string, maxCharacters: number): { output: string
 
 export class ProcessSessionManager {
   private readonly sessions = new Map<number, ProcessSession>();
+  private readonly outputSessions = new Map<number, ProcessSession>();
   private readonly maxBufferCharacters: number;
   private readonly completedSessionTtlMs: number;
   private readonly maxConcurrentSessions: number;
   private nextSessionId = 1;
+  private readonly maxOutputChunks: number;
+  private readonly maxCompletedOutputSessions: number;
+  private readonly maxOutputWaiters: number;
+  private outputWaiterCount = 0;
 
   constructor(options: ProcessSessionManagerOptions = {}) {
     this.maxBufferCharacters = options.maxBufferCharacters ?? DEFAULT_BUFFER_CHARACTERS;
     this.completedSessionTtlMs = options.completedSessionTtlMs ?? COMPLETED_SESSION_TTL_MS;
     this.maxConcurrentSessions = options.maxConcurrentSessions ?? DEFAULT_MAX_CONCURRENT_SESSIONS;
+    this.maxOutputChunks = options.maxOutputChunks ?? 8192;
+    this.maxCompletedOutputSessions = options.maxCompletedOutputSessions ?? 64;
+    this.maxOutputWaiters = options.maxOutputWaiters ?? 256;
+    for (const bound of [this.maxBufferCharacters, this.maxOutputChunks,
+      this.maxCompletedOutputSessions, this.maxOutputWaiters]) {
+      if (!Number.isSafeInteger(bound) || bound < 1) {
+        throw new Error("Process output retention and waiter bounds must be positive safe integers.");
+      }
+    }
+    if (!Number.isSafeInteger(this.completedSessionTtlMs) || this.completedSessionTtlMs < 0) {
+      throw new Error("completedSessionTtlMs must be a non-negative safe integer.");
+    }
     if (!Number.isInteger(this.maxConcurrentSessions) || this.maxConcurrentSessions < 1) {
       throw new Error("maxConcurrentSessions must be a positive integer.");
     }
@@ -371,12 +440,14 @@ export class ProcessSessionManager {
     }
     const session = this.createSession(input);
     this.sessions.set(session.id, session);
+    this.outputSessions.set(session.id, session);
 
     try {
       if (input.tty && process.platform !== "win32") await this.startPty(session, input);
       else this.startPipe(session, input);
     } catch (error) {
       this.sessions.delete(session.id);
+      this.expireOutput(session);
       throw error;
     }
 
@@ -434,6 +505,94 @@ export class ProcessSessionManager {
     if (session.running) session.process?.kill("SIGTERM");
   }
 
+  async readOutput(input: ReadProcessOutputInput): Promise<ProcessOutputSnapshot> {
+    const session = this.outputSessions.get(input.sessionId);
+    if (!session || session.workspaceId !== input.workspaceId) {
+      throw new ProcessOutputError("PROCESS_OUTPUT_UNAVAILABLE", "No retained output session in this workspace (unknown, expired, evicted or another backend).");
+    }
+    if (session.processRef !== input.processRef) {
+      throw new ProcessOutputError("PROCESS_OUTPUT_IDENTITY_MISMATCH", "processRef does not match this process incarnation.");
+    }
+    const afterSequence = input.afterSequence ?? 0;
+    const limit = boundedInteger(input.maxOutputTokens, DEFAULT_MAX_OUTPUT_TOKENS, 100_000);
+    const maxCharacters = Math.max(256, limit * 4);
+    const waitTimeMs = boundedInteger(input.waitTimeMs, DEFAULT_POLL_YIELD_MS, MAX_POLL_YIELD_MS);
+    // Validate before installing a waiter; invalid/future cursors never wait.
+    let page = session.outputLog.read(afterSequence, maxCharacters);
+    if (input.signal?.aborted) {
+      throw new ProcessOutputError("PROCESS_OUTPUT_ABORTED", "Output observation was cancelled; the process was not signalled.");
+    }
+    let wakeReason: ProcessOutputSnapshot["wakeReason"];
+    if (session.running && afterSequence === session.outputLog.latestSequence && waitTimeMs > 0) {
+      wakeReason = await this.waitForRetainedOutput(session, waitTimeMs, input);
+      page = session.outputLog.read(afterSequence, maxCharacters);
+    }
+    if (session.observationExpired) {
+      throw new ProcessOutputError("PROCESS_OUTPUT_UNAVAILABLE", "Output retention expired; the process was not restarted.");
+    }
+    return {
+      ...page,
+      sessionId: session.id,
+      processRef: session.processRef,
+      running: session.running,
+      exitCode: session.exitCode,
+      signal: session.signal,
+      expiresAt: session.completedAt === undefined ? undefined
+        : new Date(session.completedAt + this.completedSessionTtlMs).toISOString(),
+      wallTimeMs: (session.completedAt ?? Date.now()) - session.startedAt,
+      outputComplete: !session.running && !page.hasMore,
+      completeFromRequestedCursor: !session.running && !page.hasMore && !page.gap,
+      outputDeltaBytes: Buffer.byteLength(page.output),
+      outputDeltaDigestSha256: createHash("sha256").update(page.output).digest("hex"),
+      outputTotalBytes: session.outputTotalBytes,
+      outputDigestSha256: session.outputHash.copy().digest("hex"),
+      wakeReason,
+    };
+  }
+
+  private waitForRetainedOutput(
+    session: ProcessSession,
+    waitTimeMs: number,
+    input: ReadProcessOutputInput,
+  ): Promise<ProcessOutputSnapshot["wakeReason"]> {
+    if (this.outputWaiterCount >= this.maxOutputWaiters) {
+      throw new ProcessOutputError("PROCESS_OUTPUT_BUSY", "Concurrent output observation limit reached; no process action was taken.");
+    }
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      const done = (reason: "output" | "exit" | "expired" | "timeout" | "mailbox" | "abort") => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        session.outputWaiters.delete(onChange);
+        input.signal?.removeEventListener("abort", onAbort);
+        this.outputWaiterCount--;
+        if (reason === "abort") {
+          reject(new ProcessOutputError("PROCESS_OUTPUT_ABORTED", "Output observation was cancelled; the process was not signalled."));
+        } else if (reason === "expired") {
+          reject(new ProcessOutputError("PROCESS_OUTPUT_UNAVAILABLE", "Output observation is no longer retained."));
+        } else resolve(reason);
+      };
+      const onChange = (reason: "output" | "exit" | "expired") => done(reason);
+      const onAbort = () => done("abort");
+      const timer = setTimeout(() => done("timeout"), waitTimeMs);
+      this.outputWaiterCount++;
+      session.outputWaiters.add(onChange);
+      input.signal?.addEventListener("abort", onAbort, { once: true });
+      if (input.signal?.aborted) onAbort();
+      // The caller disposes its mailbox waiter. No per-reader cursor is stored.
+      input.externalWake?.then(() => done("mailbox"), () => done("mailbox"));
+    });
+  }
+
+  private expireOutput(session: ProcessSession): void {
+    session.observationExpired = true;
+    session.outputLog.clear();
+    this.outputSessions.delete(session.id);
+    if (!this.sessions.has(session.id) && session.cleanupTimer) clearTimeout(session.cleanupTimer);
+    for (const notify of session.outputWaiters) notify("expired");
+  }
+
   inspect(
     workspaceIds?: Iterable<string>,
     executionScopeRefs?: Iterable<string>,
@@ -451,6 +610,7 @@ export class ProcessSessionManager {
       .sort((left, right) => right.startedAt - left.startedAt)
       .map((session) => ({
         sessionId: session.id,
+        processRef: session.processRef,
         workspaceId: session.workspaceId,
         running: session.running,
         startedAt: new Date(session.startedAt).toISOString(),
@@ -473,9 +633,10 @@ export class ProcessSessionManager {
   }
 
   shutdown(): void {
-    for (const session of this.sessions.values()) {
+    for (const session of new Set([...this.sessions.values(), ...this.outputSessions.values()])) {
       if (session.cleanupTimer) clearTimeout(session.cleanupTimer);
       if (session.running) session.process?.kill("SIGTERM");
+      this.expireOutput(session);
     }
     this.sessions.clear();
   }
@@ -531,6 +692,7 @@ export class ProcessSessionManager {
 
     return {
       id: this.nextSessionId++,
+      processRef: `prc_${randomUUID().replaceAll("-", "")}`,
       workspaceId: input.workspaceId,
       executionScopeRef: validatedExecutionScopeRef(input.executionScopeRef),
       startedAt: Date.now(),
@@ -545,6 +707,9 @@ export class ProcessSessionManager {
       columns: terminalSize(input.columns, DEFAULT_COLUMNS),
       rows: terminalSize(input.rows, DEFAULT_ROWS),
       buffer: new HeadTailBuffer(this.maxBufferCharacters),
+      outputLog: new ProcessOutputLog(this.maxBufferCharacters, this.maxOutputChunks),
+      outputWaiters: new Set(),
+      observationExpired: false,
       running: true,
       exitPromise: exit.promise,
       resolveExit: exit.resolve,
@@ -574,8 +739,11 @@ export class ProcessSessionManager {
       kill: (signal = "SIGTERM") => terminateProcessTree(child, signal, detached),
       resize: input.tty ? () => undefined : undefined,
     };
-    child.stdout.on("data", (data: Buffer) => this.append(session, data.toString("utf8")));
-    child.stderr.on("data", (data: Buffer) => this.append(session, data.toString("utf8")));
+    // Native stream decoding preserves multibyte characters split across reads.
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (data: string) => this.append(session, data));
+    child.stderr.on("data", (data: string) => this.append(session, data));
     child.on("error", (error) => this.append(session, `${error.message}\n`));
     child.on("close", (code, signal) => this.finish(session, code ?? undefined, signal ?? undefined));
   }
@@ -622,12 +790,23 @@ export class ProcessSessionManager {
     session.running = false;
     session.exitCode = exitCode;
     session.signal = signal;
+    session.completedAt = Date.now();
     session.resolveExit();
+    for (const notify of session.outputWaiters) notify("exit");
+    // A close callback arriving after shutdown must not retain disposed output
+    // through a new timer. Ordinary completion still owns the replay TTL.
+    if (session.observationExpired) return;
     session.cleanupTimer = setTimeout(
-      () => this.sessions.delete(session.id),
+      () => { this.sessions.delete(session.id); this.expireOutput(session); },
       this.completedSessionTtlMs,
     );
     session.cleanupTimer.unref();
+    const completed = [...this.outputSessions.values()]
+      .filter((entry) => !entry.running)
+      .sort((a, b) => a.completedAt! - b.completedAt!);
+    for (const entry of completed.slice(0, Math.max(0, completed.length - this.maxCompletedOutputSessions))) {
+      this.expireOutput(entry);
+    }
   }
 
   private append(session: ProcessSession, output: string): void {
@@ -638,6 +817,10 @@ export class ProcessSessionManager {
     session.lastOutputAt = Date.now();
     session.outputEventCount += 1;
     session.resolveOutput();
+    if (!session.observationExpired) {
+      session.outputLog.append(output);
+      for (const notify of session.outputWaiters) notify("output");
+    }
   }
 
   private consume(
@@ -664,6 +847,8 @@ export class ProcessSessionManager {
 
     return {
       sessionId: session.running ? session.id : undefined,
+      outputSessionId: session.id,
+      processRef: session.processRef,
       output: buffered.output,
       outputTruncated: buffered.truncated,
       outputDeltaBytes: Buffer.byteLength(buffered.output),
@@ -692,8 +877,10 @@ export class ProcessSessionManager {
   }
 
   private removeSession(sessionId: number): void {
+    // Legacy consumption still removes the control session. The independent
+    // producer-owned TTL retains replay; observers never prolong that TTL.
     const session = this.sessions.get(sessionId);
-    if (session?.cleanupTimer) clearTimeout(session.cleanupTimer);
     this.sessions.delete(sessionId);
+    if (session?.observationExpired && session.cleanupTimer) clearTimeout(session.cleanupTimer);
   }
 }

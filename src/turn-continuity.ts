@@ -346,6 +346,7 @@ const CAPSULE_ADOPTION_NUDGE_TOOLS = new Set([
 const LEGITIMATE_LONG_RUNNING_TOOL_NAMES = new Set([
   "exec_command",
   "write_stdin",
+  "process_output",
 ]);
 const INSTABILITY_SEVERITY: Record<TurnInstabilityState, number> = {
   normal: 0,

@@ -51,6 +51,7 @@ const CRITICAL_TOOL_GROUPS = {
     "apply_patch",
     "exec_command",
     "write_stdin",
+    "process_output",
   ],
   workspaceExecutionStandard: [
     "open_workspace",

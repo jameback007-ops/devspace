@@ -436,6 +436,39 @@ test("codex write_stdin exposes the output-aware long-poll contract", async (t) 
   assert.match(String(yieldTimeMs?.description), /bounded to 30000/i);
 });
 
+test("process_output is additive read-only replay through actual MCP, with retained terminal identity", async (t) => {
+  const context = await fixture(t, { toolMode: "codex", codexNavigationTools: true });
+  const listed = await context.client.listTools();
+  const output = listed.tools.find((tool) => tool.name === "process_output");
+  assert.ok(output);
+  assert.deepEqual(output.annotations, { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false });
+  const properties = output.inputSchema.properties as Record<string, unknown>;
+  for (const forbidden of ["cmd", "chars", "signal", "columns", "rows", "workingDirectory"]) {
+    assert.equal(properties[forbidden], undefined);
+  }
+  for (const name of ["exec_command", "write_stdin"]) {
+    const tool = listed.tools.find((entry) => entry.name === name)!;
+    assert.equal(tool.annotations?.readOnlyHint, false);
+    assert.equal(tool.annotations?.destructiveHint, true);
+  }
+  const opened = await callOpen(context.client, context.project, "output-replay");
+  const workspaceId = String(structuredContent(opened).workspaceId);
+  const started = await context.client.callTool({ name: "exec_command", arguments: {
+    workspaceId, cmd: `${JSON.stringify(process.execPath)} -e ${JSON.stringify("console.log('mcp-replay')")}`, yieldTimeMs: 1000,
+  } });
+  const commandResult = structuredContent(started);
+  assert.equal(commandResult.running, false);
+  assert.equal(commandResult.sessionId, undefined);
+  const args = { workspaceId, sessionId: commandResult.outputSessionId, processRef: commandResult.processRef, waitTimeMs: 0 };
+  const a = structuredContent(await context.client.callTool({ name: "process_output", arguments: args }));
+  const b = structuredContent(await context.client.callTool({ name: "process_output", arguments: args }));
+  assert.equal(a.output, "mcp-replay\n");
+  assert.deepEqual(a, b);
+  assert.equal(a.completeFromRequestedCursor, true);
+  const invalid = await context.client.callTool({ name: "process_output", arguments: { ...args, processRef: "prc_" + "0".repeat(32) } });
+  assert.equal((invalid as { isError?: boolean }).isError, true);
+});
+
 test("codex mode can opt into the upstream native navigation tools", async (t) => {
   const disabled = await fixture(t, { toolMode: "codex", git: true });
   const disabledTools = await disabled.client.listTools();
