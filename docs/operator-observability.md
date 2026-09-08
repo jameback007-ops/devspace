@@ -4,6 +4,12 @@ This is the operator/workforce observation slice for audit and improvement. It i
 not the Product-wide observability authority, a replacement for LangSmith, an
 execution scheduler, or a source of accepted business outcomes.
 
+Current operated status: see [receiver activation and audit follow-through](operator-activation-20260908.md).
+The receiver is now running with tested localhost restrictions and boot enablement;
+root Codex defaults include native OTel. Recent Codex spans are queryable, but the
+actual review's session correlation failed and Nexus producer deployment remains
+held. Historical stopped/config-unchanged statements below describe earlier cuts.
+
 ## Composition and actual coverage
 
 Native Codex OTel uses its separate logs, traces and metrics exporters. The
@@ -108,6 +114,14 @@ copies are flagged and excluded from scoring, and malformed measurements do not
 crash the query or become successful zero exits. This is response-local counting,
 not backend deduplication or a complete command ledger.
 
+Duplicate comparison is recursive and type-sensitive: boolean `true`, integer `1`
+and float `1.0` cannot select different results depending on arrival order.
+Each tool row includes observed/missing/invalid coverage for process exit,
+returned bytes and duration. Numeric sums use only valid observed samples;
+an entirely unobserved byte or duration total is `null`, not zero. Session
+attribution coverage is explicit. Unlabelled spans are not silently declared real
+work merely because the synthetic-session filter cannot identify them.
+
 ## Qualification and current limits
 
 `src/operator-telemetry.test.ts` is in the normal package test lifecycle. It
@@ -132,22 +146,23 @@ window are structural observations, not863 tasks or a measure of wasted work.
 The native CLI wrote and read back one explicit synthetic-control annotation;
 it did not assign correctness to a real worker.
 
-Real producer enablement is a separate outcome. The network-isolation application
-request was stopped by the host before execution. As of this source cut, no
-default Codex config, running App Server or active Nexus exporter is enabled for
-this pipeline. Disposable native queue restart/outage/overflow/lost-ack tests
+Real producer enablement is a separate outcome. At the a4c062b/2064744 cuts, the
+network-isolation application request was stopped by the host before execution;
+default Codex configuration and live Nexus export were unchanged. Subsequent
+receiver activation and root Codex changes are recorded in the activation account,
+not retroactively inferred from these earlier fixtures. Disposable native queue restart/outage/overflow/lost-ack tests
 are now recorded in [the durability account](operator-durability-20260908.md).
 Actual producer-to-query correlation, power/disk failure, sustained capacity,
 longitudinal value and operator-wide coverage are still open.
 Do not reroute a host-refused action via another connector or this observer.
 
-The newly created operator Phoenix/Collector services were stopped after the
+The newly created operator Phoenix/Collector services were initially stopped after the
 controlled tests (native stop returned0); no real worker was feeding them and
 their retained state was not deleted. Their boot enablement was not performed.
 The proposed native Nexus SDK-to-Phoenix export/readback request was also stopped
 by the host before execution, so only its unit/audit-boundary tests, not a live
-ChatGPT export, are established. Existing production Nexus and Codex remain on
-their prior configurations. Resume admission with fresh allowed evidence rather
+ChatGPT export, were established at that cut. At that time production Nexus and
+Codex remained on their prior configurations. Resume admission with fresh allowed evidence rather
 than interpreting these source/examples as an already-operating monitor.
 
 ## Sources
