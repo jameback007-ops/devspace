@@ -47,9 +47,17 @@ JS SDK: queue4096, batch128,1s scheduling,3s exporter timeout. The MCP request d
 not wait for delivery. `/readyz.operatorTelemetry` exposes started/ended/export
 acknowledged/failed and unaccounted counts. Collector acknowledgement is not
 Phoenix query visibility. SDK queue overflow, process crash, storage exhaustion
-and retry expiry can lose observations. Native Collector's queue is2048 batches,
-retry10min. Monitor its localhost18888 Prometheus exporter for queue/send/drop
-counters; do not interpret configured persistence as exactly-once delivery.
+and permanent exporter errors can lose observations. Native Collector's trace
+queue holds2048 incoming requests, uses `file_storage` with fsync, and performs
+native batching AFTER durable admission. It retries temporary backend failures
+without a time-based expiry, while queue overflow is explicitly rejected. No
+volatile pipeline `batch` precedes the trace queue. The JS SDK is still bounded
+and non-durable. Monitor localhost18888 Prometheus queue/send/drop counters;
+none of these settings establishes exactly-once delivery or an unlimited buffer.
+
+Logs/metrics retain their diagnostic file/batch route; they do not acquire the
+trace queue's crash-survival evidence. The file trace mirror is likewise a
+diagnostic copy, not an independent execution or an exactly-once evidence store.
 
 Rotated files are bounded by size/backup count and7-day rotation policy. Phoenix
 has a14-day default retention policy. Retention is not disk quota; peak workload,
@@ -92,6 +100,14 @@ optimizer or autonomous correctness judgment. Investigate examples with native
 evidence, annotate a scoped explanation, propose an intervention, and qualify the
 changed behavior against contrasting cases. Fewer calls alone is not improvement.
 
+`by_tool` counts only explicitly attributed Nexus invocation spans. Structural
+Codex spans and unattributed spans are separate; native `codex.tool_result` event
+occurrences are exposed without equating nested exec layers with independent
+user commands. Duplicate trace/span pairs are counted once, conflicting measured
+copies are flagged and excluded from scoring, and malformed measurements do not
+crash the query or become successful zero exits. This is response-local counting,
+not backend deduplication or a complete command ledger.
+
 ## Qualification and current limits
 
 `src/operator-telemetry.test.ts` is in the normal package test lifecycle. It
@@ -119,8 +135,10 @@ it did not assign correctness to a real worker.
 Real producer enablement is a separate outcome. The network-isolation application
 request was stopped by the host before execution. As of this source cut, no
 default Codex config, running App Server or active Nexus exporter is enabled for
-this pipeline. Native queue restart/outage tests, actual producer-to-query
-correlation, longitudinal value and operator-wide coverage are still open.
+this pipeline. Disposable native queue restart/outage/overflow/lost-ack tests
+are now recorded in [the durability account](operator-durability-20260908.md).
+Actual producer-to-query correlation, power/disk failure, sustained capacity,
+longitudinal value and operator-wide coverage are still open.
 Do not reroute a host-refused action via another connector or this observer.
 
 The newly created operator Phoenix/Collector services were stopped after the

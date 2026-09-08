@@ -25,6 +25,14 @@ Tool transport success does not establish command success, expected test outcome
 task acceptance or later benefit. Use actual trace/turn/call identities, not only
 timestamps or process-local sequence numbers.
 
+Count only evidenced invocations: structural Codex spans are not tool calls and
+native nested tool-result events are not independent user commands. OTLP retries
+may deliver the same trace/span twice. Use the query's duplicate/conflict and
+invalid-measurement fields; do not silently choose a favorable conflicting copy.
+Collector HTTP acceptance, crash-surviving queue admission, downstream delivery
+and Phoenix query visibility are different boundaries. See the retained native
+fault cases in `docs/operator-durability-20260908.md` before claiming durability.
+
 Start with one consequential question: repeated path reads, excessive returned
 volume, a slow call, a false success claim, or a receiver not using a deployed
 capability. Inspect examples and source; make a candidate correction; use native

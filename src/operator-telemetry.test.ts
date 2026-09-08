@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { parse } from "yaml";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BasicTracerProvider, SimpleSpanProcessor, InMemorySpanExporter } from "@opentelemetry/sdk-trace-base";
@@ -103,4 +104,33 @@ test("real execution audit emits one content-safe span without mutating tool out
   assert.equal(span.attributes["zes.outputTotalBytes"], 13);
   assert.equal(span.attributes["zes.tool.outcome"], "succeeded");
   assert.doesNotMatch(JSON.stringify(span.attributes), /PRIVATE_HOST_SESSION|SECRET/);
+});
+
+test("trace admission cannot be acknowledged by volatile batch ahead of the persistent queue", async () => {
+  const config = parse(await readFile(new URL("../examples/operator-observability/collector.yaml", import.meta.url), "utf8"));
+  for (const lane of ["codex", "nexus"]) {
+    const pipeline = config.service.pipelines[`traces/${lane}`];
+    assert.ok(pipeline.processors.includes(`transform/${lane}`));
+    assert.ok(!pipeline.processors.some((name: string) => name.split("/")[0] === "batch"));
+    assert.ok(pipeline.exporters.includes("otlp_http/phoenix"));
+  }
+  const exporter = config.exporters["otlp_http/phoenix"];
+  assert.equal(exporter.sending_queue.storage, "file_storage");
+  assert.equal(config.extensions.file_storage.fsync, true);
+  assert.equal(exporter.sending_queue.batch.sizer, "items");
+  assert.equal(exporter.sending_queue.batch.min_size, 128);
+  assert.equal(exporter.sending_queue.batch.max_size, 256);
+});
+
+test("stored traces use bounded queues and report overflow rather than a false success", async () => {
+  const config = parse(await readFile(new URL("../examples/operator-observability/collector.yaml", import.meta.url), "utf8"));
+  const exporter = config.exporters["otlp_http/phoenix"];
+  assert.equal(exporter.sending_queue.queue_size, 2048);
+  assert.equal(exporter.sending_queue.block_on_overflow, false);
+  assert.equal(exporter.retry_on_failure.max_elapsed_time, "0s");
+  assert.ok(config.service.telemetry.metrics.readers.length > 0);
+  // Logs/metrics are explicit diagnostic file streams, not falsely presented
+  // as durable Phoenix traces or included in a unique-command count.
+  assert.deepEqual(config.service.pipelines["logs/codex"].exporters, ["file/logs"]);
+  assert.deepEqual(config.service.pipelines["metrics/codex"].exporters, ["file/metrics"]);
 });
